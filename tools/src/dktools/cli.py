@@ -773,6 +773,20 @@ def main(argv: list[str] | None = None) -> int:
         help="print each row's lowest and highest run per side beside the medians",
     )
     pc.add_argument(
+        "--rename",
+        action="append",
+        default=None,
+        help="OLD=NEW: compare the base side's rows of module OLD with the "
+        "current side's rows of NEW, for a renamed benchmark module "
+        "(repeatable)",
+    )
+    pc.add_argument(
+        "--reuse",
+        action="store_true",
+        help="report again on the runs an earlier perfcompare NAME measured "
+        "(another --rename, --tolerance or --spread), without building",
+    )
+    pc.add_argument(
         "--bench-path",
         action="append",
         default=None,
@@ -1234,6 +1248,8 @@ def _dispatch(args: argparse.Namespace) -> int:
                 current_defines=tuple(args.current_define),
                 spread=args.spread,
                 current=args.current,
+                renames=tuple(args.rename or ()),
+                reuse=args.reuse,
             ),
         )
 

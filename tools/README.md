@@ -1223,6 +1223,7 @@ on the same perfRegression benchmarks:
 ```sh
 uv run dktools perfcompare NAME --base REV [--current REV] \
     [--modules M[,M...]] [--runs N] [--tolerance PCT] [--spread] \
+    [--rename OLD=NEW ...] [--reuse] \
     [--bench-path PATH ...] [--compiler clang22|gcc15] [--root DIR] [-j N]
 ```
 
@@ -1241,7 +1242,8 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
 - Prints, and writes to `result.txt`, the median ns/op of each side per
   row (module, name, bytes) with the change in percent, and the rows only
   one side has. Each row's verdict compares the sides' runs with a
-  rank-sum (Mann-Whitney U) test: `slower` / `faster` when the two-sided
+  rank-sum (Mann-Whitney U) test (exact for untied samples of up to 40
+  runs in all, else the normal approximation): `slower` / `faster` when the two-sided
   p is below 0.01, `~` when the runs do not tell the sides apart (a stray
   run moves one rank, not the verdict), `-` with fewer than five runs a
   side; `--tolerance` counts a row past it only with a `slower` verdict.
@@ -1253,6 +1255,11 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
   row: memory-bound rows (finds over tables larger than the caches) stray
   far more from run to run than compute-bound ones, and a change smaller
   than a row's own spread is noise.
+- `--rename OLD=NEW` (repeatable) compares the base side's rows of module
+  OLD with the current side's rows of NEW, for a benchmark module the
+  change renamed. `--reuse` reports again on the runs an earlier
+  perfcompare of the same NAME measured (another `--rename`,
+  `--tolerance` or `--spread`), without building or running.
 - Exits 0; 1 when `--tolerance PCT` is given and a row's median grew by
   more than PCT percent with a `slower` verdict, or when a build or run
   fails; 2 on an input error.

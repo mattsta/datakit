@@ -4,6 +4,7 @@ Usage::
 
     dktools perfcompare NAME --base REV [--current REV] [--modules M[,M...]]
         [--runs N] [--tolerance PCT] [--spread] [--bench-path PATH ...]
+        [--rename OLD=NEW ...] [--reuse]
         [--compiler C] [--root DIR] [-j N]
 
 Two trees are built under ``ROOT/perfcompare/NAME``:
@@ -43,6 +44,7 @@ input error.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 import statistics
@@ -81,6 +83,11 @@ class PerfCompareOptions:
     #: a revision for the current side (plus the benchmark sources) in
     #: place of HEAD and the working tree
     current: str | None = None
+    #: OLD=NEW: the base side's rows of module OLD compared with the
+    #: current side's rows of NEW (a benchmark module that was renamed)
+    renames: tuple[str, ...] = ()
+    #: report again on the runs an earlier perfcompare NAME measured
+    reuse: bool = False
 
 
 def perf_preset(compiler: toolchain.Compiler) -> str | None:
@@ -169,14 +176,58 @@ def samples(runs: list[dict[Key, perfdiff.PerfRow]]) -> dict[Key, list[float]]:
     return values
 
 
+#: Up to this many runs in all, untied samples take the exact U
+#: distribution (the normal approximation is too coarse for few runs: at
+#: five a side it cannot fall below 0.012)
+EXACT_LIMIT = 40
+
+
+def _u_counts(m: int, n: int) -> list[int]:
+    """How many of the C(m+n, m) orderings of m and n untied values give
+    each U from 0 to m*n (the recurrence on the largest value's side)"""
+    # counts[j] holds the distribution for sizes (i, j) as i grows
+    counts = [[1] for _ in range(n + 1)]
+    for i in range(1, m + 1):
+        row = [[1]]
+        for j in range(1, n + 1):
+            # The largest value from the first side adds j to U
+            with_first = [0] * j + counts[j]
+            without = row[j - 1]
+            size = i * j + 1
+            row.append(
+                [
+                    (with_first[u] if u < len(with_first) else 0)
+                    + (without[u] if u < len(without) else 0)
+                    for u in range(size)
+                ]
+            )
+        counts = row
+    return counts[n]
+
+
 def rank_sum_p(a: list[float], b: list[float]) -> float | None:
     """The two-sided p of the Mann-Whitney U (rank-sum) test that 'a' and
-    'b' come from one distribution: the normal approximation with the
-    tie and continuity corrections.  Ranks, not values, so one stray run
-    moves it by one rank.  None when a side has fewer than MIN_SAMPLES."""
+    'b' come from one distribution: exact for untied samples of up to
+    EXACT_LIMIT runs in all, else rank_sum_normal_p.  Ranks, not values,
+    so one stray run moves it by one rank.  None when a side has fewer
+    than MIN_SAMPLES."""
     n1, n2 = len(a), len(b)
     if n1 < MIN_SAMPLES or n2 < MIN_SAMPLES:
         return None
+    if n1 + n2 > EXACT_LIMIT or len(set(a) | set(b)) != n1 + n2:
+        return rank_sum_normal_p(a, b)
+    u = sum(1 for x in a for y in b if x > y)
+    counts = _u_counts(n1, n2)
+    total = sum(counts)
+    below = sum(counts[: u + 1])
+    above = sum(counts[u:])
+    return min(1.0, 2 * min(below, above) / total)
+
+
+def rank_sum_normal_p(a: list[float], b: list[float]) -> float:
+    """The two-sided Mann-Whitney p by the normal approximation with the
+    tie and continuity corrections (samples of MIN_SAMPLES or more)"""
+    n1, n2 = len(a), len(b)
     pooled = sorted([(v, 0) for v in a] + [(v, 1) for v in b])
     n = n1 + n2
     rank_a = 0.0
@@ -380,6 +431,18 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
     if opts.tolerance is not None and not opts.tolerance >= 0:
         raise ToolError("--tolerance must be a non-negative number")
     modules = parse_modules(opts.modules)
+    parse_renames(list(opts.renames))
+    if opts.reuse:
+        work = gitutil.scratch_root(opts.root, repo).resolve() / "perfcompare" / name
+        runs = load_runs(work)
+        sides = work / "sides.txt"
+        sides_text = (
+            sides.read_text().splitlines()
+            if sides.is_file()
+            else [f"  reused    {work}"]
+        )
+        return report(name, work, runs, sides_text, opts)
+
     bench = [(gitutil.repo_path(p), None) for p in opts.bench_paths]
     config = toolchain.build_config(opts.compiler, perf_preset(opts.compiler))
     current_config = toolchain.build_config(
@@ -450,7 +513,77 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
             except perfdiff.PerfDiffInputError as exc:
                 raise ToolError(str(exc)) from exc
 
-    base_runs = settle_bytes(runs["base"])
+    sides_text = [
+        f"  base      {opts.base} ({base_commit[:10]}) + {', '.join(p for p, _ in bench)}",
+        f"  current   {current_label(opts.current, current_commit, current_tree, bench)}",
+        f"  config    {config.label}, {opts.runs} runs each, medians of ns/op"
+        + (f", modules {modules}" if modules else ""),
+    ]
+    (work / "sides.txt").write_text("\n".join(sides_text) + "\n")
+    return report(name, work, runs, sides_text, opts)
+
+
+def parse_renames(texts: list[str] | None) -> dict[str, str]:
+    """--rename OLD=NEW values as {OLD: NEW}; ToolError for a malformed
+    one or a name that is not a module name"""
+    renames: dict[str, str] = {}
+    for text in texts or []:
+        old, sep, new = text.partition("=")
+        if not sep or not _MODULE.match(old) or not _MODULE.match(new):
+            raise ToolError(f"--rename takes OLD=NEW module names (got {text!r})")
+        renames[old] = new
+    return renames
+
+
+def rename_modules(
+    runs: list[dict[Key, perfdiff.PerfRow]], renames: dict[str, str]
+) -> list[dict[Key, perfdiff.PerfRow]]:
+    """'runs' with each row of a module named in 'renames' under its new
+    name, so a base row meets the current row that replaced it"""
+    if not renames:
+        return runs
+    renamed = []
+    for one in runs:
+        out: dict[Key, perfdiff.PerfRow] = {}
+        for (module, row_name, nbytes), row in one.items():
+            module = renames.get(module, module)
+            out[(module, row_name, nbytes)] = dataclasses.replace(row, module=module)
+        renamed.append(out)
+    return renamed
+
+
+_RUN_FILE = re.compile(r"^run-(base|current)-(\d+)\.tsv$")
+
+
+def load_runs(work: Path) -> dict[str, list[dict[Key, perfdiff.PerfRow]]]:
+    """The run-<side>-N.tsv files an earlier perfcompare left in 'work',
+    per side in run order"""
+    found: dict[str, list[tuple[int, Path]]] = {"base": [], "current": []}
+    for path in work.glob("run-*.tsv"):
+        if m := _RUN_FILE.match(path.name):
+            found[m.group(1)].append((int(m.group(2)), path))
+    if not found["base"] or not found["current"]:
+        raise ToolError(f"--reuse: {work} holds no run-base-N/run-current-N.tsv")
+    try:
+        return {
+            side: [perfdiff.parse_tsv(p) for _, p in sorted(files)]
+            for side, files in found.items()
+        }
+    except perfdiff.PerfDiffInputError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def report(
+    name: str,
+    work: Path,
+    runs: dict[str, list[dict[Key, perfdiff.PerfRow]]],
+    sides_text: list[str],
+    opts: PerfCompareOptions,
+) -> int:
+    """Compare the sides' runs, print the table and write result.txt; the
+    exit code"""
+    renames = parse_renames(list(opts.renames))
+    base_runs = settle_bytes(rename_modules(runs["base"], renames))
     current_runs = settle_bytes(runs["current"])
     lines, regressed = table(
         medians(base_runs),
@@ -460,13 +593,12 @@ def run(repo: Path, opts: PerfCompareOptions) -> int:
         (samples(base_runs), samples(current_runs)),
     )
     verdict = "REGRESSION" if regressed else "ok"
-    header = [
-        f"perfcompare {name}: {verdict}",
-        f"  base      {opts.base} ({base_commit[:10]}) + {', '.join(p for p, _ in bench)}",
-        f"  current   {current_label(opts.current, current_commit, current_tree, bench)}",
-        f"  config    {config.label}, {opts.runs} runs each, medians of ns/op"
-        + (f", modules {modules}" if modules else ""),
-    ]
+    header = [f"perfcompare {name}: {verdict}", *sides_text]
+    if renames:
+        header.append(
+            "  renamed   "
+            + ", ".join(f"base {old} as {new}" for old, new in renames.items())
+        )
     text = "\n".join(header + lines) + "\n"
     (work / "result.txt").write_text(text)
     sys.stdout.write(text)

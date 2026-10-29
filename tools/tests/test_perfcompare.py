@@ -12,6 +12,7 @@ Run from the repository root::
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -150,6 +151,31 @@ class Table(unittest.TestCase):
         self.assertIsNone(perfcompare.rank_sum_p(base[:4], shifted[:4]))
         self.assertEqual(perfcompare.verdict(base[:4], shifted[:4]), "-")
 
+    def test_five_runs_a_side_that_never_overlap_give_a_verdict(self) -> None:
+        # The default run count: fully separated runs have the exact
+        # two-sided p 2 / C(10, 5) = 2/252, below the 0.01 threshold
+        base = [100.0, 101.0, 102.0, 103.0, 104.0]
+        faster = [50.0, 51.0, 52.0, 53.0, 54.0]
+        self.assertAlmostEqual(perfcompare.rank_sum_p(base, faster), 2 / 252)
+        self.assertEqual(perfcompare.verdict(base, faster), "faster")
+        self.assertEqual(perfcompare.verdict(faster, base), "slower")
+        # One run of the five crossing over leaves it unproven at 0.01
+        crossed = [50.0, 51.0, 52.0, 53.0, 100.5]
+        p = perfcompare.rank_sum_p(base, crossed)
+        assert p is not None
+        self.assertAlmostEqual(p, 4 / 252)
+        self.assertEqual(perfcompare.verdict(base, crossed), "~")
+
+    def test_exact_and_normal_p_agree_where_both_apply(self) -> None:
+        # Past the exact limit the normal approximation takes over; at
+        # moderate sizes the two are close
+        a = [float(i) for i in range(0, 40, 2)]
+        b = [float(i) for i in range(1, 41, 2)]
+        exact = perfcompare.rank_sum_p(a, b)
+        normal = perfcompare.rank_sum_normal_p(a, b)
+        assert exact is not None
+        self.assertAlmostEqual(exact, normal, delta=0.02)
+
     def test_a_regression_past_tolerance_needs_a_slower_verdict(self) -> None:
         key = ("m", "a", 0)
         base = [100.0 + i for i in range(11)]
@@ -229,3 +255,37 @@ class CurrentLabel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Renames(unittest.TestCase):
+    def test_a_renamed_module_meets_its_replacement(self) -> None:
+        renames = perfcompare.parse_renames(["oldMod=newMod"])
+        self.assertEqual(renames, {"oldMod": "newMod"})
+        runs = [run_of(row("oldMod", "find", 10.0), row("kept", "find", 5.0))]
+        renamed = perfcompare.rename_modules(runs, renames)
+        self.assertEqual(set(renamed[0]), {("newMod", "find", 0), ("kept", "find", 0)})
+        self.assertEqual(renamed[0][("newMod", "find", 0)].module, "newMod")
+
+    def test_a_malformed_rename_is_refused(self) -> None:
+        for text in ("noequals", "=new", "old=", "old=bad name"):
+            with self.subTest(text=text), self.assertRaises(ToolError):
+                perfcompare.parse_renames([text])
+
+
+class Reuse(unittest.TestCase):
+    def test_runs_load_per_side_in_run_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            with self.assertRaisesRegex(ToolError, "--reuse"):
+                perfcompare.load_runs(work)
+            for side in ("base", "current"):
+                for n, ns in ((2, 20.0), (10, 100.0), (1, 10.0)):
+                    (work / f"run-{side}-{n}.tsv").write_text(
+                        f"PERF\tm\tx\t0\t1000\t{ns}\t0.0\n"
+                    )
+            runs = perfcompare.load_runs(work)
+            self.assertEqual(
+                [r[("m", "x", 0)].ns_per_op for r in runs["base"]],
+                [10.0, 20.0, 100.0],
+            )
+            self.assertEqual(len(runs["current"]), 3)
