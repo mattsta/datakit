@@ -5,7 +5,8 @@
  *
  * multimapAtom (PERSIST_TYPE_MULTIMAP_ATOM):
  *   snapshot: flex [flags (bits 0-1: multimapAtomIds, bits 2-3:
- *             multimapAtomIndex), next id, then per atom in id order: id,
+ *             multimapAtomIndex, bit 4: multimapAtomStore), next id, then
+ *             per atom in id order: id,
  *             value (stored exactly: "22" stays bytes), count (0-based: 0
  *             is one reference)].  The index and LOWEST's free set (the
  *             ids below the next id with no row) are rebuilt, never

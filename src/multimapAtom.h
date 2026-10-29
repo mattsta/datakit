@@ -3,9 +3,9 @@
 /* multimapAtom: a reference-counted atom table (interning).  Each distinct
  * value is stored once and named by a small integer id, handed out as a
  * DATABOX_CONTAINER_REFERENCE_EXTERNAL box (a "ref").  Two maps hold it:
- * forward {id -> value, refcount} rows addressed by id (idRows.h: a read
- * by id is positional, with no search), and a reverse index from value to
- * id (multimapAtomIndex below: ids sorted by value, value hashes with
+ * forward {id -> value, refcount} rows addressed by id (multimapAtomStore:
+ * a read by id is positional, with no search), and a reverse index from
+ * value to id (multimapAtomIndex: ids sorted by value, value hashes with
  * ids, or a table of id slots probed by hash).
  *
  * REFERENCES
@@ -93,18 +93,35 @@ typedef struct multimapAtomResult {
     uint64_t refcount;
 } multimapAtomResult;
 
-/* A table's settings: a zeroed config is the default (HASHED, REUSE) */
+/* Where the table holds each atom's value and count (chosen at creation;
+ * a lookup by id reads it directly under both):
+ * - PACKED: idRows pages, the values encoded as flex entries (a small
+ *   integer in a byte or two, a string with a byte or two of length).
+ *   The compact store.
+ * - DIRECT: one 24-byte row per id (the value's box and its count),
+ *   strings over 8 bytes in their own allocation.  A read by id is an
+ *   array index and a count change is one add: the fast store, for
+ *   tables read and retained by id far more than they are searched. */
+typedef enum multimapAtomStore {
+    MULTIMAP_ATOM_STORE_PACKED = 0,
+    MULTIMAP_ATOM_STORE_DIRECT = 1,
+} multimapAtomStore;
+
+/* A table's settings: a zeroed config is the default (HASHED, REUSE,
+ * PACKED) */
 typedef struct multimapAtomConfig {
     multimapAtomIndex index; /* HASHED (the zero value), ORDERED, SLOTS */
     multimapAtomIds ids;     /* REUSE (the zero value), PERMANENT, LOWEST */
+    multimapAtomStore store; /* PACKED (the zero value), DIRECT */
 } multimapAtomConfig;
 
-/* A default table (HASHED index, REUSE ids) */
+/* A default table (HASHED index, REUSE ids, PACKED store) */
 multimapAtom *multimapAtomNew(void);
-/* A table with 'config's settings; NULL for an unknown index or ids */
+/* A table with 'config's settings; NULL for an unknown index, ids or store */
 multimapAtom *multimapAtomNewConfig(const multimapAtomConfig *config);
 multimapAtomIds multimapAtomGetIds(const multimapAtom *ma);
 multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma);
+multimapAtomStore multimapAtomGetStore(const multimapAtom *ma);
 /* The id the next new atom gets (the lowest unused one under LOWEST) */
 uint64_t multimapAtomNextId(const multimapAtom *ma);
 void multimapAtomFree(multimapAtom *ma);

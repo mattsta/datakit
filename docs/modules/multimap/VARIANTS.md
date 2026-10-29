@@ -478,20 +478,33 @@ integer reference wherever a repeated value would otherwise go.
 
 ```c
 struct multimapAtom {
-    idRows *forward; /* {Key, Refcount} rows addressed by ID */
-    union {          /* the reverse index (multimapAtomIndex) */
+    union { /* {Key, Refcount} rows addressed by ID (multimapAtomStore) */
+        idRows *forward;     /* PACKED */
+        atomDirect_ *direct; /* DIRECT */
+    };
+    union { /* the reverse index (multimapAtomIndex) */
         multimap *mapAtomReverse;     /* ORDERED, HASHED */
         atomSlots_ *slotsAtomReverse; /* SLOTS: NULL until the first atom */
     };
-    uint64_t highest; /* next ID; bits 59-60: ids, 61-62: index */
+    uint64_t highest; /* next ID; bits 59-60: ids, 61-62: index, 63: store */
     multiroar *holes; /* LOWEST: freed IDs below the next; NULL when none */
 };
 ```
 
-The forward rows are an `idRows` (`idRows.h`): IDs in pages of 64, each page
-one flex led by a table of row offsets, so reading an ID back is a page
-pointer, an offset and the row's entries, with no search. The atom table
-hands out dense IDs, which is what keeps those pages full.
+The forward rows are one of two stores, chosen at creation (`.store`, read
+back by `multimapAtomGetStore()`):
+
+- `MULTIMAP_ATOM_STORE_PACKED` (the default): an `idRows` (`idRows.h`): IDs
+  in pages of 64, each page one flex led by a table of row offsets, so
+  reading an ID back is a page pointer, an offset and the row's entries, with
+  no search. Values are flex entries (a small integer in a byte or two). The
+  atom table hands out dense IDs, which is what keeps those pages full.
+- `MULTIMAP_ATOM_STORE_DIRECT`: one 24-byte row per ID (the value's box and a
+  0-based count), the rows growing in allocator size classes. Strings up to 8
+  bytes sit in the box; longer ones and 128-bit values are the row's own
+  allocation. A read by ID is an array index and a count change one add. A
+  row is kept for every ID up to the highest live one, so sparse IDs (a
+  PERMANENT table after many deletes) hold empty rows.
 
 The multimap index takes the atom tier family's node limit
 (`dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM)`, compiled as `FLEX_CAP_LEVEL_512`;
@@ -552,18 +565,45 @@ the allocator over 20k atoms.
 - SLOTS: 2.5 to 6 times faster than HASHED on every key operation for 3 more
   bytes per atom: for tables whose keys are looked up often.
 
+### Choosing a store
+
+The same 100k atoms under a SLOTS index in each store (`perfRegression`
+modules `multimapAtomSlots` and `multimapAtomSlotsDirect`, measured
+2026-10-29 as above; heap bytes from the same metered test):
+
+| per atom                    | PACKED | DIRECT |
+| --------------------------- | ------ | ------ |
+| intern a new key            | 299    | 96     |
+| intern a present key        | 49     | 27     |
+| find, scattered order       | 102    | 54     |
+| read an ID back, scattered  | 30     | 2.7    |
+| retain by ID                | 25     | 1.3    |
+| release by key              | 80     | 26     |
+| delete by ID                | 213    | 56     |
+| restore from a snapshot     | 179    | 66     |
+| heap bytes, 11-byte strings | 35.0   | 52.0   |
+| heap bytes, 48-byte strings | 79.0   | 95.0   |
+| heap bytes, integers        | 27.0   | 41.0   |
+
+- PACKED (default): the compact store, 14 to 17 fewer bytes per atom.
+- DIRECT: 2 to 20 times faster on every operation, reads and count changes by
+  ID most of all: for tables used by ID far more than they are searched, or
+  whose operations dominate a hot path.
+
 ### API
 
 ```c
 typedef struct multimapAtomConfig {
     multimapAtomIndex index; /* HASHED (0), ORDERED, SLOTS */
     multimapAtomIds ids;     /* REUSE (0), PERMANENT, LOWEST */
+    multimapAtomStore store; /* PACKED (0), DIRECT */
 } multimapAtomConfig;
 
 multimapAtom *multimapAtomNew(void); /* a zeroed config */
 multimapAtom *multimapAtomNewConfig(const multimapAtomConfig *config);
 multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma);
 multimapAtomIds multimapAtomGetIds(const multimapAtom *ma);
+multimapAtomStore multimapAtomGetStore(const multimapAtom *ma);
 uint64_t multimapAtomNextId(const multimapAtom *ma);
 void multimapAtomFree(multimapAtom *ma);
 
@@ -698,7 +738,7 @@ reuses the most recently freed ID first.
 
 `persistOpsMultimapAtom` (`atomPersist.h`, type id 140) keeps every ID
 exactly: a restored table resolves the same IDs and hands out the same IDs
-next. The snapshot is the ID behaviour and index kind, the next ID and each atom's (ID,
+next. The snapshot is the ID behaviour, index kind and store, the next ID and each atom's (ID,
 value, count) in ID order; values are stored exactly, so `"22"` stays bytes.
 Restore rebuilds the reverse map from the values sorted once, instead of one
 search per atom (perf preset, 100k atoms: snapshot 66 ns, restore 641 ns per

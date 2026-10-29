@@ -33,10 +33,11 @@ static void pcAtomRecordId(persistContractLog *log, persistOp op, uint64_t id,
  * id, releases by value (the last release deletes) and deletes by id.
  * Under LOWEST ids releases and deletes leave holes later interns fill. */
 static void *pcMultimapAtomBuild(const persistContractBuild *b) {
-    /* Every index kind with every id behaviour, by seed */
+    /* Every index kind with every id behaviour in both stores, by seed */
     multimapAtom *ma = multimapAtomNewConfig(
         &(multimapAtomConfig){.index = (multimapAtomIndex)((b->seed / 3) % 3),
-                              .ids = (multimapAtomIds)(b->seed % 3)});
+                              .ids = (multimapAtomIds)(b->seed % 3),
+                              .store = (multimapAtomStore)((b->seed / 9) % 2)});
     persistContractStart(b->log, ma);
 
     uint64_t rng = b->seed;
@@ -104,6 +105,7 @@ static bool pcMultimapAtomSameSettings(const void *original,
                                        const void *restored) {
     return multimapAtomGetIndex(original) == multimapAtomGetIndex(restored) &&
            multimapAtomGetIds(original) == multimapAtomGetIds(restored) &&
+           multimapAtomGetStore(original) == multimapAtomGetStore(restored) &&
            multimapAtomNextId(original) == multimapAtomNextId(restored);
 }
 

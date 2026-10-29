@@ -2,7 +2,9 @@
 #include "atomPersist.h"
 #include "cleaner.h"
 #include "dkTierLimit.h"
+#include "fibbuf.h"
 #include "idRows.h"
+#include "jebuf.h"
 #include "multidict.h"
 #include "multiroar.h"
 #include "rapidhash.h"
@@ -23,9 +25,31 @@ typedef struct atomSlots_ {
     uint64_t ids[];
 } atomSlots_;
 
+/* A DIRECT store's row: the value's box (VOID: no atom under this id)
+ * and its 0-based count.  Bytes up to 8 long sit in the box
+ * (BYTES_EMBED); longer bytes and 96/128-bit values are the row's own
+ * allocation (allocated = 1). */
+typedef struct atomDirectRow_ {
+    databox value;
+    int64_t count;
+} atomDirectRow_;
+
+/* A DIRECT store: rows by id, [0, end) the span holding every live id */
+typedef struct atomDirect_ {
+    atomDirectRow_ *rows;
+    uint64_t capacity;
+    uint64_t end;
+    uint64_t live;
+    uint64_t heapBytes; /* the rows' own allocations */
+} atomDirect_;
+
 struct multimapAtom {
-    /* {value, count} by id: a read by id is positional (idRows.h) */
-    idRows *forward;
+    /* {value, count} by id (multimapAtomStore): idRows pages (PACKED) or
+     * one row per id (DIRECT); a read by id is positional either way */
+    union {
+        idRows *forward;
+        atomDirect_ *direct;
+    };
     /* The reverse index (multimapAtomIndex): a multimap for ORDERED and
      * HASHED; for SLOTS its slot table (NULL until the first atom) */
     union {
@@ -33,8 +57,8 @@ struct multimapAtom {
         atomSlots_ *slotsAtomReverse;
     };
     /* The next generated id, with the table's settings above it, so none
-     * costs a byte: the id behaviour (multimapAtomIds, bits 59-60) and the
-     * reverse index kind (bits 61-62).  Ids stay below
+     * costs a byte: the id behaviour (multimapAtomIds, bits 59-60), the
+     * reverse index kind (bits 61-62) and the store (bit 63).  Ids stay below
      * MULTIMAP_ATOM_ID_LIMIT.  Under LOWEST the live ids are exactly
      * [0, next) minus 'holes'. */
     uint64_t highest;
@@ -46,10 +70,20 @@ static constexpr unsigned ATOM_IDS_SHIFT_ = 59;
 static constexpr uint64_t ATOM_IDS_BITS_ = (uint64_t)3 << ATOM_IDS_SHIFT_;
 static constexpr unsigned ATOM_INDEX_SHIFT_ = 61;
 static constexpr uint64_t ATOM_INDEX_BITS_ = (uint64_t)3 << ATOM_INDEX_SHIFT_;
+static constexpr uint64_t ATOM_DIRECT_BIT_ = (uint64_t)1 << 63;
 static constexpr uint64_t ATOM_SETTING_BITS_ =
-    ATOM_IDS_BITS_ | ATOM_INDEX_BITS_;
+    ATOM_IDS_BITS_ | ATOM_INDEX_BITS_ | ATOM_DIRECT_BIT_;
 static_assert(((uint64_t)1 << ATOM_IDS_SHIFT_) == MULTIMAP_ATOM_ID_LIMIT,
               "the settings sit just above every id");
+
+multimapAtomStore multimapAtomGetStore(const multimapAtom *ma) {
+    return (ma->highest & ATOM_DIRECT_BIT_) ? MULTIMAP_ATOM_STORE_DIRECT
+                                            : MULTIMAP_ATOM_STORE_PACKED;
+}
+
+static inline bool atomIsDirect_(const multimapAtom *ma) {
+    return (ma->highest & ATOM_DIRECT_BIT_) != 0;
+}
 
 static inline uint64_t atomNextId_(const multimapAtom *ma) {
     return ma->highest & ~ATOM_SETTING_BITS_;
@@ -123,24 +157,347 @@ static void atomBindId_(multimapAtom *ma, const uint64_t id) {
 }
 
 #ifdef DATAKIT_TEST
-/* The index multimapAtomNew makes (the suite's other tables take it too), and
- * the mask a hash passes through: the suite runs once per index, and once with
- * 2-bit hashes so most values collide */
+/* The index and store multimapAtomNew makes (the suite's other tables take
+ * them too), and the mask a hash passes through: the suite runs once per
+ * index and store, and once with 2-bit hashes so most values collide */
 static multimapAtomIndex atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_HASHED;
+static multimapAtomStore atomTestDefaultStore_ = MULTIMAP_ATOM_STORE_PACKED;
 static uint32_t atomTestHashMask_ = UINT32_MAX;
 #endif
 
 /* ====================================================================
+ * Forward rows: {value, count} by id, PACKED (idRows) or DIRECT
+ * ====================================================================
+ * Every forward access goes through atomFwd*_, which give both stores
+ * idRows' contracts: a read decodes as flexGetByType would (with slots,
+ * as flexGetByTypeInto), BYTES borrowing from the store until it
+ * changes; the count reads FALSE for 0 and as an integer otherwise. */
+static constexpr uint64_t ATOM_DIRECT_MIN_ = 16;
+
+static inline bool atomIsWide_(const databoxType type) {
+    return type == DATABOX_SIGNED_128 || type == DATABOX_UNSIGNED_128;
+}
+
+static void atomDirectRowClear_(atomDirect_ *d, atomDirectRow_ *row) {
+    if (row->value.allocated) {
+        d->heapBytes -= row->value.type == DATABOX_BYTES ? row->value.len
+                                                         : sizeof(__uint128_t);
+        zfree(row->value.data.ptr);
+    }
+
+    *row = (atomDirectRow_){};
+}
+
+/* Room for rows [0, need): the rows' bytes grow in fibbuf steps, each an
+ * allocator size class (fibbufNextSizeAllocation), so the rows fill the
+ * allocation they get */
+static void atomDirectReserve_(atomDirect_ *d, const uint64_t need) {
+    if (need <= d->capacity) {
+        return;
+    }
+
+    size_t bytes =
+        (d->capacity ? d->capacity : ATOM_DIRECT_MIN_) * sizeof(*d->rows);
+    while (bytes / sizeof(*d->rows) < need) {
+        bytes = fibbufNextSizeAllocation(bytes);
+    }
+
+    const uint64_t capacity = bytes / sizeof(*d->rows);
+
+    /* @own: container; free=multimapAtomFree */
+    d->rows = zrealloc(d->rows, capacity * sizeof(*d->rows));
+    memset(&d->rows[d->capacity], 0,
+           (capacity - d->capacity) * sizeof(*d->rows));
+    d->capacity = capacity;
+}
+
+/* The count a forward row's count box holds (0-based) */
+static int64_t atomCountOfBox_(const databox *box) {
+    switch (box->type) {
+    case DATABOX_TRUE:
+        return 1;
+    case DATABOX_SIGNED_64:
+        return box->data.i64;
+    case DATABOX_UNSIGNED_64:
+        return (int64_t)box->data.u64;
+    default:
+        return 0;
+    }
+}
+
+static void atomDirectSet_(atomDirect_ *d, const uint64_t id,
+                           const databox *row[2]) {
+    atomDirectReserve_(d, id + 1);
+    atomDirectRow_ *r = &d->rows[id];
+    if (r->value.type == DATABOX_VOID) {
+        d->live++;
+    } else {
+        atomDirectRowClear_(d, r);
+    }
+
+    const databox *v = row[0];
+    if (DATABOX_IS_BYTES(v)) {
+        const size_t len = v->len;
+        if (len <= sizeof(r->value.data.bytes.embed)) {
+            r->value.type = DATABOX_BYTES_EMBED;
+            r->value.len = len;
+            memcpy(r->value.data.bytes.embed, databoxBytes(v), len);
+        } else {
+            /* @own: container; free=multimapAtomFree */
+            uint8_t *copy = zmalloc(len);
+            memcpy(copy, databoxBytes(v), len);
+            r->value = (databox){.data.bytes.start = copy,
+                                 .type = DATABOX_BYTES,
+                                 .allocated = true,
+                                 .len = len};
+            d->heapBytes += len;
+        }
+    } else if (atomIsWide_(v->type)) {
+        assert(v->data.ptr);
+        /* @own: container; free=multimapAtomFree */
+        __uint128_t *copy = zmalloc(sizeof(*copy));
+        *copy = *v->data.u128;
+        r->value = (databox){
+            .data.u128 = copy, .type = v->type, .allocated = true, .big = true};
+        d->heapBytes += sizeof(*copy);
+    } else {
+        r->value = *v;
+        r->value.allocated = false;
+        r->value.big = false;
+    }
+
+    r->count = atomCountOfBox_(row[1]);
+    if (id >= d->end) {
+        d->end = id + 1;
+    }
+}
+
+static bool atomDirectGet_(const atomDirect_ *d, const uint64_t id,
+                           databox *row[2], databoxWide *slots) {
+    if (id >= d->end || d->rows[id].value.type == DATABOX_VOID) {
+        return false;
+    }
+
+    const atomDirectRow_ *r = &d->rows[id];
+    databox *out = row[0];
+    switch (r->value.type) {
+    case DATABOX_BYTES_EMBED:
+        out->type = DATABOX_BYTES;
+        out->len = r->value.len;
+        out->data.bytes.start = (uint8_t *)r->value.data.bytes.embed;
+        break;
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        out->type = r->value.type;
+        if (slots) {
+            memcpy(&slots[0], r->value.data.u128, sizeof(__uint128_t));
+            out->data.u128 = (__uint128_t *)&slots[0];
+            out->big = true;
+            out->allocated = false;
+        } else if (out->big) {
+            *out->data.u128 = *r->value.data.u128;
+        } else {
+            out->data.ptr = nullptr;
+        }
+        break;
+    default:
+        out->type = r->value.type;
+        out->data = r->value.data;
+        out->len = r->value.len;
+        break;
+    }
+
+    databox *count = row[1];
+    if (r->count == 0) {
+        count->type = DATABOX_FALSE;
+        count->data.u = 0;
+    } else {
+        count->type = r->count > 0 ? DATABOX_UNSIGNED_64 : DATABOX_SIGNED_64;
+        count->data.i64 = r->count;
+    }
+
+    return true;
+}
+
+static bool atomDirectDelete_(atomDirect_ *d, const uint64_t id) {
+    if (id >= d->end || d->rows[id].value.type == DATABOX_VOID) {
+        return false;
+    }
+
+    atomDirectRowClear_(d, &d->rows[id]);
+    d->live--;
+    while (d->end && d->rows[d->end - 1].value.type == DATABOX_VOID) {
+        d->end--;
+    }
+
+    /* Under a quarter used: shrink to twice the span still in use */
+    if (d->capacity > 4 * ATOM_DIRECT_MIN_ && d->end * 4 < d->capacity) {
+        const uint64_t want =
+            d->end * 2 > ATOM_DIRECT_MIN_ ? d->end * 2 : ATOM_DIRECT_MIN_;
+        const uint64_t capacity =
+            jebufSizeAllocation(want * sizeof(*d->rows)) / sizeof(*d->rows);
+
+        /* @own: container; free=multimapAtomFree */
+        d->rows = zrealloc(d->rows, capacity * sizeof(*d->rows));
+        d->capacity = capacity;
+    }
+
+    return true;
+}
+
+static void atomFwdNew_(multimapAtom *ma, const multimapAtomStore store) {
+    if (store == MULTIMAP_ATOM_STORE_DIRECT) {
+        /* @own: container; free=multimapAtomFree */
+        ma->direct = zcalloc(1, sizeof(*ma->direct));
+    } else {
+        /* @own: container; free=multimapAtomFree */
+        ma->forward = idRowsNew(2);
+    }
+}
+
+static void atomFwdFree_(multimapAtom *ma) {
+    if (!atomIsDirect_(ma)) {
+        idRowsFree(ma->forward);
+        return;
+    }
+
+    atomDirect_ *d = ma->direct;
+    for (uint64_t id = 0; id < d->end; id++) {
+        atomDirectRowClear_(d, &d->rows[id]);
+    }
+
+    zfree(d->rows);
+    zfree(d);
+}
+
+static size_t atomFwdCount_(const multimapAtom *ma) {
+    return atomIsDirect_(ma) ? (size_t)ma->direct->live
+                             : idRowsCount(ma->forward);
+}
+
+static size_t atomFwdBytes_(const multimapAtom *ma) {
+    if (!atomIsDirect_(ma)) {
+        return idRowsBytes(ma->forward);
+    }
+
+    const atomDirect_ *d = ma->direct;
+    return sizeof(*d) + d->capacity * sizeof(*d->rows) + d->heapBytes;
+}
+
+static bool atomFwdExists_(const multimapAtom *ma, const uint64_t id) {
+    if (!atomIsDirect_(ma)) {
+        return idRowsExists(ma->forward, id);
+    }
+
+    return id < ma->direct->end &&
+           ma->direct->rows[id].value.type != DATABOX_VOID;
+}
+
+/* The row of 'id' into 'row' (value, count); 'slots' as idRows' */
+static bool atomFwdGet_(const multimapAtom *ma, const uint64_t id,
+                        databox *row[2], databoxWide *slots) {
+    return atomIsDirect_(ma) ? atomDirectGet_(ma->direct, id, row, slots)
+                             : idRowsGetWithSlots(ma->forward, id, row, slots);
+}
+
+static bool atomFwdSet_(multimapAtom *ma, const uint64_t id,
+                        const databox *row[2]) {
+    if (!atomIsDirect_(ma)) {
+        return idRowsSet(ma->forward, id, row);
+    }
+
+    atomDirectSet_(ma->direct, id, row);
+    return true;
+}
+
+/* 'delta' added to the count of 'id': 'next' the new count, or on a
+ * refusal (no such id, overflow) the current one (0 when absent) */
+static bool atomFwdIncr_(multimapAtom *ma, const uint64_t id,
+                         const int64_t delta, int64_t *next) {
+    if (!atomIsDirect_(ma)) {
+        return idRowsFieldIncr(ma->forward, id, ATOM_ROW_COUNT_, delta, next);
+    }
+
+    atomDirect_ *d = ma->direct;
+    if (id >= d->end || d->rows[id].value.type == DATABOX_VOID) {
+        *next = 0;
+        return false;
+    }
+
+    int64_t *count = &d->rows[id].count;
+    if (ckd_add(next, *count, delta)) {
+        *next = *count;
+        return false;
+    }
+
+    *count = *next;
+    return true;
+}
+
+static bool atomFwdDelete_(multimapAtom *ma, const uint64_t id) {
+    return atomIsDirect_(ma) ? atomDirectDelete_(ma->direct, id)
+                             : idRowsDelete(ma->forward, id);
+}
+
+static bool atomFwdLast_(const multimapAtom *ma, uint64_t *id) {
+    if (!atomIsDirect_(ma)) {
+        return idRowsLast(ma->forward, id);
+    }
+
+    if (!ma->direct->end) {
+        return false;
+    }
+
+    *id = ma->direct->end - 1;
+    return true;
+}
+
+/* Every forward row in id order */
+typedef struct atomFwdIter_ {
+    const multimapAtom *ma;
+    idRowsIterator packed;
+    uint64_t next;
+} atomFwdIter_;
+
+static void atomFwdIterInit_(const multimapAtom *ma, atomFwdIter_ *iter) {
+    iter->ma = ma;
+    iter->next = 0;
+    if (!atomIsDirect_(ma)) {
+        idRowsIteratorInit(ma->forward, &iter->packed);
+    }
+}
+
+static bool atomFwdIterNext_(atomFwdIter_ *iter, uint64_t *id, databox *row[2],
+                             databoxWide *slots) {
+    if (!atomIsDirect_(iter->ma)) {
+        return idRowsIteratorNext(&iter->packed, id, row, slots);
+    }
+
+    const atomDirect_ *d = iter->ma->direct;
+    while (iter->next < d->end) {
+        const uint64_t at = iter->next++;
+        if (atomDirectGet_(d, at, row, slots)) {
+            *id = at;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* ====================================================================
  * Create
  * ==================================================================== */
-static void atomInit_(multimapAtom *ma, const multimapAtomIndex index,
-                      const multimapAtomIds ids) {
+static void atomInit_(multimapAtom *ma, const multimapAtomConfig *settings) {
     /* Every multimap of the table takes the atom family's node limit */
     const flexCapSizeLimit limit = dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM);
+    const multimapAtomIndex index = settings->index;
 
-    /* {value, count} by id */
-    /* @own: container; free=multimapAtomFree */
-    ma->forward = idRowsNew(2);
+    /* {value, count} by id; the store bit first, so the forward calls
+     * know which store they serve */
+    ma->highest =
+        settings->store == MULTIMAP_ATOM_STORE_DIRECT ? ATOM_DIRECT_BIT_ : 0;
+    atomFwdNew_(ma, settings->store);
 
     /* ORDERED: {id} by value (resolved through the forward rows); HASHED:
      * the set of {hash, id}; SLOTS: a slot table made with the first atom */
@@ -158,29 +515,31 @@ static void atomInit_(multimapAtom *ma, const multimapAtomIndex index,
         break;
     }
 
-    ma->highest = ((uint64_t)ids << ATOM_IDS_SHIFT_) |
-                  ((uint64_t)index << ATOM_INDEX_SHIFT_);
+    ma->highest |= ((uint64_t)settings->ids << ATOM_IDS_SHIFT_) |
+                   ((uint64_t)index << ATOM_INDEX_SHIFT_);
 }
 
 multimapAtom *multimapAtomNewConfig(const multimapAtomConfig *config) {
     const multimapAtomConfig settings =
         config ? *config : (multimapAtomConfig){};
     if (settings.index > MULTIMAP_ATOM_INDEX_SLOTS ||
-        settings.ids > MULTIMAP_ATOM_IDS_LOWEST) {
+        settings.ids > MULTIMAP_ATOM_IDS_LOWEST ||
+        settings.store > MULTIMAP_ATOM_STORE_DIRECT) {
         return nullptr;
     }
 
     /* @own: caller; free=multimapAtomFree */
     multimapAtom *ma = zcalloc(1, sizeof(*ma));
-    atomInit_(ma, settings.index, settings.ids);
+    atomInit_(ma, &settings);
     return ma;
 }
 
 multimapAtom *multimapAtomNew(void) {
 #ifdef DATAKIT_TEST
-    /* The suite runs once per index through the plain constructor */
-    return multimapAtomNewConfig(
-        &(multimapAtomConfig){.index = atomTestDefaultIndex_});
+    /* The suite runs once per index and store through the plain
+     * constructor */
+    return multimapAtomNewConfig(&(multimapAtomConfig){
+        .index = atomTestDefaultIndex_, .store = atomTestDefaultStore_});
 #else
     return multimapAtomNewConfig(nullptr);
 #endif
@@ -191,7 +550,7 @@ multimapAtom *multimapAtomNew(void) {
  * ==================================================================== */
 void multimapAtomFree(multimapAtom *ma) {
     if (ma) {
-        idRowsFree(ma->forward);
+        atomFwdFree_(ma);
         if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
             zfree(ma->slotsAtomReverse);
         } else {
@@ -242,7 +601,7 @@ static databox atomHashBox_(const databox *value) {
 /* The forward row of 'ref' into 'elements' (value, count) */
 static bool atomForwardLookup_(const multimapAtom *ma, const databox *ref,
                                databox *elements[2]) {
-    return idRowsGet(ma->forward, ref->data.u, elements);
+    return atomFwdGet_(ma, ref->data.u, elements, nullptr);
 }
 
 /* Whether the atom 'ref' holds 'value' (databoxCompare equality, wide
@@ -655,7 +1014,7 @@ static void atomForwardAdd_(multimapAtom *ma, const uint64_t id,
                             const databox *value) {
     const databox refcount = {.type = DATABOX_FALSE};
     const databox *row[2] = {value, &refcount};
-    [[maybe_unused]] const bool added = idRowsSet(ma->forward, id, row);
+    [[maybe_unused]] const bool added = atomFwdSet_(ma, id, row);
     assert(added);
 }
 
@@ -664,7 +1023,7 @@ static void abstractInsert(multimapAtom *ma, const databox *reverseKey,
     const databox atomId = atomRefBox_(id);
     atomForwardAdd_(ma, id, reverseKey);
     atomIndexInsert_(ma, reverseKey, &atomId);
-    assert(idRowsCount(ma->forward) == atomIndexCount_(ma));
+    assert(atomFwdCount_(ma) == atomIndexCount_(ma));
     atomBindId_(ma, id);
 }
 
@@ -736,7 +1095,7 @@ static bool atomFindOrCreateWithId_(multimapAtom *ma, const databox *key,
         return true;
     }
 
-    assert(idRowsCount(ma->forward) == atomIndexCount_(ma));
+    assert(atomFwdCount_(ma) == atomIndexCount_(ma));
     *ref = atomId;
     return false;
 }
@@ -754,7 +1113,7 @@ static int64_t atomCountAdd_(multimapAtom *ma, const databox *ref,
                              const int64_t delta) {
     assert(!atomIsPermanent_(ma));
     int64_t next = 0;
-    idRowsFieldIncr(ma->forward, ref->data.u, ATOM_ROW_COUNT_, delta, &next);
+    atomFwdIncr_(ma, ref->data.u, delta, &next);
     return next;
 }
 
@@ -801,7 +1160,7 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
     databox foundReference = {};
     if (atomIndexDeleteValue_(ma, reverseKey, &foundReference)) {
         [[maybe_unused]] const bool deleted =
-            idRowsDelete(ma->forward, foundReference.data.u);
+            atomFwdDelete_(ma, foundReference.data.u);
         assert(deleted);
     }
 
@@ -967,7 +1326,7 @@ static void atomAfterDelete_(multimapAtom *ma, const uint64_t deletedId) {
         return;
     }
 
-    if (idRowsCount(ma->forward) == 0) {
+    if (atomFwdCount_(ma) == 0) {
         atomSetNextId_(ma, 0);
         multiroarFree(ma->holes);
         ma->holes = nullptr;
@@ -977,8 +1336,7 @@ static void atomAfterDelete_(multimapAtom *ma, const uint64_t deletedId) {
     const uint64_t next = atomNextId_(ma);
     if (deletedId + 1 == next) {
         uint64_t last;
-        if (idRowsLast(ma->forward, &last) &&
-            last + 1 < MULTIMAP_ATOM_ID_LIMIT) {
+        if (atomFwdLast_(ma, &last) && last + 1 < MULTIMAP_ATOM_ID_LIMIT) {
             atomSetNextId_(ma, last + 1);
             /* The holes above the new next are past every live id */
             if (ma->holes) {
@@ -1003,8 +1361,7 @@ static void atomDeleteKnown(multimapAtom *ma, multimapEntry *reverseEntry,
                             const databox *ref) {
     multimapDeleteEntryWithReference(&ma->mapAtomReverse, reverseEntry, ma);
 
-    [[maybe_unused]] const bool deleteForward =
-        idRowsDelete(ma->forward, ref->data.u);
+    [[maybe_unused]] const bool deleteForward = atomFwdDelete_(ma, ref->data.u);
     assert(deleteForward);
 
     atomAfterDelete_(ma, ref->data.u);
@@ -1077,7 +1434,7 @@ bool multimapAtomDelete(multimapAtom *ma, const databox *key) {
     }
 
     [[maybe_unused]] const bool deleteForward =
-        idRowsDelete(ma->forward, foundReference.data.u);
+        atomFwdDelete_(ma, foundReference.data.u);
     assert(deleteForward);
 
     atomAfterDelete_(ma, foundReference.data.u);
@@ -1094,13 +1451,13 @@ bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
     databox count = {};
     databox *row[2] = {&value, &count};
     databoxWide wide[2];
-    if (!idRowsGetWithSlots(ma->forward, ref->data.u, row, wide)) {
+    if (!atomFwdGet_(ma, ref->data.u, row, wide)) {
         return false;
     }
 
     assert(value.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL);
     atomIndexDeleteHeld_(ma, &value, ref);
-    idRowsDelete(ma->forward, ref->data.u);
+    atomFwdDelete_(ma, ref->data.u);
     atomAfterDelete_(ma, ref->data.u);
     return true;
 }
@@ -1114,29 +1471,32 @@ bool multimapAtomDeleteById(multimapAtom *ma, const uint64_t id) {
  * Reporting
  * ==================================================================== */
 size_t multimapAtomCount(const multimapAtom *ma) {
-    assert(idRowsCount(ma->forward) == atomIndexCount_(ma));
+    assert(atomFwdCount_(ma) == atomIndexCount_(ma));
 
-    return idRowsCount(ma->forward);
+    return atomFwdCount_(ma);
 }
 
 size_t multimapAtomBytes(const multimapAtom *ma) {
-    assert(idRowsCount(ma->forward) == atomIndexCount_(ma));
+    assert(atomFwdCount_(ma) == atomIndexCount_(ma));
 
-    return idRowsBytes(ma->forward) + atomIndexBytes_(ma) +
+    return atomFwdBytes_(ma) + atomIndexBytes_(ma) +
            (ma->holes ? (size_t)multiroarMemoryUsage(ma->holes) : 0);
 }
 
 /* ====================================================================
  * Persistence (atomPersist.h)
  * ==================================================================== */
-/* The id behaviour (multimapAtomIds) in flag bits 0-1 and the reverse
- * index kind (multimapAtomIndex) in bits 2-3; the index itself is rebuilt
- * from the rows, never stored, and so is LOWEST's free set (the ids below
- * the next id with no row) */
+/* The id behaviour (multimapAtomIds) in flag bits 0-1, the reverse index
+ * kind (multimapAtomIndex) in bits 2-3 and the store (multimapAtomStore)
+ * in bit 4; the index itself is rebuilt from the rows, never stored, and
+ * so is LOWEST's free set (the ids below the next id with no row) */
 static constexpr unsigned ATOM_PERSIST_FLAG_IDS_ = 3u;
 static constexpr unsigned ATOM_PERSIST_INDEX_SHIFT_ = 2;
 static constexpr unsigned ATOM_PERSIST_FLAG_INDEX_ =
     3u << ATOM_PERSIST_INDEX_SHIFT_;
+static constexpr unsigned ATOM_PERSIST_STORE_SHIFT_ = 4;
+static constexpr unsigned ATOM_PERSIST_FLAG_STORE_ =
+    1u << ATOM_PERSIST_STORE_SHIFT_;
 
 /* A stored count (0-based: 0 is one reference) as a number; FieldIncr
  * leaves it FALSE, TRUE or an integer */
@@ -1177,8 +1537,8 @@ void multimapAtomGetStats(const multimapAtom *ma, multimapAtomStats *stats) {
                                  .unitLimit = unitLimit};
     const bool permanent = atomIsPermanent_(ma);
 
-    idRowsIterator iter;
-    idRowsIteratorInit(ma->forward, &iter);
+    atomFwdIter_ iter;
+    atomFwdIterInit_(ma, &iter);
     while (true) {
         /* Zeroed: a narrow decode leaves the flag bits as they were */
         uint64_t id = 0;
@@ -1186,7 +1546,7 @@ void multimapAtomGetStats(const multimapAtom *ma, multimapAtomStats *stats) {
         databox count = {};
         databox *row[2] = {&value, &count};
         databoxWide wide[2];
-        if (!idRowsIteratorNext(&iter, &id, row, wide)) {
+        if (!atomFwdIterNext_(&iter, &id, row, wide)) {
             break;
         }
 
@@ -1214,7 +1574,8 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
     flex *f = flexNew();
     const databox flags = DATABOX_UNSIGNED(
         (unsigned)multimapAtomGetIds(ma) |
-        ((unsigned)multimapAtomGetIndex(ma) << ATOM_PERSIST_INDEX_SHIFT_));
+        ((unsigned)multimapAtomGetIndex(ma) << ATOM_PERSIST_INDEX_SHIFT_) |
+        ((unsigned)multimapAtomGetStore(ma) << ATOM_PERSIST_STORE_SHIFT_));
     const databox next = DATABOX_UNSIGNED(atomNextId_(ma));
     const databox *header[2] = {&flags, &next};
     flexAppendMultipleExact(&f, 2, header);
@@ -1225,8 +1586,8 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
     databoxWide wide[BATCH * 3];
     const databox *ptrs[BATCH * 3];
     size_t used = 0;
-    idRowsIterator iter;
-    idRowsIteratorInit(ma->forward, &iter);
+    atomFwdIter_ iter;
+    atomFwdIterInit_(ma, &iter);
     while (true) {
         /* A narrow decode leaves the flag bits as they were: zero them */
         databox *row[2] = {&boxes[used * 3 + 1], &boxes[used * 3 + 2]};
@@ -1236,7 +1597,7 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
 
         uint64_t id = 0;
         const bool more =
-            idRowsIteratorNext(&iter, &id, row, &wide[used * 3 + 1]);
+            atomFwdIterNext_(&iter, &id, row, &wide[used * 3 + 1]);
         if (more) {
             uint64_t count = 0;
             atomPersistCountOf_(row[1], &count);
@@ -1420,8 +1781,8 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     uint64_t next;
     if (n < 2 || (n - 2) % 3 || !flexReadUnsigned(f, &fe, &flags) ||
         !flexReadUnsigned(f, &fe, &next) ||
-        (flags &
-         ~(uint64_t)(ATOM_PERSIST_FLAG_IDS_ | ATOM_PERSIST_FLAG_INDEX_)) ||
+        (flags & ~(uint64_t)(ATOM_PERSIST_FLAG_IDS_ | ATOM_PERSIST_FLAG_INDEX_ |
+                             ATOM_PERSIST_FLAG_STORE_)) ||
         next >= MULTIMAP_ATOM_ID_LIMIT) {
         return nullptr;
     }
@@ -1430,7 +1791,9 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     const multimapAtomConfig config = {
         .index = (multimapAtomIndex)((flags & ATOM_PERSIST_FLAG_INDEX_) >>
                                      ATOM_PERSIST_INDEX_SHIFT_),
-        .ids = (multimapAtomIds)(flags & ATOM_PERSIST_FLAG_IDS_)};
+        .ids = (multimapAtomIds)(flags & ATOM_PERSIST_FLAG_IDS_),
+        .store = (multimapAtomStore)((flags & ATOM_PERSIST_FLAG_STORE_) >>
+                                     ATOM_PERSIST_STORE_SHIFT_)};
     cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNewConfig(&config);
     if (!ma) {
         return nullptr;
@@ -1473,7 +1836,7 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
             count ? DATABOX_UNSIGNED(count) : (databox){.type = DATABOX_FALSE};
         const databox *forwardRow[2] = {(const databox *)&values[r],
                                         &countStored};
-        idRowsSet(ma->forward, ids[r], forwardRow);
+        atomFwdSet_(ma, ids[r], forwardRow);
         byValue[r] = &values[r];
     }
 
@@ -1530,7 +1893,7 @@ static bool atomPersistLiveRef_(const multimapAtom *ma, const databoxBig *id,
     }
 
     *ref = atomRefBox_(id->data.u64);
-    return idRowsExists(ma->forward, id->data.u64);
+    return atomFwdExists_(ma, id->data.u64);
 }
 
 static bool multimapAtomPersistApplyOp_(void *structure, persistOp op,
@@ -1597,7 +1960,7 @@ static size_t multimapAtomPersistBytes_(const void *structure) {
 
 static bool multimapAtomPersistValidate_(const void *structure) {
     const multimapAtom *ma = structure;
-    return idRowsCount(ma->forward) == atomIndexCount_(ma);
+    return atomFwdCount_(ma) == atomIndexCount_(ma);
 }
 
 static void multimapAtomPersistFree_(void *structure) {
@@ -1622,16 +1985,16 @@ const persistOps persistOpsMultimapAtom = {
 
 #ifdef DATAKIT_TEST
 void multimapAtomRepr(const multimapAtom *ma) {
-    printf("Forward rows (%zu, %zu bytes):\n", idRowsCount(ma->forward),
-           idRowsBytes(ma->forward));
-    idRowsIterator iter;
-    idRowsIteratorInit(ma->forward, &iter);
+    printf("Forward rows (%zu, %zu bytes):\n", atomFwdCount_(ma),
+           atomFwdBytes_(ma));
+    atomFwdIter_ iter;
+    atomFwdIterInit_(ma, &iter);
     uint64_t id;
     databox value = {};
     databox count = {};
     databox *row[2] = {&value, &count};
     databoxWide wide[2];
-    while (idRowsIteratorNext(&iter, &id, row, wide)) {
+    while (atomFwdIterNext_(&iter, &id, row, wide)) {
         printf("  %" PRIu64 ": ", id);
         databoxReprSay("", &value);
     }
@@ -1646,12 +2009,13 @@ void multimapAtomRepr(const multimapAtom *ma) {
     }
 }
 
-/* A table with 'index' and 'ids' */
+/* A table with 'index', 'store' and 'ids' */
 static multimapAtom *atomTestNew_(multimapAtomIndex index,
+                                  multimapAtomStore store,
                                   multimapAtomIds ids) {
     /* @own: caller; free=multimapAtomFree */
     return multimapAtomNewConfig(
-        &(multimapAtomConfig){.index = index, .ids = ids});
+        &(multimapAtomConfig){.index = index, .ids = ids, .store = store});
 }
 
 /* Callback for iterator */
@@ -1810,7 +2174,7 @@ static int atomTestSuite_(void) {
             multimapAtomInsertWithExactAtomID(ma, i, &box);
         }
 
-        const size_t forwardLen = idRowsCount(ma->forward);
+        const size_t forwardLen = atomFwdCount_(ma);
         const size_t reverseLen = atomIndexCount_(ma);
 
         multimapAtomRepr(ma);
@@ -2321,7 +2685,7 @@ static int atomTestSuite_(void) {
                 multimapAtomRetainByRef(ma, &box);
             }
 
-            ssize_t forwardLen = idRowsCount(ma->forward);
+            ssize_t forwardLen = atomFwdCount_(ma);
             ssize_t reverseLen = atomIndexCount_(ma);
 
             if (forwardLen != doUntil) {
@@ -2387,7 +2751,7 @@ static int atomTestSuite_(void) {
                 multimapAtomRetainByRef(ma, &box);
             }
 
-            ssize_t forwardLen = idRowsCount(ma->forward);
+            ssize_t forwardLen = atomFwdCount_(ma);
             ssize_t reverseLen = atomIndexCount_(ma);
 
             if (forwardLen != doUntil) {
@@ -2422,7 +2786,7 @@ static int atomTestSuite_(void) {
             }
 
             /* By here, everything should be deleted... */
-            forwardLen = idRowsCount(ma->forward);
+            forwardLen = atomFwdCount_(ma);
             reverseLen = atomIndexCount_(ma);
 
             if (forwardLen != 0) {
@@ -2465,7 +2829,7 @@ static int atomTestSuite_(void) {
                 assert(found);
             }
 
-            ssize_t forwardLen = idRowsCount(ma->forward);
+            ssize_t forwardLen = atomFwdCount_(ma);
             ssize_t reverseLen = atomIndexCount_(ma);
 
             assert(forwardLen == doUntil);
@@ -2476,7 +2840,7 @@ static int atomTestSuite_(void) {
                 multimapAtomDeleteById(ma, i);
             }
 
-            forwardLen = idRowsCount(ma->forward);
+            forwardLen = atomFwdCount_(ma);
             reverseLen = atomIndexCount_(ma);
 
             assert(forwardLen == 0);
@@ -2495,7 +2859,7 @@ static int atomTestSuite_(void) {
             multimapAtomInsertWithExactAtomID(ma, i, &box);
         }
 
-        const ssize_t forwardLen = idRowsCount(ma->forward);
+        const ssize_t forwardLen = atomFwdCount_(ma);
         const ssize_t reverseLen = atomIndexCount_(ma);
 
         assert(forwardLen == doUntil);
@@ -2708,9 +3072,9 @@ static int atomTestSuite_(void) {
         multimapAtomInsertWithExactAtomID(ma, 5, &keyB);
 
         /* No duplicate/orphan: exactly one row per side. */
-        if (idRowsCount(ma->forward) != 1) {
+        if (atomFwdCount_(ma) != 1) {
             ERR("forward has %zu rows for one id, expected 1",
-                idRowsCount(ma->forward));
+                atomFwdCount_(ma));
         }
         if (atomIndexCount_(ma) != 1) {
             ERR("reverse has %zu rows, expected 1", atomIndexCount_(ma));
@@ -2766,7 +3130,7 @@ static int atomTestSuite_(void) {
         const uint64_t idBase = 100;
         for (size_t i = 0; i < atomValueCount; i++) {
             const databox *row[2] = {&vals[i], &DATABOX_BOX_FALSE};
-            idRowsSet(ma->forward, idBase + i, row);
+            atomFwdSet_(ma, idBase + i, row);
         }
 
         /* Pass 0 reads one page of forward rows; pass 1 adds filler rows
@@ -2776,7 +3140,7 @@ static int atomTestSuite_(void) {
                 for (uint64_t f = 0; f < 400; f++) {
                     const databox fill = databoxNewUnsigned(f);
                     const databox *row[2] = {&fill, &DATABOX_BOX_FALSE};
-                    idRowsSet(ma->forward, 1000 + f, row);
+                    atomFwdSet_(ma, 1000 + f, row);
                 }
             }
 
@@ -2859,7 +3223,7 @@ static int atomTestSuite_(void) {
                 ERR("pass %d: ConvertBig changed a missing reference", pass);
             }
 
-            if (pass == 1 && idRowsCount(ma->forward) < 400) {
+            if (pass == 1 && atomFwdCount_(ma) < 400) {
                 ERR("filler rows missing from the forward rows");
             }
         }
@@ -2919,8 +3283,7 @@ static int atomTestSuite_(void) {
                     reverseFull = reverseIter.type == MULTIMAP_TYPE_FULL;
                 }
 
-                if (idRowsCount(ma->forward) < 2 * IDROWS_PAGE ||
-                    !reverseFull) {
+                if (atomFwdCount_(ma) < 2 * IDROWS_PAGE || !reverseFull) {
                     ERR("filler atoms did not make both maps Full");
                 }
             }
@@ -3095,7 +3458,8 @@ static int atomTestSuite_(void) {
 
     TEST("permanent: atoms outlive their references; ids never repeat") {
         multimapAtom *ma =
-            atomTestNew_(atomTestDefaultIndex_, MULTIMAP_ATOM_IDS_PERMANENT);
+            atomTestNew_(atomTestDefaultIndex_, atomTestDefaultStore_,
+                         MULTIMAP_ATOM_IDS_PERMANENT);
         multimapAtom *reusing = multimapAtomNew();
         if (!atomIsPermanent_(ma) || atomIsPermanent_(reusing)) {
             ERR("the id behaviour is not what the constructor chose");
@@ -3227,7 +3591,7 @@ static int atomTestSuite_(void) {
         const databox exactRef = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                                   .data.u = 5};
         databox found = {};
-        if (idRowsCount(ma->forward) != 2 ||
+        if (atomFwdCount_(ma) != 2 ||
             !multimapAtomLookup(ma, &exactRef, &found) ||
             databoxCompare(&found, &exactKey) != 0 ||
             !multimapAtomLookup(ma, &gen, &found) || found.data.i != 600) {
@@ -3565,7 +3929,8 @@ static int atomTestSuite_(void) {
 
         /* A permanent table counts one reference per atom */
         multimapAtom *perm =
-            atomTestNew_(atomTestDefaultIndex_, MULTIMAP_ATOM_IDS_PERMANENT);
+            atomTestNew_(atomTestDefaultIndex_, atomTestDefaultStore_,
+                         MULTIMAP_ATOM_IDS_PERMANENT);
         databox p = databoxNewBytesString(longValue);
         multimapAtomInsertIfNewConvert(perm, &p);
         multimapAtomRetainById(perm, p.data.u);
@@ -3710,17 +4075,27 @@ static databox atomTestMixedValue_(char *buf, size_t cap, int32_t i,
     }
 }
 
-/* Every index kind, with its name, in the order reports list them */
+/* Every index kind under each store, with its name, in the order reports
+ * list them: the PACKED kinds first, by rising index size */
 typedef struct atomTestKind_ {
     multimapAtomIndex index;
+    multimapAtomStore store;
     const char *name;
 } atomTestKind_;
 
 static const atomTestKind_ atomTestKinds_[] = {
-    {MULTIMAP_ATOM_INDEX_ORDERED, "ordered"},
-    {MULTIMAP_ATOM_INDEX_HASHED, "hashed"},
-    {MULTIMAP_ATOM_INDEX_SLOTS, "slots"},
+    {MULTIMAP_ATOM_INDEX_ORDERED, MULTIMAP_ATOM_STORE_PACKED, "ordered"},
+    {MULTIMAP_ATOM_INDEX_HASHED, MULTIMAP_ATOM_STORE_PACKED, "hashed"},
+    {MULTIMAP_ATOM_INDEX_SLOTS, MULTIMAP_ATOM_STORE_PACKED, "slots"},
+    {MULTIMAP_ATOM_INDEX_ORDERED, MULTIMAP_ATOM_STORE_DIRECT,
+     "ordered, direct"},
+    {MULTIMAP_ATOM_INDEX_HASHED, MULTIMAP_ATOM_STORE_DIRECT, "hashed, direct"},
+    {MULTIMAP_ATOM_INDEX_SLOTS, MULTIMAP_ATOM_STORE_DIRECT, "slots, direct"},
 };
+
+/* The kind 'k''s table with 'ids' */
+#define ATOM_TEST_KIND_NEW(k, ids)                                             \
+    atomTestNew_(atomTestKinds_[k].index, atomTestKinds_[k].store, ids)
 
 #define ATOM_TEST_KINDS countof(atomTestKinds_)
 
@@ -3742,7 +4117,7 @@ static int atomTestDifferential_(void) {
     constexpr int32_t values = 600;
     multimapAtom *t[ATOM_TEST_KINDS];
     for (size_t k = 0; k < ATOM_TEST_KINDS; k++) {
-        t[k] = atomTestNew_(atomTestKinds_[k].index, MULTIMAP_ATOM_IDS_REUSE);
+        t[k] = ATOM_TEST_KIND_NEW(k, MULTIMAP_ATOM_IDS_REUSE);
     }
 
     uint64_t rng = 0xD1FF;
@@ -3843,12 +4218,13 @@ static int atomTestDifferential_(void) {
                 multimapAtomFree(t[k]);
                 t[k] = persistOpsMultimapAtom.restore(snap, len);
                 if (!t[k] ||
-                    multimapAtomGetIndex(t[k]) != atomTestKinds_[k].index) {
-                    ERR("a %s snapshot did not restore with its index",
+                    multimapAtomGetIndex(t[k]) != atomTestKinds_[k].index ||
+                    multimapAtomGetStore(t[k]) != atomTestKinds_[k].store) {
+                    ERR("a %s snapshot did not restore with its index and "
+                        "store",
                         atomTestKinds_[k].name);
                     if (!t[k]) {
-                        t[k] = atomTestNew_(atomTestKinds_[k].index,
-                                            MULTIMAP_ATOM_IDS_REUSE);
+                        t[k] = ATOM_TEST_KIND_NEW(k, MULTIMAP_ATOM_IDS_REUSE);
                     }
                 }
             }
@@ -3918,14 +4294,15 @@ static bool atomLowestValueIs_(const databox *got, const int64_t v) {
     return databoxCompare(got, &want) == 0;
 }
 
-static int atomLowestSoak_(const multimapAtomIndex index, const uint64_t seed,
+static int atomLowestSoak_(const atomTestKind_ *kind, const uint64_t seed,
                            const size_t ops) {
     int err = 0;
     uint64_t rng = seed;
     static atomLowestOracle_ o;
     memset(&o, 0, sizeof(o));
     int64_t nextValue = 1;
-    multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+    multimapAtom *ma =
+        atomTestNew_(kind->index, kind->store, MULTIMAP_ATOM_IDS_LOWEST);
     for (size_t op = 0; op < ops && !err; op++) {
         const uint64_t r = dkSplitmix64Next(&rng) % 100;
         const uint64_t pick = atomLowestOraclePick_(&o, &rng);
@@ -4034,12 +4411,13 @@ static int atomLowestSoak_(const multimapAtomIndex index, const uint64_t seed,
 }
 
 /* Every LOWEST behaviour on a table with the index 'index' */
-static int atomTestLowest_(const multimapAtomIndex index) {
+static int atomTestLowest_(const atomTestKind_ *kind) {
     int err = 0;
 
     TEST("LOWEST: delete by value frees its id; a replayed insert past the "
          "next id leaves the ids it skips as holes") {
-        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        multimapAtom *ma =
+            atomTestNew_(kind->index, kind->store, MULTIMAP_ATOM_IDS_LOWEST);
         databox a = databoxNewSigned(1);
         databox b = databoxNewSigned(2);
         multimapAtomInsertConvert(ma, &a); /* id 0 */
@@ -4082,7 +4460,8 @@ static int atomTestLowest_(const multimapAtomIndex index) {
     }
 
     TEST("LOWEST: lowest free id first, holes filled lowest first") {
-        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        multimapAtom *ma =
+            atomTestNew_(kind->index, kind->store, MULTIMAP_ATOM_IDS_LOWEST);
         for (int i = 0; i < 8; i++) {
             databox v = databoxNewSigned(500 + i);
             multimapAtomInsertConvert(ma, &v); /* ids 0..7 */
@@ -4117,7 +4496,8 @@ static int atomTestLowest_(const multimapAtomIndex index) {
     }
 
     TEST("LOWEST: a missing value or id releases and deletes nothing") {
-        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        multimapAtom *ma =
+            atomTestNew_(kind->index, kind->store, MULTIMAP_ATOM_IDS_LOWEST);
         databox a = databoxNewSigned(1);
         multimapAtomInsertConvert(ma, &a);
         const databox missing = databoxNewSigned(2);
@@ -4135,7 +4515,7 @@ static int atomTestLowest_(const multimapAtomIndex index) {
     TEST("LOWEST: differential soak against an oracle, allocations balanced") {
         multimapTestAllocCountBegin();
         for (uint64_t seed = 1; seed <= 3; seed++) {
-            err += atomLowestSoak_(index, seed, 6000);
+            err += atomLowestSoak_(kind, seed, 6000);
         }
 
         const int64_t live = multimapTestAllocCountEnd();
@@ -4146,7 +4526,8 @@ static int atomTestLowest_(const multimapAtomIndex index) {
 
     TEST("LOWEST: holes cost bytes only while they exist; a snapshot "
          "restores them") {
-        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        multimapAtom *ma =
+            atomTestNew_(kind->index, kind->store, MULTIMAP_ATOM_IDS_LOWEST);
         for (int i = 0; i < 1000; i++) {
             databox x = databoxNewSigned(i);
             multimapAtomInsertConvert(ma, &x);
@@ -4193,18 +4574,19 @@ static int atomTestLowest_(const multimapAtomIndex index) {
 int multimapAtomTest(int, char *[]) {
     int err = 0;
 
-    /* The whole suite once per reverse index; the colliding-hash walk is
-     * the differential stream's to drive (with 2-bit hashes the suite's
-     * large tables would walk thousands of rows per find) */
+    /* The whole suite once per reverse index and store; the colliding-hash
+     * walk is the differential stream's to drive (with 2-bit hashes the
+     * suite's large tables would walk thousands of rows per find) */
     for (size_t k = 0; k < ATOM_TEST_KINDS; k++) {
-        printf("\n=== multimapAtom suite: %s index ===\n\n",
-               atomTestKinds_[k].name);
+        printf("\n=== multimapAtom suite: %s ===\n\n", atomTestKinds_[k].name);
         atomTestDefaultIndex_ = atomTestKinds_[k].index;
+        atomTestDefaultStore_ = atomTestKinds_[k].store;
         err += atomTestSuite_();
-        err += atomTestLowest_(atomTestKinds_[k].index);
+        err += atomTestLowest_(&atomTestKinds_[k]);
     }
 
     atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_HASHED;
+    atomTestDefaultStore_ = MULTIMAP_ATOM_STORE_PACKED;
 
     for (size_t p = 0; p < 2; p++) {
         atomTestHashMask_ = p ? 0x3 : UINT32_MAX;
@@ -4242,8 +4624,8 @@ int multimapAtomTest(int, char *[]) {
                     break;
                 }
 
-                multimapAtom *ma = atomTestNew_(atomTestKinds_[k].index,
-                                                MULTIMAP_ATOM_IDS_REUSE);
+                multimapAtom *ma =
+                    ATOM_TEST_KIND_NEW(k, MULTIMAP_ATOM_IDS_REUSE);
                 for (int32_t i = 0; i < atoms; i++) {
                     databox value;
                     switch ((atomTestShape)shape) {
@@ -4268,11 +4650,10 @@ int multimapAtomTest(int, char *[]) {
                 const size_t reported = multimapAtomBytes(ma);
                 const size_t count = multimapAtomCount(ma);
                 multimapAtomFree(ma);
-                perAtom[atomTestKinds_[k].index] = (double)heap / atoms;
+                perAtom[k] = (double)heap / atoms;
                 printf("    %s, %s: %.1f heap bytes per atom (%.1f "
                        "reported)\n",
-                       shapeNames[shape], atomTestKinds_[k].name,
-                       perAtom[atomTestKinds_[k].index],
+                       shapeNames[shape], atomTestKinds_[k].name, perAtom[k],
                        (double)reported / atoms);
                 if (count != (size_t)atoms || heap <= 0 ||
                     reported > (size_t)heap) {
@@ -4283,16 +4664,13 @@ int multimapAtomTest(int, char *[]) {
                 }
             }
 
-            if (perAtom[MULTIMAP_ATOM_INDEX_ORDERED] > 0 &&
-                (perAtom[MULTIMAP_ATOM_INDEX_ORDERED] >=
-                     perAtom[MULTIMAP_ATOM_INDEX_HASHED] ||
-                 perAtom[MULTIMAP_ATOM_INDEX_HASHED] >=
-                     perAtom[MULTIMAP_ATOM_INDEX_SLOTS])) {
+            /* The PACKED kinds (the table's first three) rise with their
+             * index's size */
+            if (perAtom[0] > 0 &&
+                (perAtom[0] >= perAtom[1] || perAtom[1] >= perAtom[2])) {
                 ERR("%s: heap per atom ordered %.1f, hashed %.1f, slots %.1f "
                     "(want rising)",
-                    shapeNames[shape], perAtom[MULTIMAP_ATOM_INDEX_ORDERED],
-                    perAtom[MULTIMAP_ATOM_INDEX_HASHED],
-                    perAtom[MULTIMAP_ATOM_INDEX_SLOTS]);
+                    shapeNames[shape], perAtom[0], perAtom[1], perAtom[2]);
             }
         }
     }
@@ -4301,8 +4679,7 @@ int multimapAtomTest(int, char *[]) {
          "out-of-range ids, a bound id, every truncation") {
         const persistOps *ops = &persistOpsMultimapAtom;
         for (size_t k = 0; k < countof(atomTestKinds_); k++) {
-            multimapAtom *ma =
-                atomTestNew_(atomTestKinds_[k].index, MULTIMAP_ATOM_IDS_REUSE);
+            multimapAtom *ma = ATOM_TEST_KIND_NEW(k, MULTIMAP_ATOM_IDS_REUSE);
             for (int i = 0; i < 3; i++) {
                 databox v = databoxNewSigned(1000 + i);
                 multimapAtomInsertConvert(ma, &v); /* ids 0, 1, 2 */

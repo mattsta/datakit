@@ -2525,7 +2525,7 @@ static void benchAtomPool(const char *module, const atomPoolType type,
 }
 
 static void benchAtomTable(const char *module, const multimapAtomIndex index,
-                           const char *keys) {
+                           const multimapAtomStore store, const char *keys) {
     const uint32_t n = PERF_CONTAINER_N;
     uint64_t sink = 0;
 
@@ -2534,9 +2534,10 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
      * hold (each id page keeps its offset table for one row). */
     {
         const bool metered = ctestHeapMeterStart();
-        cleaner(multimapAtomFree) multimapAtom *sparse =
-            multimapAtomNewConfig(&(multimapAtomConfig){
-                .index = index, .ids = MULTIMAP_ATOM_IDS_PERMANENT});
+        cleaner(multimapAtomFree) multimapAtom *sparse = multimapAtomNewConfig(
+            &(multimapAtomConfig){.index = index,
+                                  .ids = MULTIMAP_ATOM_IDS_PERMANENT,
+                                  .store = store});
         for (uint32_t i = 0; i < n; i++) {
             databox k = perfContainerKey(keys, i);
             sink += multimapAtomInsertIfNewConvert(sparse, &k);
@@ -2556,8 +2557,8 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
 
     /* The bytes of internNew are the table's heap holding every atom */
     const bool metered = ctestHeapMeterStart();
-    cleaner(multimapAtomFree) multimapAtom *ma =
-        multimapAtomNewConfig(&(multimapAtomConfig){.index = index});
+    cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNewConfig(
+        &(multimapAtomConfig){.index = index, .store = store});
     double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
@@ -2950,9 +2951,14 @@ static void benchMultimapRefRead(void) {
  * ordered and dict), then the lowest-first table and the string pool */
 static void benchMultimapAtom(void) {
     cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
-    benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED, keys);
-    benchAtomTable("multimapAtomOrdered", MULTIMAP_ATOM_INDEX_ORDERED, keys);
-    benchAtomTable("multimapAtomSlots", MULTIMAP_ATOM_INDEX_SLOTS, keys);
+    benchAtomTable("multimapAtom", MULTIMAP_ATOM_INDEX_HASHED,
+                   MULTIMAP_ATOM_STORE_PACKED, keys);
+    benchAtomTable("multimapAtomOrdered", MULTIMAP_ATOM_INDEX_ORDERED,
+                   MULTIMAP_ATOM_STORE_PACKED, keys);
+    benchAtomTable("multimapAtomSlots", MULTIMAP_ATOM_INDEX_SLOTS,
+                   MULTIMAP_ATOM_STORE_PACKED, keys);
+    benchAtomTable("multimapAtomSlotsDirect", MULTIMAP_ATOM_INDEX_SLOTS,
+                   MULTIMAP_ATOM_STORE_DIRECT, keys);
     benchAtomPool("atomPoolHash", ATOM_POOL_HASH, keys);
     benchAtomPool("atomPoolTree", ATOM_POOL_TREE, keys);
 
