@@ -4406,6 +4406,28 @@ int flexEnvelopeTest(int, char *[]) {
         }
     }
 
+    TEST("envelope: the widest framing header fits FLEX_ENV_MAX_HEADER_LEN") {
+        /* Every varint field at its widest: the flags, the largest key id
+         * and payload length */
+        uint8_t key[32] = {0xAA};
+        const flexEnvelopeWrapParams wp = {
+            .algo = FLEX_ENV_ALGO_HMAC_SHA256,
+            .key = key,
+            .key_len = sizeof(key),
+            .on_wire_flags = FLEX_ENV_FLAGS_VALID_V1,
+            .key_id = UINT32_MAX,
+        };
+        flexEnvelopeWrapStream ctx;
+        uint8_t header[FLEX_ENV_MAX_HEADER_LEN];
+        size_t hw = 0;
+        if (!flexEnvelopeWrapStreamInit(&ctx, UINT64_MAX, &wp, header,
+                                        sizeof(header), &hw) ||
+            hw == 0 || hw > FLEX_ENV_MAX_HEADER_LEN) {
+            ERR("widest header: %zu bytes, bound %zu", hw,
+                FLEX_ENV_MAX_HEADER_LEN);
+        }
+    }
+
     TEST("envelope: wrap stream rejects AEAD class with no buffer mutation") {
         /* Init failure must NOT have written any header bytes,
          * AND *header_written must be 0 so a careless caller cannot

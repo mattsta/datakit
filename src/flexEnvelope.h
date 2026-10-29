@@ -633,6 +633,11 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
  * flexEnvelope.c locks the assumption. */
 #define FLEX_ENV_MAX_NONCE_LEN ((size_t)16)
 
+/* Most bytes an envelope's framing header takes: the 2 magic bytes, then
+ * version, algorithm, flags, key id and payload length as varints of at
+ * most 9 bytes each.  Sizes the header buffer of a streaming wrap. */
+#define FLEX_ENV_MAX_HEADER_LEN ((size_t)(2 + 5 * 9))
+
 /* Streaming context lifecycle states, one byte wide so the contexts
  * stay packed. */
 typedef enum flexEnvelopeStreamPhase : uint8_t {
