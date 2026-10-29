@@ -4749,6 +4749,137 @@ int multimapAtomTest(int, char *[]) {
         }
     }
 
+    TEST("the plain-id API at its edges, in every kind and id behaviour") {
+        const multimapAtomConfig badIndex = {.index = (multimapAtomIndex)9};
+        const multimapAtomConfig badIds = {.ids = (multimapAtomIds)9};
+        const multimapAtomConfig badStore = {.store = (multimapAtomStore)9};
+        cleaner(multimapAtomFree) multimapAtom *withBadIndex =
+            multimapAtomNewConfig(&badIndex);
+        cleaner(multimapAtomFree) multimapAtom *withBadIds =
+            multimapAtomNewConfig(&badIds);
+        cleaner(multimapAtomFree) multimapAtom *withBadStore =
+            multimapAtomNewConfig(&badStore);
+        if (withBadIndex || withBadIds || withBadStore) {
+            ERR("NewConfig accepted an unknown index, id behaviour or store");
+        }
+
+        const multimapAtomIds behaviours[] = {MULTIMAP_ATOM_IDS_REUSE,
+                                              MULTIMAP_ATOM_IDS_PERMANENT,
+                                              MULTIMAP_ATOM_IDS_LOWEST};
+        for (size_t k = 0; k < ATOM_TEST_KINDS; k++) {
+            for (size_t b = 0; b < countof(behaviours); b++) {
+                const bool permanent =
+                    behaviours[b] == MULTIMAP_ATOM_IDS_PERMANENT;
+                cleaner(multimapAtomFree) multimapAtom *ma =
+                    ATOM_TEST_KIND_NEW(k, behaviours[b]);
+                const databox a = databoxNewBytesString("alpha");
+                const databox z = databoxNewBytesString("zulu");
+                uint64_t id = 0;
+
+                /* Empty: nothing to find, release, delete or count */
+                multimapAtomRetainById(ma, 5);
+                if (multimapAtomRefcountById(ma, 0) != 0 ||
+                    multimapAtomGetId(ma, &a, &id) ||
+                    multimapAtomReleaseById(ma, 5) ||
+                    multimapAtomDeleteById(ma, 5) ||
+                    multimapAtomCount(ma) != 0) {
+                    ERR("%s/%zu: an empty table found or changed something",
+                        atomTestKinds_[k].name, b);
+                }
+
+                /* Interned twice and retained once: three references, or
+                 * one for a permanent table, which keeps no counts */
+                const uint64_t ida = multimapAtomIntern(ma, &a);
+                const uint64_t again = multimapAtomIntern(ma, &a);
+                multimapAtomRetainById(ma, ida);
+                databox found = {};
+                if (again != ida || !multimapAtomGetId(ma, &a, &id) ||
+                    id != ida || !multimapAtomLookupById(ma, ida, &found) ||
+                    databoxCompare(&found, &a) != 0 ||
+                    multimapAtomRefcountById(ma, ida) != (permanent ? 1 : 3)) {
+                    ERR("%s/%zu: intern, find or refcount of one atom",
+                        atomTestKinds_[k].name, b);
+                }
+
+                /* The top id deleted: the next id comes back down to it,
+                 * except in a permanent table */
+                const uint64_t idz = multimapAtomIntern(ma, &z);
+                if (!multimapAtomDeleteById(ma, idz) ||
+                    multimapAtomNextId(ma) != (permanent ? idz + 1 : idz)) {
+                    ERR("%s/%zu: deleting the top id left next %" PRIu64,
+                        atomTestKinds_[k].name, b, multimapAtomNextId(ma));
+                }
+
+                /* Released to nothing (a permanent atom stays) */
+                for (int r = 0; r < 3; r++) {
+                    multimapAtomReleaseById(ma, ida);
+                }
+                if (multimapAtomCount(ma) != (permanent ? 1 : 0) ||
+                    multimapAtomRefcountById(ma, ida) != (permanent ? 1 : 0)) {
+                    ERR("%s/%zu: after the last release, count %zu",
+                        atomTestKinds_[k].name, b, multimapAtomCount(ma));
+                }
+            }
+        }
+    }
+
+    TEST("restore refuses a value bound twice, unknown flags, a next id past "
+         "the limit and an incomplete row") {
+        const persistOps *ops = &persistOpsMultimapAtom;
+        for (size_t k = 0; k < ATOM_TEST_KINDS; k++) {
+            cleaner(multimapAtomFree) multimapAtom *ma =
+                ATOM_TEST_KIND_NEW(k, MULTIMAP_ATOM_IDS_REUSE);
+            const databox a = databoxNewBytesString("alpha");
+            const databox z = databoxNewBytesString("zulu");
+            multimapAtomIntern(ma, &a); /* id 0 */
+            multimapAtomIntern(ma, &z); /* id 1 */
+
+            /* [flags, next, id 0, "alpha", count, id 1, "zulu", count] */
+            size_t snapLen = 0;
+            cleanerName(zfree, Void) void *snap = ops->snapshot(ma, &snapLen);
+            const flex *f = snap;
+            databoxBig flags;
+            DATABOX_BIG_INIT(&flags);
+            flexGetByType(flexHead(f), (databox *)&flags);
+            if (flexCount(f) != 8 || flags.type != DATABOX_UNSIGNED_64) {
+                ERR("%s: snapshot shape", atomTestKinds_[k].name);
+                continue;
+            }
+
+            const databoxBig twice = {
+                .data.bytes.cstart = "alpha", .len = 5, .type = DATABOX_BYTES};
+            const databoxBig unknownFlags = {.data.u64 = flags.data.u64 |
+                                                         (UINT64_C(1) << 20),
+                                             .type = DATABOX_UNSIGNED_64};
+            const databoxBig pastLimit = {.data.u64 = MULTIMAP_ATOM_ID_LIMIT,
+                                          .type = DATABOX_UNSIGNED_64};
+            const struct {
+                size_t idx;
+                const databoxBig *with;
+            } damage[] = {{6, &twice}, {0, &unknownFlags}, {1, &pastLimit}};
+            for (size_t d = 0; d < countof(damage); d++) {
+                cleaner(flexFree) flex *bad =
+                    flexTestReplaceEntry(f, damage[d].idx, damage[d].with);
+                void *r = ops->restore(bad, flexBytes(bad));
+                if (r) {
+                    ERR("%s: damage %zu restored", atomTestKinds_[k].name, d);
+                    ops->free(r);
+                }
+            }
+
+            /* A row cut short: the flags, next id and one id alone */
+            const databox flagsBox = DATABOX_UNSIGNED(flags.data.u64);
+            const databox next = DATABOX_UNSIGNED(1);
+            const databox zero = DATABOX_UNSIGNED(0);
+            const databox *partial[] = {&flagsBox, &next, &zero};
+            cleaner(flexFree) flex *cut =
+                flexNewFromDataboxPtrsExact(partial, 3);
+            if (ops->restore(cut, flexBytes(cut))) {
+                ERR("%s: an incomplete row restored", atomTestKinds_[k].name);
+            }
+        }
+    }
+
     TEST("a WAL op the table refuses changes nothing: wrong shapes, dead and "
          "out-of-range ids, a bound id, every truncation") {
         const persistOps *ops = &persistOpsMultimapAtom;

@@ -9451,6 +9451,23 @@ int multimapTest(int, char *[]) {
                                 flexNewFromDataboxPtrsExact(down, 3))) {
             ERR("NewFromDump accepted unordered or partial rows");
         }
+
+        /* The same refusals with keys resolved through an atom table, and
+         * a key that repeats (a map of references holds each value once) */
+        cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+        const databox *same[] = {&one, &one, &one, &two};
+        if (multimapNewFromDumpWithReference(
+                2, FLEX_CAP_LEVEL_2048, flexNewFromDataboxPtrsExact(down, 4),
+                atoms) ||
+            multimapNewFromDumpWithReference(
+                2, FLEX_CAP_LEVEL_2048, flexNewFromDataboxPtrsExact(down, 3),
+                atoms) ||
+            multimapNewFromDumpWithReference(
+                2, FLEX_CAP_LEVEL_2048, flexNewFromDataboxPtrsExact(same, 4),
+                atoms)) {
+            ERR("NewFromDumpWithReference accepted unordered, partial or "
+                "repeated rows");
+        }
     }
 
     TEST("Append in any order builds the map Insert builds, every tier") {

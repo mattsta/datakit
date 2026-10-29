@@ -10154,6 +10154,57 @@ int32_t flexTest(int32_t argc, char **argv) {
 #undef FLEX_API_CHECK_
     }
 
+    TEST("deep validation and cflex across every string length width") {
+        /* A string of each split-varint length width (one, two and three
+         * bytes, and a width byte with the length after it): the deep
+         * check accepts it and refuses it with the last or next-to-last
+         * trailer byte changed (a width or a length the leading encoding
+         * does not have), and it compresses and decompresses whole (the
+         * compressed length takes the same widths).  Half of every 16
+         * bytes repeats the other half, so LZ4 finds matches. */
+        const size_t lens[] = {10, 300, 40000, 9000000};
+        uint64_t seed = 99;
+        for (size_t l = 0; l < countof(lens); l++) {
+            const size_t n = lens[l];
+            cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(n);
+            for (size_t i = 0; i < n; i++) {
+                payload[i] =
+                    (i & 8) ? payload[i - 8] : (uint8_t)dkSplitmix64Next(&seed);
+            }
+
+            cleaner(flexFree) flex *str = flexNew();
+            flexPushBytes(&str, payload, n, FLEX_ENDPOINT_TAIL);
+            const size_t bytes = flexBytes(str);
+            if (!flexValidateBufferDeep(str, bytes)) {
+                ERR("length %zu: refused undamaged", n);
+            }
+
+            cleanerName(zfree, Bytes) uint8_t *copy = zmalloc(bytes);
+            for (size_t back = 1; back <= (n > 64 ? 2 : 1); back++) {
+                memcpy(copy, str, bytes);
+                copy[bytes - back] ^= 0x01;
+                if (flexValidateBufferDeep(copy, bytes)) {
+                    ERR("length %zu: accepted trailer byte -%zu changed", n,
+                        back);
+                }
+            }
+
+            if (bytes < CFLEX_MINIMUM_COMPRESS_BYTES) {
+                continue;
+            }
+
+            const size_t cSize = bytes + 64;
+            cleanerName(zfree, Bytes) uint8_t *c = zcalloc(1, cSize);
+            size_t outLen = bytes;
+            cleanerName(zfree, Bytes) flex *out = zcalloc(1, outLen);
+            if (!flexConvertToCFlex(str, c, cSize) ||
+                !cflexConvertToFlex(c, &out, &outLen) || !flexEqual(out, str)) {
+                ERR("length %zu: compressed round trip (%zu compressed bytes)",
+                    n, cflexBytesCompressed(c));
+            }
+        }
+    }
+
     TEST("a box type flex cannot encode fails fast, in any build") {
         /* An offset box (a position in another stream, no bytes of its
          * own) through push, replace, multi-element append and big-box

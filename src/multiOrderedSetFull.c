@@ -3456,6 +3456,30 @@ int multiOrderedSetFullTest(int, char *[]) {
         multiOrderedSetFullFree(m);
     }
 
+    TEST("MOS-Full: an unknown pool setting is refused; a pooled set keeps "
+         "its rows") {
+        const multimapAtomConfig bad = {.store = (multimapAtomStore)9};
+        if (multiOrderedSetFullNewWithOwnedPoolConfig(&bad)) {
+            ERR("a pool with an unknown store was made");
+        }
+
+        /* TakeRows refuses a pooled set (its rows hold pool ids), which
+         * stays whole */
+        multiOrderedSetFull *m = multiOrderedSetFullNewWithOwnedPool();
+        for (int i = 0; i < 20; i++) {
+            const databox score = databoxNewSigned(i);
+            char name[16];
+            snprintf(name, sizeof(name), "member-%d", i);
+            const databox member = databoxNewBytesString(name);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+        if (multiOrderedSetFullTakeRows(m) ||
+            multiOrderedSetFullCount(m) != 20) {
+            ERR("TakeRows took a pooled set's rows");
+        }
+        multiOrderedSetFullFree(m);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */
