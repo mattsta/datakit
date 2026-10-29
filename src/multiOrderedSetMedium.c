@@ -1210,6 +1210,38 @@ int multiOrderedSetMediumTest(int, char *[]) {
         multiOrderedSetMediumFree(mos);
     }
 
+    TEST("multiOrderedSetMedium — reset empties both maps; the set is "
+         "reusable") {
+        multiOrderedSetMedium *mos = multiOrderedSetMediumNew();
+        for (int round = 0; round < 2; round++) {
+            for (int64_t i = 0; i < 50; i++) {
+                const databox score = databoxNewSigned(i * 3 + round);
+                char buf[12];
+                snprintf(buf, sizeof(buf), "r%d-%" PRId64, round, i);
+                const databox member =
+                    databoxNewBytesAllowEmbed(buf, strlen(buf));
+                multiOrderedSetMediumAdd(mos, &score, &member);
+            }
+
+            const databox last =
+                databoxNewBytesAllowEmbed(round ? "r1-49" : "r0-49", 5);
+            databox got = {};
+            if (multiOrderedSetMediumCount(mos) != 50 ||
+                !multiOrderedSetMediumGetScore(mos, &last, &got) ||
+                got.data.i != 49 * 3 + round) {
+                ERR("round %d: %zu members after a reset", round,
+                    multiOrderedSetMediumCount(mos));
+            }
+
+            multiOrderedSetMediumReset(mos);
+            if (multiOrderedSetMediumCount(mos) != 0 ||
+                multiOrderedSetMediumGetScore(mos, &last, &got)) {
+                ERR("round %d: the reset left members", round);
+            }
+        }
+        multiOrderedSetMediumFree(mos);
+    }
+
     TEST("multiOrderedSetMedium — resized in-place scores, misses, edges") {
         /* Scores i * 2^40 for m0..m9.  m3's 6-byte integer becomes the
          * double 3.5e12: still between its neighbours, so it is rewritten

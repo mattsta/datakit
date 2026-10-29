@@ -5574,6 +5574,7 @@ int multimapTest(int, char *[]) {
             assert(multimapMediumFieldIncr(mmm(m), &key, 1,
                                            -(INT64_C(1) << 40)) == 15);
             multimapVerify(m);
+            multimapRepr(m); /* the Medium tier's dump */
             assert(multimapMediumFieldIncr(mmm(m), &missing, 1, 5) == 0);
             multimapVerify(m);
 

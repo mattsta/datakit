@@ -27,6 +27,7 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(size_t *, zfree, Sizes);
 defcleanerName(char *, zfree, Chars);
+defcleaner(mds *, mdsfree);
 
 /* SIMD support */
 #if defined(__AVX512F__) || defined(__AVX2__) || defined(__SSE2__)
@@ -2035,6 +2036,28 @@ int dataspeedParseTest(int, char *[]) {
             if (!(cpuFigures[i] > 0)) {
                 ERR("CPU figure %zu is %f", i, cpuFigures[i]);
             }
+        }
+
+        /* The whole run without latency, and every report form over it */
+        dataspeedConfig run = quick;
+        run.include_latency = false;
+        run.memory_mb = 2;
+        dataspeedReport report;
+        dataspeedRunWithConfig(&report, &run);
+        if (report.system.cpu_count < 1 || report.system.page_size == 0 ||
+            !(report.cache.l1_bandwidth.bandwidth_gbs > 0) ||
+            report.latency.l1_latency.latency_ns != 0 ||
+            !(report.total_duration_s > 0)) {
+            ERR("a quiet run left its report incomplete%s", "");
+        }
+        dataspeedPrintSystemInfo(&report.system);
+        dataspeedPrintReport(&report);
+        dataspeedPrintReportCSV(&report);
+        cleaner(mdsfree) mds *json = dataspeedReportToJSON(&report);
+        if (mdslen(json) < 2 || json[0] != '{' ||
+            json[mdslen(json) - 1] != '}' ||
+            !strstr(json, "\"branch_random_ns\":")) {
+            ERR("the JSON report is malformed: %.40s", json);
         }
 
         dataspeedMemoryResults mem;
