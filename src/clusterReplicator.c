@@ -43,7 +43,8 @@ struct clusterReplicator {
     size_t type_table_len;
     clusterReplicatorApplyFn on_restored;
     void *apply_ctx;
-    uint32_t max_apply_retries;        /* 0 = infinite (legacy) */
+    uint32_t
+        max_apply_retries; /* CLUSTER_REPLICATOR_RETRY_FOREVER: never drop */
     replicatorRejectState last_reject; /* trampoline-local, sole writer */
     _Atomic uint64_t dropped_count;
     _Atomic uint64_t format_refused_count;
@@ -133,10 +134,9 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
         rep->last_reject.consecutive_rejects = 1;
     }
 
-    /* Drop policy: only when a finite cap is configured and the
-     * counter has reached it. `0` means "infinite retries", matching
-     * the legacy prior behaviour. */
-    if (rep->max_apply_retries != 0 &&
+    /* Drop policy: once the counter reaches the cap, unless the caller
+     * chose to retry forever */
+    if (rep->max_apply_retries != CLUSTER_REPLICATOR_RETRY_FOREVER &&
         rep->last_reject.consecutive_rejects >= rep->max_apply_retries) {
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&rep->dropped_count, 1u,
@@ -181,7 +181,7 @@ clusterReplicator *clusterReplicatorCreateEx(
     rep->type_table_len = type_table_len;
     rep->on_restored = on_restored;
     rep->apply_ctx = apply_ctx;
-    rep->max_apply_retries = (cfg != nullptr)
+    rep->max_apply_retries = (cfg != nullptr && cfg->max_apply_retries != 0)
                                  ? cfg->max_apply_retries
                                  : CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES;
     rep->last_reject.origin_id = 0;
@@ -189,10 +189,8 @@ clusterReplicator *clusterReplicatorCreateEx(
     rep->last_reject.consecutive_rejects = 0;
     atomic_init(&rep->dropped_count, (uint64_t)0);
     atomic_init(&rep->format_refused_count, (uint64_t)0);
-    /* build the mailbox via the full-options constructor so the
-     * caller's nonce-log knobs (disable / capacity) actually plumb
-     * through to the underlying mailbox. Defaults are equivalent to
-     * the legacy clusterMailboxCreateEx path. */
+    /* The mailbox comes from the full-options constructor so the
+     * caller's nonce-log knobs (disable / capacity) reach it */
     const bool disable_nonce_log =
         (cfg != nullptr) ? cfg->disable_nonce_log : false;
     const size_t nonce_log_capacity =
@@ -222,13 +220,9 @@ clusterReplicator *clusterReplicatorCreate(
     hmacKeyring *ring, flexEnvelopeAlgo envelope_algo, uint32_t mailbox_flags,
     const persistOps *const *type_table, size_t type_table_len,
     clusterReplicatorApplyFn on_restored, void *apply_ctx) {
-    /* Legacy entry: zero max_apply_retries preserves the prior
-     * infinite-retry behaviour. Callers that want the drop-after-N
-     * safety must use clusterReplicatorCreateEx. */
-    const clusterReplicatorConfig cfg = {.max_apply_retries = 0u};
     return clusterReplicatorCreateEx(ring, envelope_algo, mailbox_flags,
                                      type_table, type_table_len, on_restored,
-                                     apply_ctx, &cfg);
+                                     apply_ctx, nullptr);
 }
 
 uint64_t clusterReplicatorDroppedCount(const clusterReplicator *rep) {

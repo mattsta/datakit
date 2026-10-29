@@ -59,6 +59,10 @@ typedef bool (*clusterReplicatorApplyFn)(uint32_t origin_id, uint64_t sequence,
 /* Default retry budget — see clusterReplicatorConfig::max_apply_retries. */
 #define CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES 16u
 
+/* A max_apply_retries that never drops a frame: the watermark stays at
+ * the rejected sequence until the application accepts it */
+#define CLUSTER_REPLICATOR_RETRY_FOREVER UINT32_MAX
+
 /* Default capacity for a replicator-owned aeadNonceLog. Matches the
  * mailbox default so a replicator + mailbox pair have consistent sizing. */
 #define CLUSTER_REPLICATOR_DEFAULT_NONCE_LOG_CAP ((size_t)4096)
@@ -76,12 +80,9 @@ typedef struct clusterReplicatorConfig {
      * the producer from infinite retransmission of a frame the
      * consumer will never accept.
      *
-     * `0` means "infinite retries" (legacy behaviour: keep rejecting,
-     * watermark never advances past the bad sequence). This preserves
-     * the prior contract for callers that have not yet been audited
-     * for poison-frame handling. New callers SHOULD set a finite cap;
-     * default (when zero-init'd via the explicit-defaults
-     * constructor) is CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES. */
+     * `0` means CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES;
+     * CLUSTER_REPLICATOR_RETRY_FOREVER never drops (the watermark stays
+     * at the rejected sequence until the application accepts it). */
     uint32_t max_apply_retries;
     /* when true (default false), the underlying mailbox is created
      * WITHOUT an aeadNonceLog. Use only in tests or single-process
@@ -112,18 +113,17 @@ typedef struct clusterReplicatorConfig {
  * NULL (and does not allocate the mailbox) if this contract is
  * violated.
  *
- * Backwards-compat: this constructor uses `max_apply_retries = 0`
- * (infinite retries) to preserve prior behaviour. Use
- * clusterReplicatorCreateEx to opt in to drop-after-N-retries. */
+ * Uses the default clusterReplicatorConfig (a poison frame is dropped
+ * after CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES rejections);
+ * clusterReplicatorCreateEx takes another. */
 clusterReplicator *clusterReplicatorCreate(
     hmacKeyring *ring, flexEnvelopeAlgo envelope_algo, uint32_t mailbox_flags,
     const persistOps *const *type_table, size_t type_table_len,
     clusterReplicatorApplyFn on_restored, void *apply_ctx);
 
 /* Extended constructor with explicit config. Same semantics +
- * contracts as clusterReplicatorCreate plus the policy in `cfg`.
- * `cfg` may be NULL; then defaults apply (max_apply_retries =
- * CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES). */
+ * contracts as clusterReplicatorCreate plus the policy in `cfg`
+ * (NULL, like a zeroed config: the defaults). */
 clusterReplicator *clusterReplicatorCreateEx(
     hmacKeyring *ring, flexEnvelopeAlgo envelope_algo, uint32_t mailbox_flags,
     const persistOps *const *type_table, size_t type_table_len,
@@ -134,7 +134,7 @@ void clusterReplicatorFree(clusterReplicator *rep);
 
 /* Total number of frames dropped after exhausting max_apply_retries
  * consecutive APPLY_REJECTED on the same (origin, sequence). Always
- * 0 when max_apply_retries == 0 (legacy infinite-retry mode).
+ * 0 under CLUSTER_REPLICATOR_RETRY_FOREVER.
  *
  * Thread-safety: relaxed atomic load — safe to call concurrently with
  * Ingest. Returns 0 for NULL `rep`. */

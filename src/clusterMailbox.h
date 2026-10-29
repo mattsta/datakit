@@ -453,61 +453,11 @@ size_t clusterMailboxBuildRotateAnnounce(
 bool clusterMailboxParseRotateAnnounce(const uint8_t *payload, size_t len,
                                        hmacKeyId *out_new_id);
 
-/* === Inner-frame header codec (test-exposed) ========================
- *
- * The inner frame is a 3-entry flex of unsigned values:
- *   origin_id (u32) | sequence (u64) | msg_type (u8)
- *
- * These two functions expose the encoder/decoder used internally by
- * Seal/Ingest so unit tests can exercise the framing in isolation
- * (round-trip + tamper-every-byte + truncation + wrong-count +
- * out-of-range). They are also useful for any future cluster code that
- * needs to compose or inspect a pre-framed inner header without going
- * through the full envelope path. */
-
 /* The frame protocol (the inner header's layout and meaning): every frame
  * carries its stamp, and Ingest refuses (CLUSTER_MAILBOX_ERR_PROTOCOL) a
  * version or must-understand feature this build does not read, so peers
  * running different releases never misread each other's frames. */
 extern const dkFormatSpec clusterMailboxProtocol;
-
-/* Worst-case bytes the inner-header flex can occupy. Caller-supplied
- * buffer to cmEncodeInnerHeader MUST be at least this large. */
-#define CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES ((size_t)48)
-
-/* Encode an inner-frame header (stamped with this build's
- * clusterMailboxProtocol version) into `out` (cap >=
- * CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES). Returns the encoded byte length on
- * success or 0 on bad args / insufficient capacity / allocation failure. */
-size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
-                           uint64_t sequence, uint8_t msg_type);
-
-/* Decode an inner-frame header from `src` (length `src_len`, which may
- * include trailing opaque payload bytes after the flex prefix).  The
- * header is a flex [protocol version, protocol features, origin_id,
- * sequence, msg_type].
- *
- * On success returns true; sets `*protocol` to the frame's protocol stamp
- * (the caller checks it against clusterMailboxProtocol), `*origin_id`,
- * `*sequence`, `*msg_type` to the decoded values and `*hdr_len` to the
- * byte length the flex prefix consumed (caller computes payload region as
- * `src + *hdr_len`, `src_len - *hdr_len`).
- *
- * Returns false on any of: short buffer, malformed flex framing, wrong
- * entry count, an entry that is not a 64-bit unsigned integer
- * (96/128-bit included), or any value outside its representable range
- * (protocol version or origin_id > UINT32_MAX, msg_type > UINT8_MAX).
- *
- * Safe under arbitrary input: the framing check uses
- * flexValidateBufferDeep, which performs an O(N) walk of every entry's
- * length-encoding bytes before any iterator runs.  A synthetic byte-
- * tamper that survives envelope verification (computationally infeasible
- * in production, trivial inside a unit test) cannot induce flexNext /
- * flexGetByTypeBig to overread the buffer here. */
-bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
-                         dkFormatStamp *protocol, uint32_t *origin_id,
-                         uint64_t *sequence, uint8_t *msg_type,
-                         size_t *hdr_len);
 
 /* === Durable watermarks (snapshot / restore) ========================
  *
@@ -550,11 +500,10 @@ size_t clusterMailboxSnapshotSize(const clusterMailbox *mb);
 bool clusterMailboxSnapshot(const clusterMailbox *mb, uint8_t *out,
                             size_t out_cap, size_t *out_written);
 
-/* Restore the watermark table from `buf`. Replaces any existing
- * watermarks atomically (call before first Ingest on a fresh mailbox
- * for the cleanest semantic, but also safe to call mid-life — it
- * unions the loaded entries with any already-present ones, keeping
- * the MAX of last_applied per origin).
+/* Restore the watermark table from `buf`, merged into the watermarks
+ * already present: per origin the larger last_applied wins (usually
+ * called before the first Ingest on a fresh mailbox, and safe mid-life
+ * too).
  *
  * Window-bit merge policy (mid-life restore): when both the snapshot
  * and the in-memory mailbox carry (last_applied, window_bits) for the

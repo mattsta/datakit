@@ -5,7 +5,7 @@
  * msg_type unsigned)] [opaque N B]
  *
  * The flex prefix self-describes its byte length via the standard flex
- * leading varint; cmDecodeInnerHeader peeks the claim via
+ * leading varint; clusterMailboxDecodeInnerHeader peeks the claim via
  * flexPeekTotalBytes, validates the prefix as a whole via
  * flexValidateBufferDeep (O(N) per-entry bound check), then advances
  * past the prefix to expose the opaque payload bytes to the apply
@@ -17,7 +17,7 @@
  * origin_id, sequence, msg_type, or the flex framing itself fails
  * envelope verify.  Every peer in a cluster speaks this one format. */
 
-#include "clusterMailbox.h"
+#include "clusterMailboxInternal.h"
 
 #include "aeadNonceLog.h"
 #include "ctmem.h"   /* dkSecureZero — wipe local key copies on scope exit */
@@ -376,8 +376,9 @@ static flex *cmBuildInnerHeaderFlex(uint32_t origin_id, uint64_t sequence,
  * 0 on bad args / insufficient capacity / allocation failure. Public surface so
  * unit tests can round-trip the framing without going through the full Seal
  * path. */
-size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
-                           uint64_t sequence, uint8_t msg_type) {
+size_t clusterMailboxEncodeInnerHeader(uint8_t *out, size_t out_cap,
+                                       uint32_t origin_id, uint64_t sequence,
+                                       uint8_t msg_type) {
     if (out == nullptr || out_cap < CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN) {
         return 0;
     }
@@ -407,10 +408,10 @@ size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
  * or any value outside its representable range (protocol version or
  * origin_id > UINT32_MAX, msg_type > UINT8_MAX). The protocol stamp is
  * returned for the caller to check. */
-bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
-                         dkFormatStamp *protocol, uint32_t *origin_id,
-                         uint64_t *sequence, uint8_t *msg_type,
-                         size_t *hdr_len) {
+bool clusterMailboxDecodeInnerHeader(const uint8_t *src, size_t src_len,
+                                     dkFormatStamp *protocol,
+                                     uint32_t *origin_id, uint64_t *sequence,
+                                     uint8_t *msg_type, size_t *hdr_len) {
     if (src == nullptr || protocol == nullptr || origin_id == nullptr ||
         sequence == nullptr || msg_type == nullptr || hdr_len == nullptr) {
         return false;
@@ -839,9 +840,9 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
     uint8_t msg_type = 0;
     size_t hdr_len = 0;
     dkFormatStamp protocol;
-    if (!cmDecodeInnerHeader(payload_bytes, (size_t)payload_bytes_len,
-                             &protocol, &origin_id, &sequence, &msg_type,
-                             &hdr_len)) {
+    if (!clusterMailboxDecodeInnerHeader(
+            payload_bytes, (size_t)payload_bytes_len, &protocol, &origin_id,
+            &sequence, &msg_type, &hdr_len)) {
         dkSecureZero(key_copy, sizeof(key_copy));
         return CLUSTER_MAILBOX_ERR_BAD_FRAME;
     }
@@ -1921,7 +1922,7 @@ int clusterMailboxTest(int, char *[]) {
         cmTestWideValues(wides);
         uint8_t hdr[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
         const size_t hlen =
-            cmEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
+            clusterMailboxEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
         if (hlen == 0) {
             ERR("encode failed");
         }
@@ -1961,8 +1962,9 @@ int clusterMailboxTest(int, char *[]) {
                 size_t consumed = 0;
                 ctestPoisonStack();
                 dkFormatStamp protocol;
-                if (cmDecodeInnerHeader(bad, flexBytes(bad), &protocol, &origin,
-                                        &seq, &mtype, &consumed)) {
+                if (clusterMailboxDecodeInnerHeader(bad, flexBytes(bad),
+                                                    &protocol, &origin, &seq,
+                                                    &mtype, &consumed)) {
                     ERR("decode accepted value %zu at entry %zu", w, idx);
                 }
 
@@ -1995,7 +1997,7 @@ int clusterMailboxTest(int, char *[]) {
          * are accepted and read back */
         uint8_t hdr[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
         const size_t hlen =
-            cmEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
+            clusterMailboxEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
         if (hlen == 0) {
             ERR("encode failed");
         }
@@ -2025,8 +2027,9 @@ int clusterMailboxTest(int, char *[]) {
         for (size_t i = 0; i < countof(refused); i++) {
             cleaner(flexFree) flex *bad =
                 flexTestReplaceEntry(src, refused[i].idx, refused[i].value);
-            if (cmDecodeInnerHeader(bad, flexBytes(bad), &protocol, &origin,
-                                    &seq, &mtype, &consumed)) {
+            if (clusterMailboxDecodeInnerHeader(bad, flexBytes(bad), &protocol,
+                                                &origin, &seq, &mtype,
+                                                &consumed)) {
                 ERR("inner header case %zu accepted", i);
             }
         }
@@ -2036,8 +2039,9 @@ int clusterMailboxTest(int, char *[]) {
             flexTestReplaceEntry(src, 2, &maxOrigin);
         cleaner(flexFree) flex *edge =
             flexTestReplaceEntry(edgeOrigin, 4, &maxType);
-        if (!cmDecodeInnerHeader(edge, flexBytes(edge), &protocol, &origin,
-                                 &seq, &mtype, &consumed) ||
+        if (!clusterMailboxDecodeInnerHeader(edge, flexBytes(edge), &protocol,
+                                             &origin, &seq, &mtype,
+                                             &consumed) ||
             origin != UINT32_MAX || mtype != UINT8_MAX || seq != 12345u ||
             consumed != flexBytes(edge)) {
             ERR("inner header refused the largest in-range values");
@@ -2047,10 +2051,12 @@ int clusterMailboxTest(int, char *[]) {
         flexDeleteRange(&shortHdr, -1, 1);
         cleaner(flexFree) flex *longHdr = flexDuplicate(src);
         flexPushUnsigned(&longHdr, 1, FLEX_ENDPOINT_TAIL);
-        if (cmDecodeInnerHeader(shortHdr, flexBytes(shortHdr), &protocol,
-                                &origin, &seq, &mtype, &consumed) ||
-            cmDecodeInnerHeader(longHdr, flexBytes(longHdr), &protocol, &origin,
-                                &seq, &mtype, &consumed)) {
+        if (clusterMailboxDecodeInnerHeader(shortHdr, flexBytes(shortHdr),
+                                            &protocol, &origin, &seq, &mtype,
+                                            &consumed) ||
+            clusterMailboxDecodeInnerHeader(longHdr, flexBytes(longHdr),
+                                            &protocol, &origin, &seq, &mtype,
+                                            &consumed)) {
             ERR("an inner header of 4 or 6 entries was accepted");
         }
 

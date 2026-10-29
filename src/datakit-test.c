@@ -16,7 +16,7 @@
 #include "bbits.h"
 #include "blake3.h"
 #include "chacha20poly1305.h"
-#include "clusterMailbox.h"
+#include "clusterMailboxInternal.h"
 #include "clusterReplicator.h"
 #include "clusterRing.h"
 #include "compressionBench.h"
@@ -8541,13 +8541,13 @@ cleanup:
 /* ====================================================================
  * testMailboxInnerFlexStructAwareFuzz — build a valid envelope around a
  * valid clusterMailbox inner-flex header, then exercise the mailbox
- * inner-header parser (cmDecodeInnerHeader) with structurally-malformed
- * variants while keeping the outer envelope MAC valid (re-wrap under
- * the original key). The mailbox MUST reject every malformed variant
- * with BAD_FRAME — not crash, not silently accept.
+ * inner-header parser (clusterMailboxDecodeInnerHeader) with
+ * structurally-malformed variants while keeping the outer envelope MAC valid
+ * (re-wrap under the original key). The mailbox MUST reject every malformed
+ * variant with BAD_FRAME — not crash, not silently accept.
  *
- * Coverage of cmDecodeInnerHeader's documented rejection paths
- * (clusterMailbox.c:cmDecodeInnerHeader):
+ * Coverage of clusterMailboxDecodeInnerHeader's documented rejection paths
+ * (clusterMailbox.c:clusterMailboxDecodeInnerHeader):
  *   1. Short / truncated buffer
  *   2. Malformed flex framing (outer total-bytes claim mismatch)
  *   3. Wrong entry count (2 or 4 entries instead of 3)
@@ -8560,8 +8560,8 @@ cleanup:
  *      are tolerated; the post-flex region is the application payload).
  *
  * Plus an UNBOUNDED byte-flip sweep over the entire inner-flex region.
- * cmDecodeInnerHeader now gates via flexValidateBufferDeep (O(N) per-
- * entry bound check) so a synthetic attacker that re-MACs under the
+ * clusterMailboxDecodeInnerHeader now gates via flexValidateBufferDeep (O(N)
+ * per- entry bound check) so a synthetic attacker that re-MACs under the
  * original key cannot cause the underlying flex walkers to overread the
  * buffer regardless of which byte they flip.  The sweep is the proof:
  * every flip must either pass cleanly (semantically valid mutation) or
@@ -8638,11 +8638,11 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
 
     /* Step 1: canonical inner header (sanity baseline). */
     uint8_t hdr_canonical[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
-    const size_t hdr_len = cmEncodeInnerHeader(
+    const size_t hdr_len = clusterMailboxEncodeInnerHeader(
         hdr_canonical, sizeof(hdr_canonical), ORIGIN, SEQ, MTYPE);
     if (hdr_len == 0u) {
-        printf("testMailboxInnerFlexStructAwareFuzz: cmEncodeInnerHeader "
-               "failed\n");
+        printf("testMailboxInnerFlexStructAwareFuzz: "
+               "clusterMailboxEncodeInnerHeader failed\n");
         clusterMailboxFree(cons);
         hmacKeyringFree(ring);
         return 1;
@@ -8827,8 +8827,8 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
     }
 
     /* ---------------- Case 9: trailing garbage after flex prefix ------ */
-    /* cmDecodeInnerHeader correctly treats bytes after the flex prefix
-     * as the opaque application payload; this case proves the flex
+    /* clusterMailboxDecodeInnerHeader correctly treats bytes after the flex
+     * prefix as the opaque application payload; this case proves the flex
      * prefix boundary is enforced.  An accepted Ingest with a different
      * `payload` (the trailing-garbage bytes are now the application
      * payload, not the original `payload`) is the expected outcome. */
@@ -8853,7 +8853,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int, char *[]) {
     /* Unbounded per-byte sweep: for every byte position in the inner-
      * flex region, flip each bit, re-MAC the envelope under the original
      * key, and ingest.  With flexValidateBufferDeep now gating
-     * cmDecodeInnerHeader, every flip must either pass cleanly (the
+     * clusterMailboxDecodeInnerHeader, every flip must either pass cleanly (the
      * mutation happened to land on a semantically valid alternate value)
      * or fall to BAD_FRAME — no ASAN/UBSAN crash, no unexpected outcome.
      *
@@ -9798,7 +9798,7 @@ static int dkTestReplicatorRetryDropTest(int, char *[]) {
     }
 skip_case2:
 
-    /* Case 3: legacy Create (max_apply_retries=0) → infinite retry. */
+    /* Case 3: CLUSTER_REPLICATOR_RETRY_FOREVER → never drops. */
     {
         const uint8_t key[32] = {0xE5};
         const hmacKeyId KID = 1u;
@@ -9806,11 +9806,13 @@ skip_case2:
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
         dkTestReplicatorRetryCtx ctx_c = {.reject_seq = 1};
-        clusterReplicator *rep = clusterReplicatorCreate(
+        const clusterReplicatorConfig forever = {
+            .max_apply_retries = CLUSTER_REPLICATOR_RETRY_FOREVER};
+        clusterReplicator *rep = clusterReplicatorCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
-            type_table, 256u, dkTestReplicatorRetryApply, &ctx_c);
+            type_table, 256u, dkTestReplicatorRetryApply, &ctx_c, &forever);
         if (rep == nullptr) {
-            printf("dkTestReplicatorRetryDrop: legacy Create failed\n");
+            printf("dkTestReplicatorRetryDrop: retry-forever Create failed\n");
             failures++;
             hmacKeyringFree(ring);
             goto skip_case3;
@@ -9827,20 +9829,23 @@ skip_case2:
             (void)clusterReplicatorIngest(rep, wire, written, KID);
         }
         if (clusterReplicatorDroppedCount(rep) != 0) {
-            printf("dkTestReplicatorRetryDrop: legacy dropped_count expected "
+            printf("dkTestReplicatorRetryDrop: retry-forever dropped_count "
+                   "expected "
                    "0, got %" PRIu64 "\n",
                    clusterReplicatorDroppedCount(rep));
             failures++;
         }
         clusterMailbox *mb = clusterReplicatorMailbox(rep);
         if (clusterMailboxLastApplied(mb, 1u) != 0) {
-            printf("dkTestReplicatorRetryDrop: legacy watermark expected 0, "
+            printf("dkTestReplicatorRetryDrop: retry-forever watermark "
+                   "expected 0, "
                    "got %" PRIu64 "\n",
                    clusterMailboxLastApplied(mb, 1u));
             failures++;
         }
         if (ctx_c.reject_count != 50) {
-            printf("dkTestReplicatorRetryDrop: legacy reject_count expected "
+            printf("dkTestReplicatorRetryDrop: retry-forever reject_count "
+                   "expected "
                    "50, got %" PRIu64 "\n",
                    ctx_c.reject_count);
             failures++;
@@ -9850,9 +9855,49 @@ skip_case2:
     }
 skip_case3:
 
+    /* Case 4: plain Create takes the default budget: the poison frame
+     * is rejected CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES times,
+     * then dropped and the watermark moves past it. */
+    {
+        const uint8_t key[32] = {0xE6};
+        const hmacKeyId KID = 1u;
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        dkTestReplicatorRetryCtx ctx_d = {.reject_seq = 1};
+        clusterReplicator *rep = clusterReplicatorCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
+            type_table, 256u, dkTestReplicatorRetryApply, &ctx_d);
+        cleaner(flexFree) flex *src = flexNew();
+        flexPushUnsigned(&src, 1u, FLEX_ENDPOINT_TAIL);
+        size_t cap =
+            rep ? clusterReplicatorSnapshotSize(rep, &persistOpsFlex, src) : 0;
+        cleanerName(zfree, Bytes) uint8_t *wire = zmalloc(cap + 1);
+        size_t written = 0;
+        if (rep) {
+            clusterReplicatorSeal(rep, &persistOpsFlex, src, 1u, 1u, KID, wire,
+                                  cap, &written);
+            for (int a = 0; a < 50; a++) {
+                (void)clusterReplicatorIngest(rep, wire, written, KID);
+            }
+        }
+        if (!rep || clusterReplicatorDroppedCount(rep) != 1 ||
+            clusterMailboxLastApplied(clusterReplicatorMailbox(rep), 1u) != 1 ||
+            ctx_d.reject_count !=
+                CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES) {
+            printf("dkTestReplicatorRetryDrop: default Create dropped %" PRIu64
+                   " after %" PRIu64 " rejects\n",
+                   rep ? clusterReplicatorDroppedCount(rep) : 0,
+                   ctx_d.reject_count);
+            failures++;
+        }
+        clusterReplicatorFree(rep);
+        hmacKeyringFree(ring);
+    }
+
     if (failures == 0) {
         printf("dkTestReplicatorRetryDrop: OK (NULL-free reject, "
-               "drop-after-3, legacy infinite)\n");
+               "drop-after-3, retry forever, default budget)\n");
         return 0;
     }
     return 1;
@@ -10756,8 +10801,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
     TEST("inner-header: encode -> decode round-trip preserves all fields") {
         uint8_t buf[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
         memset(buf, 0xAA, sizeof(buf));
-        const size_t hdr_len =
-            cmEncodeInnerHeader(buf, sizeof(buf), ORIGIN, SEQ, MTYPE);
+        const size_t hdr_len = clusterMailboxEncodeInnerHeader(
+            buf, sizeof(buf), ORIGIN, SEQ, MTYPE);
         if (hdr_len == 0u) {
             ERR("encode returned 0");
             TEST_FINAL_RESULT;
@@ -10769,8 +10814,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (!cmDecodeInnerHeader(buf, hdr_len, &protocol, &origin, &seq, &mtype,
-                                 &consumed)) {
+        if (!clusterMailboxDecodeInnerHeader(buf, hdr_len, &protocol, &origin,
+                                             &seq, &mtype, &consumed)) {
             ERR("round-trip decode failed");
             TEST_FINAL_RESULT;
         }
@@ -10795,8 +10840,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
 
     TEST("inner-header: framing-byte-0 tamper rejected (contract subset)") {
         uint8_t base[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
-        const size_t hdr_len =
-            cmEncodeInnerHeader(base, sizeof(base), ORIGIN, SEQ, MTYPE);
+        const size_t hdr_len = clusterMailboxEncodeInnerHeader(
+            base, sizeof(base), ORIGIN, SEQ, MTYPE);
         if (hdr_len == 0u) {
             ERR("framing-tamper encode failed");
             TEST_FINAL_RESULT;
@@ -10811,7 +10856,7 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
             uint64_t seq = 0;
             uint8_t mtype = 0;
             size_t consumed = 0;
-            const bool ok = cmDecodeInnerHeader(
+            const bool ok = clusterMailboxDecodeInnerHeader(
                 mutated, hdr_len, &protocol, &origin, &seq, &mtype, &consumed);
             total++;
             if (!ok || origin != ORIGIN || seq != SEQ || mtype != MTYPE) {
@@ -10879,8 +10924,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
 
     TEST("inner-header: truncation by 1 byte rejected") {
         uint8_t buf[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
-        const size_t hdr_len =
-            cmEncodeInnerHeader(buf, sizeof(buf), ORIGIN, SEQ, MTYPE);
+        const size_t hdr_len = clusterMailboxEncodeInnerHeader(
+            buf, sizeof(buf), ORIGIN, SEQ, MTYPE);
         if (hdr_len < 2u) {
             ERR("truncate: hdr_len %zu too small", hdr_len);
             TEST_FINAL_RESULT;
@@ -10889,8 +10934,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(buf, hdr_len - 1u, &protocol, &origin, &seq,
-                                &mtype, &consumed)) {
+        if (clusterMailboxDecodeInnerHeader(buf, hdr_len - 1u, &protocol,
+                                            &origin, &seq, &mtype, &consumed)) {
             ERR("truncated decode unexpectedly succeeded");
         }
     }
@@ -10914,8 +10959,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
-                                &consumed)) {
+        if (clusterMailboxDecodeInnerHeader(scratch, n, &protocol, &origin,
+                                            &seq, &mtype, &consumed)) {
             ERR("wrong-count decode unexpectedly succeeded");
         }
     }
@@ -10937,8 +10982,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
-                                &consumed)) {
+        if (clusterMailboxDecodeInnerHeader(scratch, n, &protocol, &origin,
+                                            &seq, &mtype, &consumed)) {
             ERR("origin > UINT32_MAX decode unexpectedly succeeded");
         }
     }
@@ -10960,8 +11005,8 @@ int dkTestMailboxInnerHeaderFlexTest(int, char *[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
-                                &consumed)) {
+        if (clusterMailboxDecodeInnerHeader(scratch, n, &protocol, &origin,
+                                            &seq, &mtype, &consumed)) {
             ERR("msg_type > UINT8_MAX decode unexpectedly succeeded");
         }
     }
