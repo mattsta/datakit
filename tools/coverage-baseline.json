@@ -813,10 +813,6 @@
    "lines": 0,
    "branches": 0
   },
-  "src/multimapAtomDense.c": {
-   "lines": 17,
-   "branches": 23
-  },
   "src/multimapFull.c": {
    "lines": 44,
    "branches": 211

@@ -38,7 +38,6 @@ static const persistOps *const persistRegistry_[] = {
     &persistOpsAeadNonceLog,
     &persistOpsIdRows,
     &persistOpsMultimapAtom,
-    &persistOpsMultimapAtomDense,
     &persistOpsStringPool,
     &persistOpsAtomPool,
     &persistOpsMultiFenwick,

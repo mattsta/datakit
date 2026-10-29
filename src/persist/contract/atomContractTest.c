@@ -8,7 +8,6 @@
 #include "../../atomPersist.h"
 #include "../../atomPool.h"
 #include "../../multimapAtom.h"
-#include "../../multimapAtomDense.h"
 #include "../../str.h"
 #include "../../stringPool.h"
 
@@ -31,12 +30,13 @@ static void pcAtomRecordId(persistContractLog *log, persistOp op, uint64_t id,
 }
 
 /* Interns new and known values (with and without a retain), retains by
- * id, releases by value (the last release deletes) and deletes by id; a
- * quarter of the seeds build a permanent table */
+ * id, releases by value (the last release deletes) and deletes by id.
+ * Under LOWEST ids releases and deletes leave holes later interns fill. */
 static void *pcMultimapAtomBuild(const persistContractBuild *b) {
-    /* Every index kind, permanent ids or not, by seed */
-    multimapAtom *ma = multimapAtomNewIndexed(
-        (multimapAtomIndex)((b->seed / 4) % 3), b->seed % 4 == 0);
+    /* Every index kind with every id behaviour, by seed */
+    multimapAtom *ma = multimapAtomNewConfig(
+        &(multimapAtomConfig){.index = (multimapAtomIndex)((b->seed / 3) % 3),
+                              .ids = (multimapAtomIds)(b->seed % 3)});
     persistContractStart(b->log, ma);
 
     uint64_t rng = b->seed;
@@ -103,8 +103,8 @@ static bool pcMultimapAtomHoldsBytes(const void *structure,
 static bool pcMultimapAtomSameSettings(const void *original,
                                        const void *restored) {
     return multimapAtomGetIndex(original) == multimapAtomGetIndex(restored) &&
-           multimapAtomIsPermanent(original) ==
-               multimapAtomIsPermanent(restored);
+           multimapAtomGetIds(original) == multimapAtomGetIds(restored) &&
+           multimapAtomNextId(original) == multimapAtomNextId(restored);
 }
 
 const persistContractType persistContractMultimapAtom = {
@@ -112,74 +112,6 @@ const persistContractType persistContractMultimapAtom = {
     .build = pcMultimapAtomBuild,
     .holdsBytes = pcMultimapAtomHoldsBytes,
     .sameSettings = pcMultimapAtomSameSettings,
-};
-
-/* As pcMultimapAtomBuild through the lowest-first table: releases and
- * deletes leave holes that later interns fill */
-static void *pcMultimapAtomDenseBuild(const persistContractBuild *b) {
-    multimapAtomDense *d = multimapAtomDenseNew();
-    persistContractStart(b->log, d);
-
-    uint64_t rng = b->seed;
-    uint8_t buf[64];
-    const databox plusOne = DATABOX_SIGNED(1);
-    const databox minusOne = DATABOX_SIGNED(-1);
-    for (size_t i = 0; i < b->size; i++) {
-        const uint64_t roll = splitmix64(&rng) % 8;
-        const size_t k =
-            (roll >= 3 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
-        databoxBig value;
-        pcAtomValue(b->seed, k, &value, buf, sizeof(buf));
-        databox ref = {};
-        const bool live = multimapAtomLookupReference(
-            multimapAtomDenseBase(d), (const databox *)&value, &ref);
-        if (roll < 3 || !live) {
-            databox key = *(const databox *)&value;
-            const bool andRetain = roll == 1;
-            const bool existed =
-                andRetain
-                    ? multimapAtomDenseInsertIfNewConvertAndRetain(d, &key)
-                    : multimapAtomDenseInsertIfNewConvert(d, &key);
-            if (!existed) {
-                pcAtomRecordId(b->log, PERSIST_OP_INSERT, key.data.u,
-                               (const databox *)&value);
-            } else if (andRetain) {
-                pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, key.data.u,
-                               &plusOne);
-            }
-        } else if (roll < 5) {
-            multimapAtomDenseRetainById(d, ref.data.u);
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, ref.data.u, &plusOne);
-        } else if (roll < 7) {
-            multimapAtomDenseRelease(d, (const databox *)&value);
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, ref.data.u, &minusOne);
-        } else {
-            multimapAtomDenseDeleteById(d, ref.data.u);
-            pcAtomRecordId(b->log, PERSIST_OP_DELETE, ref.data.u, nullptr);
-        }
-    }
-
-    for (size_t i = 0; i < b->stringCount; i++) {
-        databox key = b->strings[i];
-        if (!multimapAtomDenseInsertIfNewConvert(d, &key)) {
-            pcAtomRecordId(b->log, PERSIST_OP_INSERT, key.data.u,
-                           &b->strings[i]);
-        }
-    }
-
-    return d;
-}
-
-static bool pcMultimapAtomDenseHoldsBytes(const void *structure,
-                                          const databox *bytes) {
-    return pcMultimapAtomHoldsBytes(
-        multimapAtomDenseBase((const multimapAtomDense *)structure), bytes);
-}
-
-const persistContractType persistContractMultimapAtomDense = {
-    .ops = &persistOpsMultimapAtomDense,
-    .build = pcMultimapAtomDenseBuild,
-    .holdsBytes = pcMultimapAtomDenseHoldsBytes,
 };
 
 /* String number 'i' of a build: words, digit strings and signed or

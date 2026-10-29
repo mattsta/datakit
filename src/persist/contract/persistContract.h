@@ -133,7 +133,6 @@ extern const persistContractType persistContractSegmentU128;
 extern const persistContractType persistContractSegmentFloat;
 extern const persistContractType persistContractSegmentDouble;
 extern const persistContractType persistContractMultimapAtom;
-extern const persistContractType persistContractMultimapAtomDense;
 extern const persistContractType persistContractStringPool;
 extern const persistContractType persistContractAtomPool;
 extern const persistContractType persistContractIdRows;

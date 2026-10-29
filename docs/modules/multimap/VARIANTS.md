@@ -497,14 +497,14 @@ The multimap index takes the atom tier family's node limit
 `dktools tune --families multimapAtom` measures it on a machine and
 `dkTierSetDefaultLimit` changes it for tables made afterwards).
 `multimapAtomGetStats` reports a table's `unitLimit`. IDs stay below
-`MULTIMAP_ATOM_ID_LIMIT` (2^61).
+`MULTIMAP_ATOM_ID_LIMIT` (2^59).
 
 The reverse index finds a key's ID. It is one of three kinds, chosen at
-creation (`multimapAtomNewIndexed()`) and read back by
+creation (`multimapAtomNewConfig()`, `.index`) and read back by
 `multimapAtomGetIndex()`:
 
-- `MULTIMAP_ATOM_INDEX_HASHED` (the default for `multimapAtomNew()` and
-  `multimapAtomNewPermanent()`): a set of
+- `MULTIMAP_ATOM_INDEX_HASHED` (the default: `multimapAtomNew()` and a zeroed
+  config): a set of
   `{hash of the key, ID}` rows sorted by hash. A find is one keyed search for
   the hash, then one forward lookup per candidate (normally one).
 - `MULTIMAP_ATOM_INDEX_ORDERED`: rows holding only the ID, inserted through
@@ -557,10 +557,16 @@ heap bytes per atom", which meters the allocator over 20k atoms.
 ### API
 
 ```c
-multimapAtom *multimapAtomNew(void);
-multimapAtom *multimapAtomNewPermanent(void);
-multimapAtom *multimapAtomNewIndexed(multimapAtomIndex index, bool permanent);
+typedef struct multimapAtomConfig {
+    multimapAtomIndex index; /* HASHED (0), ORDERED, DICT */
+    multimapAtomIds ids;     /* REUSE (0), PERMANENT, LOWEST */
+} multimapAtomConfig;
+
+multimapAtom *multimapAtomNew(void); /* a zeroed config */
+multimapAtom *multimapAtomNewConfig(const multimapAtomConfig *config);
 multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma);
+multimapAtomIds multimapAtomGetIds(const multimapAtom *ma);
+uint64_t multimapAtomNextId(const multimapAtom *ma);
 void multimapAtomFree(multimapAtom *ma);
 
 void multimapAtomInsert(multimapAtom *ma, const databox *box);
@@ -584,11 +590,6 @@ bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
 void multimapAtomRetain(multimapAtom *ma, const databox *key);
 /* Retain 'key' (interning it when new) and replace it with its reference */
 void multimapAtomRetainConvert(multimapAtom *ma, databox *key);
-/* The atom of 'key' in one search: true when it existed, false when this
- * call created it under 'id' (which must be unbound); 'ref' its reference
- * either way.  For a table that picks its own ids, as multimapAtomDense. */
-bool multimapAtomFindOrCreateWithId(multimapAtom *ma, const databox *key,
-                                    uint64_t id, databox *ref);
 void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef);
 void multimapAtomRetainById(multimapAtom *ma, uint64_t id);
 
@@ -665,25 +666,25 @@ Releasing a string that is not in the table is a programming error and asserts.
 
 Generated IDs count up from 0 and always continue past every ID bound by
 `multimapAtomInsertWithExactAtomID()`, so a generated ID is never one in use.
-IDs stay below `MULTIMAP_ATOM_ID_LIMIT` (2^63).
+IDs stay below `MULTIMAP_ATOM_ID_LIMIT` (2^59).
 
 ### ID Behaviours
 
-How IDs are handed out and reused is chosen at creation. None adds a byte per
-atom:
+How IDs are handed out and reused is chosen at creation (`.ids` in
+`multimapAtomConfig`, read back by `multimapAtomGetIds()`). None adds a byte
+per atom:
 
-| Behaviour                | Create with                                      | Last Release                                     | IDs reused                                                                                                                                                | Extra memory                                                       |
-| ------------------------ | ------------------------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Reusing                  | `multimapAtomNew()`                              | deletes the atom                                 | where free to find: deleting the highest ID lowers the next ID to just past the largest live one, and an emptied table restarts at 0; interior holes wait | none                                                               |
-| Permanent (Erlang-style) | `multimapAtomNewPermanent()`                     | changes nothing: atoms live until Delete or Free | never, not even after a Delete                                                                                                                            | none                                                               |
-| Lowest first             | `multimapAtomDenseNew()` (`multimapAtomDense.h`) | deletes the atom                                 | every freed ID, lowest first                                                                                                                              | a `multiroar` of holes: ~2 B per isolated hole, none without holes |
+| Behaviour                           | Last Release                                     | IDs reused                                                                                                                                                | Extra memory                                                       |
+| ----------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `MULTIMAP_ATOM_IDS_REUSE` (default) | deletes the atom                                 | where free to find: deleting the highest ID lowers the next ID to just past the largest live one, and an emptied table restarts at 0; interior holes wait | none                                                               |
+| `MULTIMAP_ATOM_IDS_PERMANENT`       | changes nothing: atoms live until Delete or Free | never, not even after a Delete                                                                                                                            | none                                                               |
+| `MULTIMAP_ATOM_IDS_LOWEST`          | deletes the atom                                 | every freed ID, lowest first                                                                                                                              | a `multiroar` of holes: ~2 B per isolated hole, none without holes |
 
-The permanent behaviour is the counter's top bit, so it costs no bytes;
-`multimapAtomIsPermanent()` reports it. `multimapAtomDense` is a parallel
-implementation over the public multimapAtom API: a new atom takes the lowest
-hole or the next unused ID, and freeing the highest ID lowers the next unused
-ID past any holes directly below it. Read through `multimapAtomDenseBase()`;
-write through the `multimapAtomDense*` calls so the free set stays exact.
+The behaviour sits in the ID counter's top bits, so it costs no bytes. Under
+LOWEST a new atom takes the lowest hole or the next unused ID, and freeing the
+highest ID lowers the next unused ID past any holes directly below it;
+`multimapAtomNextId()` reports the ID the next new atom gets under every
+behaviour.
 
 `atomPool` offers the same three behaviours on both its backends
 (`atomPoolNewWithIds(type, ATOM_POOL_IDS_REUSE | _PERMANENT | _LOWEST)`), and
@@ -699,18 +700,15 @@ reuses the most recently freed ID first.
 
 `persistOpsMultimapAtom` (`atomPersist.h`, type id 140) keeps every ID
 exactly: a restored table resolves the same IDs and hands out the same IDs
-next. The snapshot is the behaviour flag, the next ID and each atom's (ID,
+next. The snapshot is the ID behaviour and index kind, the next ID and each atom's (ID,
 value, count) in ID order; values are stored exactly, so `"22"` stays bytes.
 Restore rebuilds the reverse map from the values sorted once, instead of one
 search per atom (perf preset, 100k atoms: snapshot 66 ns, restore 641 ns per
 atom, against 2.2 µs per atom to intern them again). WAL ops: `INSERT [id,
 value]` (a new atom with one reference), `NUM_INCR [id, +1 | -1]` (retain;
-release, the last one deleting), `DELETE [id]`.
-
-`persistOpsMultimapAtomDense` (type id 141) writes its base table's snapshot
-and the same WAL ops: the IDs in use determine the next ID and the free set,
-so the holes cost no bytes in the snapshot. Replaying an `INSERT` takes
-exactly its ID out of the free set.
+release, the last one deleting), `DELETE [id]`. Under LOWEST the free set is
+rebuilt from the IDs in use, so holes cost no bytes in the snapshot, and
+replaying an `INSERT` takes exactly its ID out of the free set.
 
 `persistOpsStringPool` (type id 142) snapshots the ID behaviour, the next ID,
 each string's (ID, bytes, count) and every free ID below the next ID (the
@@ -720,8 +718,8 @@ bytes]` (refused unless it is the ID the pool hands out next), `NUM_INCR [id,
 +1 | -1]`, `CLEAR` (Reset). Perf preset, 100k strings: snapshot 40 ns,
 restore 270 ns per string.
 
-`persistOpsAtomPool` (type id 143) wraps its backend's snapshot (stringPool's,
-multimapAtom's or multimapAtomDense's) with the backend and ID behaviour, and
+`persistOpsAtomPool` (type id 143) wraps its backend's snapshot (stringPool's or
+multimapAtom's) with the backend and ID behaviour, and
 replays the same ops with the pool's 1-based IDs.
 
 ### Using an Atom Container With a multimap

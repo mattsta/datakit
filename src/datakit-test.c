@@ -91,7 +91,6 @@
 #include "multilru.h"
 #include "multimap.h"
 #include "multimapAtom.h"
-#include "multimapAtomDense.h"
 #include "multimapFull.h"
 #include "multimapMedium.h"
 #include "multimapSmall.h"
@@ -12370,11 +12369,11 @@ static const TestEntry testRegistry[] = {
     T_A(containerMatrix, "matrix"), T(mflex), T_A(multilist, "ml"),
     T(multilistFull), T(multidict), T_ADJ(multimap), T(multimapFull),
     T(multimapMedium), T_A_ADJ(multimapAtom, "atom"),
-    T_A(multimapAtomDense, "atomdense"), T_A_ADJ(stringPool, "sp,strpool"),
-    T_A_ADJ(atomPool, "ap,apool"), T_ADJ(multiarray), T_ADJ(multiarraySmall),
-    T_ADJ(multiarrayMedium), T_ADJ(multiarrayLarge), T_ADJ(multiroar),
-    T_A_ADJ(multiOrderedSet, "mos"), T_A_ADJ(multilru, "lru,mlru"),
-    T_A_ADJ(ptrPrevNext, "ppn"), T_A(tierSim, "sim"),
+    T_A_ADJ(stringPool, "sp,strpool"), T_A_ADJ(atomPool, "ap,apool"),
+    T_ADJ(multiarray), T_ADJ(multiarraySmall), T_ADJ(multiarrayMedium),
+    T_ADJ(multiarrayLarge), T_ADJ(multiroar), T_A_ADJ(multiOrderedSet, "mos"),
+    T_A_ADJ(multilru, "lru,mlru"), T_A_ADJ(ptrPrevNext, "ppn"),
+    T_A(tierSim, "sim"),
 
     /* Numeric types */
     T_A(float16, "f16"), T_A_ADJ(floatExtended, "float128,fe"), T(intset),

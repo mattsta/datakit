@@ -505,7 +505,6 @@ add_library(${PROJECT_NAME} OBJECT
     multimapFull.c
 
     multimapAtom.c
-    multimapAtomDense.c
 
     stringPool.c
     atomPool.c

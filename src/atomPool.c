@@ -7,7 +7,6 @@ defcleaner(void *, zfree);
 
 #include "datakit.h"
 #include "multimapAtom.h"
-#include "multimapAtomDense.h"
 #include "stringPool.h"
 #include "timeUtil.h"
 
@@ -210,71 +209,15 @@ static const atomPoolVTable treeVTable = {
 };
 
 /* ====================================================================
- * multimapAtomDense Backend Wrappers (TREE, lowest-first ids)
- * ==================================================================== */
-
-static uint64_t denseIntern(void *impl, const databox *str) {
-    databox key = *str;
-    multimapAtomDenseInsertIfNewConvertAndRetain((multimapAtomDense *)impl,
-                                                 &key);
-    return TREE_ID_TO_EXTERNAL(key.data.u);
-}
-
-static uint64_t denseGetId(const void *impl, const databox *str) {
-    return treeGetId(multimapAtomDenseBase(impl), str);
-}
-
-static bool denseExists(const void *impl, const databox *str) {
-    return treeExists(multimapAtomDenseBase(impl), str);
-}
-
-static bool denseLookup(const void *impl, uint64_t id, databox *str) {
-    return treeLookup(multimapAtomDenseBase(impl), id, str);
-}
-
-static void denseRetain(void *impl, uint64_t id) {
-    multimapAtomDenseRetainById((multimapAtomDense *)impl,
-                                TREE_ID_FROM_EXTERNAL(id));
-}
-
-static bool denseRelease(void *impl, uint64_t id) {
-    return multimapAtomDenseReleaseById((multimapAtomDense *)impl,
-                                        TREE_ID_FROM_EXTERNAL(id));
-}
-
-static uint64_t denseRefcount(const void *impl, uint64_t id) {
-    return treeRefcount(multimapAtomDenseBase(impl), id);
-}
-
-static size_t denseCount(const void *impl) {
-    return multimapAtomDenseCount((const multimapAtomDense *)impl);
-}
-
-static size_t denseBytes(const void *impl) {
-    return multimapAtomDenseBytes((const multimapAtomDense *)impl);
-}
-
-static void denseFree(void *impl) {
-    multimapAtomDenseFree((multimapAtomDense *)impl);
-}
-
-static const atomPoolVTable denseVTable = {
-    .intern = denseIntern,
-    .getId = denseGetId,
-    .exists = denseExists,
-    .lookup = denseLookup,
-    .retain = denseRetain,
-    .release = denseRelease,
-    .refcount = denseRefcount,
-    .count = denseCount,
-    .bytes = denseBytes,
-    .reset = nullptr,
-    .free = denseFree,
-};
-
-/* ====================================================================
  * Public API Implementation
  * ==================================================================== */
+
+/* A pool's id behaviour as its TREE backend's */
+static const multimapAtomIds treeIds_[] = {
+    [ATOM_POOL_IDS_REUSE] = MULTIMAP_ATOM_IDS_REUSE,
+    [ATOM_POOL_IDS_PERMANENT] = MULTIMAP_ATOM_IDS_PERMANENT,
+    [ATOM_POOL_IDS_LOWEST] = MULTIMAP_ATOM_IDS_LOWEST,
+};
 
 static void *atomPoolImplNew(atomPoolType type, atomPoolIds ids) {
     switch (type) {
@@ -288,14 +231,9 @@ static void *atomPoolImplNew(atomPoolType type, atomPoolIds ids) {
         return stringPoolNewWithIds(hashIds[ids]);
     }
     case ATOM_POOL_TREE:
-        switch (ids) {
-        case ATOM_POOL_IDS_PERMANENT:
-            return multimapAtomNewPermanent();
-        case ATOM_POOL_IDS_LOWEST:
-            return multimapAtomDenseNew();
-        default:
-            return multimapAtomNew();
-        }
+        /* @own: caller; free=multimapAtomFree */
+        return multimapAtomNewConfig(
+            &(multimapAtomConfig){.ids = treeIds_[ids]});
     default:
         return nullptr;
     }
@@ -321,7 +259,7 @@ atomPool *atomPoolNewWithIds(atomPoolType type, atomPoolIds ids) {
     if (type == ATOM_POOL_HASH) {
         pool->vtable = &hashVTable;
     } else {
-        pool->vtable = ids == ATOM_POOL_IDS_LOWEST ? &denseVTable : &treeVTable;
+        pool->vtable = &treeVTable;
     }
 
     if (!pool->impl) {
@@ -453,22 +391,16 @@ const char *atomPoolTypeName(atomPoolType type) {
  * Persistence (atomPersist.h)
  * ==================================================================== */
 /* The descriptor of a pool's backend */
-static const persistOps *atomPoolBackendOps_(atomPoolType type,
-                                             atomPoolIds ids) {
-    if (type == ATOM_POOL_HASH) {
-        return &persistOpsStringPool;
-    }
-
-    return ids == ATOM_POOL_IDS_LOWEST ? &persistOpsMultimapAtomDense
-                                       : &persistOpsMultimapAtom;
+static const persistOps *atomPoolBackendOps_(atomPoolType type) {
+    return type == ATOM_POOL_HASH ? &persistOpsStringPool
+                                  : &persistOpsMultimapAtom;
 }
 
 static uint8_t *atomPoolPersistSnapshot_(const void *structure, size_t *len) {
     const atomPool *pool = structure;
     size_t innerLen = 0;
     cleanerName(zfree, U8) uint8_t *inner =
-        atomPoolBackendOps_(pool->type, pool->ids)
-            ->snapshot(pool->impl, &innerLen);
+        atomPoolBackendOps_(pool->type)->snapshot(pool->impl, &innerLen);
     if (!inner) {
         return nullptr;
     }
@@ -507,7 +439,7 @@ static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
 
     const atomPoolType t = (atomPoolType)type.data.u64;
     const atomPoolIds i = (atomPoolIds)ids.data.u64;
-    const persistOps *ops = atomPoolBackendOps_(t, i);
+    const persistOps *ops = atomPoolBackendOps_(t);
     void *impl = ops->restore(databoxBytes(&backend), backend.len);
     if (!impl) {
         return nullptr;
@@ -519,11 +451,9 @@ static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
         [ATOM_POOL_IDS_PERMANENT] = STRING_POOL_IDS_PERMANENT,
         [ATOM_POOL_IDS_LOWEST] = STRING_POOL_IDS_LOWEST,
     };
-    const bool fits =
-        t == ATOM_POOL_HASH
-            ? stringPoolIdsOf(impl) == hashIds[i]
-            : (i == ATOM_POOL_IDS_LOWEST ||
-               multimapAtomIsPermanent(impl) == (i == ATOM_POOL_IDS_PERMANENT));
+    const bool fits = t == ATOM_POOL_HASH
+                          ? stringPoolIdsOf(impl) == hashIds[i]
+                          : multimapAtomGetIds(impl) == treeIds_[i];
     if (!fits) {
         ops->free(impl);
         return nullptr;
@@ -537,7 +467,7 @@ static void *atomPoolPersistRestore_(const uint8_t *data, size_t len) {
     if (t == ATOM_POOL_HASH) {
         pool->vtable = &hashVTable;
     } else {
-        pool->vtable = i == ATOM_POOL_IDS_LOWEST ? &denseVTable : &treeVTable;
+        pool->vtable = &treeVTable;
     }
 
     return pool;
@@ -565,7 +495,7 @@ static bool atomPoolPersistApplyOp_(void *structure, persistOp op,
         return true;
     }
 
-    const persistOps *ops = atomPoolBackendOps_(pool->type, pool->ids);
+    const persistOps *ops = atomPoolBackendOps_(pool->type);
     if (pool->type == ATOM_POOL_HASH) {
         return ops->applyOp(&pool->impl, op, data, len);
     }

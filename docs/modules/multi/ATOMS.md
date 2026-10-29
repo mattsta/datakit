@@ -4,15 +4,14 @@ Interning stores each distinct value once and hands out a small integer id for i
 each hold a copy of the same string hold the id instead (1-9 bytes as a varint), and comparing two
 interned values is comparing two ids.
 
-datakit has four interning types. They share one model: a value is interned once, every holder takes a
+datakit has three interning types. They share one model: a value is interned once, every holder takes a
 reference, and the value is freed when the last reference goes (unless the table is permanent).
 
-| Type                | Header                | What it is                                                      |
-| ------------------- | --------------------- | --------------------------------------------------------------- |
-| `stringPool`        | `stringPool.h`        | Hash table value -> id plus an array id -> value: fastest by id |
-| `multimapAtom`      | `multimapAtom.h`      | Compact table: an index (hashed, ordered or dict) plus id rows  |
-| `multimapAtomDense` | `multimapAtomDense.h` | `multimapAtom` that always reuses the lowest free id            |
-| `atomPool`          | `atomPool.h`          | One interface over `stringPool` (HASH) or `multimapAtom` (TREE) |
+| Type           | Header           | What it is                                                                                             |
+| -------------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `stringPool`   | `stringPool.h`   | Hash table value -> id plus an array id -> value: fastest by id                                        |
+| `multimapAtom` | `multimapAtom.h` | Compact table: an index (hashed, ordered or dict) plus id rows; reusing, permanent or lowest-first ids |
+| `atomPool`     | `atomPool.h`     | One interface over `stringPool` (HASH) or `multimapAtom` (TREE)                                        |
 
 ## Choosing
 
@@ -22,10 +21,10 @@ reference, and the value is freed when the last reference goes (unless the table
 - **Many atoms, memory matters: TREE** (`multimapAtom`). Several times fewer bytes per atom; interning and
   value lookups cost a search of its index (see the numbers below).
 - **Ids index something sized by their range** (an array, a bitmap, a compact encoding) **and atoms come
-  and go in any order: `multimapAtomDense`**, or `atomPoolNewWithIds(type, ATOM_POOL_IDS_LOWEST)`. A new
+  and go in any order: LOWEST ids** (`atomPoolNewWithIds(type, ATOM_POOL_IDS_LOWEST)`, `multimapAtomNewConfig` with `.ids = MULTIMAP_ATOM_IDS_LOWEST`). A new
   atom always gets the lowest id not in use, so ids stay as dense as the live count allows.
 - **A symbol table that only grows: permanent ids** (`ATOM_POOL_IDS_PERMANENT`, `stringPoolNewWithIds(
-STRING_POOL_IDS_PERMANENT)`, `multimapAtomNewPermanent()`). An atom lives until Reset or Free; retain
+STRING_POOL_IDS_PERMANENT)`, `multimapAtomNewConfig` with `.ids = MULTIMAP_ATOM_IDS_PERMANENT`). An atom lives until Reset or Free; retain
   and release do nothing; an id is never reused, so a bare id stays valid for the table's life.
 
 `multimapAtom`'s own index kinds (HASHED, the default; ORDERED; DICT) are compared in
@@ -40,7 +39,7 @@ STRING_POOL_IDS_PERMANENT)`, `multimapAtomNewPermanent()`). An atom lives until 
 | `LOWEST`    | the last release frees an atom; new atoms take the lowest free id | about 2 bytes per isolated hole                        |
 
 - **Ids are 1-based in `atomPool` and `stringPool`**: 0 means "not found" or "failed". A bare
-  `multimapAtom` (and `multimapAtomDense`) hands out ids from 0; `atomPool`'s TREE backend adds 1 at its
+  `multimapAtom` hands out ids from 0; `atomPool`'s TREE backend adds 1 at its
   boundary so callers see the same convention for both backends.
 - **Intern takes a reference.** `atomPoolIntern` (and `stringPoolIntern`) returns the existing id with
   its count raised by one, or a new atom with a count of one.
@@ -79,25 +78,25 @@ atomPoolFree(tags);
 ## Example: dense ids for a bitmap
 
 ```c
-#include "multimapAtomDense.h"
+#include "multimapAtom.h"
 #include "multiroar.h"
 
-multimapAtomDense *users = multimapAtomDenseNew();
+multimapAtom *users =
+    multimapAtomNewConfig(&(multimapAtomConfig){.ids = MULTIMAP_ATOM_IDS_LOWEST});
 multiroar *online = multiroarBitNew();
 
 databox who = databoxNewBytesString("alice");
-multimapAtomDenseInsertIfNewConvert(users, &who); /* 'who' is now the reference */
-multiroarBitSet(online, who.data.u);              /* ids stay small: dense bitmap */
+multimapAtomInsertIfNewConvert(users, &who); /* 'who' is now the reference */
+multiroarBitSet(online, who.data.u);         /* ids stay small: dense bitmap */
 
-/* Reads take the base table */
 databox back;
-multimapAtomLookup(multimapAtomDenseBase(users), &who, &back);
+multimapAtomLookup(users, &who, &back);
 
 /* The last release frees the id; the next new user gets the lowest free one */
-multimapAtomDenseReleaseById(users, who.data.u);
+multimapAtomReleaseById(users, &who);
 
 multiroarFree(online);
-multimapAtomDenseFree(users);
+multimapAtomFree(users);
 ```
 
 ## atomPool calls
@@ -113,24 +112,6 @@ multimapAtomDenseFree(users);
 | `atomPoolRefcount(pool, id)`                                                   | the references held (0: no such id)                                                         |
 | `atomPoolCount(pool)` / `atomPoolBytes(pool)`                                  | atoms held / memory                                                                         |
 | `atomPoolReset(pool)` / `atomPoolFree(pool)`                                   | every atom gone, ids start over / free the pool                                             |
-
-## multimapAtomDense calls
-
-The dense table is a `multimapAtom` whose new atoms always take the lowest
-free id. Writes go through it; reads take `multimapAtomDenseBase(d)` and the
-`multimapAtom` lookups.
-
-| Call                                                                        | Does                                                                                                 |
-| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `multimapAtomDenseInsertConvert(d, &box)`                                   | a new atom (the value must be absent); `box` becomes its reference                                   |
-| `multimapAtomDenseInsertIfNewConvert` / `...AndRetain`                      | the existing atom's reference (retained once more by AndRetain) or a new one's; true when it existed |
-| `multimapAtomDenseRetain(d, &key)` / `multimapAtomDenseRetainById(d, id)`   | one more reference (Retain interns a new value)                                                      |
-| `multimapAtomDenseRelease(d, &key)` / `multimapAtomDenseReleaseById(d, id)` | one fewer; the last deletes the atom and frees its id                                                |
-| `multimapAtomDenseDelete(d, &key)` / `multimapAtomDenseDeleteById(d, id)`   | delete whatever the count, freeing the id                                                            |
-| `multimapAtomDenseNextId(d)`                                                | the id the next new atom gets (the lowest free)                                                      |
-| `multimapAtomDenseCount(d)` / `multimapAtomDenseBytes(d)`                   | atoms / bytes of the table and its free set                                                          |
-
-The `...AndRetain` form is `multimapAtomDenseInsertIfNewConvertAndRetain`.
 
 ## stringPool calls
 
@@ -155,7 +136,7 @@ The `...AndRetain` form is `multimapAtomDenseInsertIfNewConvertAndRetain`.
   and an id is safe to cache anywhere.
 - Retain and release in the same layer that stores the id, so ownership is one rule: one stored copy, one
   reference.
-- `atomPoolBytes` / `stringPoolBytes` / `multimapAtomDenseBytes` report the table's memory: measure with
+- `atomPoolBytes` / `stringPoolBytes` / `multimapAtomBytes` report the table's memory: measure with
   your data before choosing a backend.
 - Not thread-safe: guard a shared table with one lock (or give each thread its own).
 

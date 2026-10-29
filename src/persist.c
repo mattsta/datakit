@@ -2465,8 +2465,6 @@ const char *persistTypeName(persistType type) {
         return "segmentDouble";
     case PERSIST_TYPE_MULTIMAP_ATOM:
         return "multimapAtom";
-    case PERSIST_TYPE_MULTIMAP_ATOM_DENSE:
-        return "multimapAtomDense";
     case PERSIST_TYPE_STRING_POOL:
         return "stringPool";
     case PERSIST_TYPE_ATOM_POOL:

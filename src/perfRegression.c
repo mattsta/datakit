@@ -38,7 +38,6 @@
 #include "multilist.h"
 #include "multilru.h"
 #include "multimapAtom.h"
-#include "multimapAtomDense.h"
 #include "persist/intsetP.h"
 #include "persist/multiOrderedSetP.h"
 #include "persist/multidictP.h"
@@ -614,7 +613,6 @@ defcleaner(multiarray *, multiarrayFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(idRows *, idRowsFree);
-defcleaner(multimapAtomDense *, multimapAtomDenseFree);
 defcleaner(stringPool *, stringPoolFree);
 defcleaner(intset *, intsetFree);
 defcleaner(multilru *, multilruFree);
@@ -2537,7 +2535,8 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
     {
         const bool metered = ctestHeapMeterStart();
         cleaner(multimapAtomFree) multimapAtom *sparse =
-            multimapAtomNewIndexed(index, true);
+            multimapAtomNewConfig(&(multimapAtomConfig){
+                .index = index, .ids = MULTIMAP_ATOM_IDS_PERMANENT});
         for (uint32_t i = 0; i < n; i++) {
             databox k = perfContainerKey(keys, i);
             sink += multimapAtomInsertIfNewConvert(sparse, &k);
@@ -2558,7 +2557,7 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
     /* The bytes of internNew are the table's heap holding every atom */
     const bool metered = ctestHeapMeterStart();
     cleaner(multimapAtomFree) multimapAtom *ma =
-        multimapAtomNewIndexed(index, false);
+        multimapAtomNewConfig(&(multimapAtomConfig){.index = index});
     double t0 = timeUtilMonotonicSec();
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
@@ -2961,41 +2960,41 @@ static void benchMultimapAtom(void) {
     uint64_t sink = 0;
     double t0;
 
-    /* Interning into a lowest-first table: new values, then present ones */
-    cleaner(multimapAtomDenseFree) multimapAtomDense *interned =
-        multimapAtomDenseNew();
-    PERF_ROW("multimapAtomDense", "internNew", n,
+    /* Interning into a LOWEST table: new values, then present ones */
+    const multimapAtomConfig lowest = {.ids = MULTIMAP_ATOM_IDS_LOWEST};
+    cleaner(multimapAtomFree) multimapAtom *interned =
+        multimapAtomNewConfig(&lowest);
+    PERF_ROW("multimapAtomLowest", "internNew", n,
              databox k = perfContainerKey(keys, i);
-             sink +=
-             multimapAtomDenseInsertIfNewConvertAndRetain(interned, &k));
-    PERF_ROW("multimapAtomDense", "internPresent", n,
+             sink += multimapAtomInsertIfNewConvertAndRetain(interned, &k));
+    PERF_ROW("multimapAtomLowest", "internPresent", n,
              databox k = perfContainerKey(keys, i);
-             sink +=
-             multimapAtomDenseInsertIfNewConvertAndRetain(interned, &k));
+             sink += multimapAtomInsertIfNewConvertAndRetain(interned, &k));
 
-    /* The same values in a lowest-first table, with every fourth one
-     * released so the restore rebuilds holes */
-    cleaner(multimapAtomDenseFree) multimapAtomDense *dense =
-        multimapAtomDenseNew();
+    /* The same values in a LOWEST table, with every fourth one deleted so
+     * the restore rebuilds holes */
+    cleaner(multimapAtomFree) multimapAtom *holed =
+        multimapAtomNewConfig(&lowest);
     for (uint32_t i = 0; i < n; i++) {
         databox k = perfContainerKey(keys, i);
-        multimapAtomDenseInsertConvert(dense, &k);
+        multimapAtomInsertConvert(holed, &k);
     }
     for (uint32_t i = 0; i < n; i += 4) {
-        multimapAtomDenseDeleteById(dense, i);
+        multimapAtomDeleteById(holed, i);
     }
 
-    size_t denseLen = 0;
+    size_t holedLen = 0;
     t0 = timeUtilMonotonicSec();
-    cleanerName(zfree, U8Buf) uint8_t *denseSnap =
-        persistOpsMultimapAtomDense.snapshot(dense, &denseLen);
-    emitRow("multimapAtomDense", "snapshot", 0, n, timeUtilMonotonicSec() - t0);
+    cleanerName(zfree, U8Buf) uint8_t *holedSnap =
+        persistOpsMultimapAtom.snapshot(holed, &holedLen);
+    emitRow("multimapAtomLowest", "snapshot", 0, n,
+            timeUtilMonotonicSec() - t0);
 
     t0 = timeUtilMonotonicSec();
-    cleaner(multimapAtomDenseFree) multimapAtomDense *denseRestored =
-        persistOpsMultimapAtomDense.restore(denseSnap, denseLen);
-    emitRow("multimapAtomDense", "restore", 0, n, timeUtilMonotonicSec() - t0);
-    sink += multimapAtomDenseCount(denseRestored);
+    cleaner(multimapAtomFree) multimapAtom *holedRestored =
+        persistOpsMultimapAtom.restore(holedSnap, holedLen);
+    emitRow("multimapAtomLowest", "restore", 0, n, timeUtilMonotonicSec() - t0);
+    sink += multimapAtomCount(holedRestored);
 
     /* The hash-backed pool of the same strings */
     cleaner(stringPoolFree) stringPool *pool = stringPoolNew();

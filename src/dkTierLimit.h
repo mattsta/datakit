@@ -5,10 +5,9 @@
 /* The size limit a family's plain constructor gives each new container:
  * multimapNew and multimapSetNew read DK_TIER_MULTIMAP's,
  * multiOrderedSetNew reads DK_TIER_MULTIORDEREDSET's, multilistNew reads
- * DK_TIER_MULTILIST's, and every multimapAtom constructor (and so
- * multimapAtomDense and stringPool) reads DK_TIER_MULTIMAP_ATOM's for its
- * multimap index.  Constructors that take a limit ignore
- * these defaults.
+ * DK_TIER_MULTILIST's, and every multimapAtom constructor reads
+ * DK_TIER_MULTIMAP_ATOM's for its multimap index.  Constructors that
+ * take a limit ignore these defaults.
  *
  * Each family starts at its compiled default (dkTierCompiledLimit):
  * DK_TIER_LIMIT_COMPILED, and DK_TIER_LIMIT_ATOM_COMPILED for the atom

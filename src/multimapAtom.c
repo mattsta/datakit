@@ -4,6 +4,7 @@
 #include "dkTierLimit.h"
 #include "idRows.h"
 #include "multidict.h"
+#include "multiroar.h"
 #include "rapidhash.h"
 
 defcleaner(multimapAtom *, multimapAtomFree);
@@ -22,18 +23,23 @@ struct multimapAtom {
         multimap *mapAtomReverse;
         multidict *dictAtomReverse;
     };
-    /* The next generated id, with the table's id behaviour (bit 63 set:
-     * permanent) and reverse index kind (bits 61-62) above it, so neither
-     * costs a byte.  Ids stay below MULTIMAP_ATOM_ID_LIMIT. */
+    /* The next generated id, with the table's settings above it, so none
+     * costs a byte: the id behaviour (multimapAtomIds, bits 59-60) and the
+     * reverse index kind (bits 61-62).  Ids stay below
+     * MULTIMAP_ATOM_ID_LIMIT.  Under LOWEST the live ids are exactly
+     * [0, next) minus 'holes'. */
     uint64_t highest;
+    /* LOWEST: the freed ids below next - 1; NULL while there are none */
+    multiroar *holes;
 };
 
-static constexpr uint64_t ATOM_PERMANENT_BIT_ = (uint64_t)1 << 63;
+static constexpr unsigned ATOM_IDS_SHIFT_ = 59;
+static constexpr uint64_t ATOM_IDS_BITS_ = (uint64_t)3 << ATOM_IDS_SHIFT_;
 static constexpr unsigned ATOM_INDEX_SHIFT_ = 61;
 static constexpr uint64_t ATOM_INDEX_BITS_ = (uint64_t)3 << ATOM_INDEX_SHIFT_;
 static constexpr uint64_t ATOM_SETTING_BITS_ =
-    ATOM_PERMANENT_BIT_ | ATOM_INDEX_BITS_;
-static_assert(((uint64_t)1 << ATOM_INDEX_SHIFT_) == MULTIMAP_ATOM_ID_LIMIT,
+    ATOM_IDS_BITS_ | ATOM_INDEX_BITS_;
+static_assert(((uint64_t)1 << ATOM_IDS_SHIFT_) == MULTIMAP_ATOM_ID_LIMIT,
               "the settings sit just above every id");
 
 static inline uint64_t atomNextId_(const multimapAtom *ma) {
@@ -45,8 +51,12 @@ static inline void atomSetNextId_(multimapAtom *ma, const uint64_t id) {
     ma->highest = (ma->highest & ATOM_SETTING_BITS_) | id;
 }
 
-bool multimapAtomIsPermanent(const multimapAtom *ma) {
-    return (ma->highest & ATOM_PERMANENT_BIT_) != 0;
+multimapAtomIds multimapAtomGetIds(const multimapAtom *ma) {
+    return (multimapAtomIds)((ma->highest & ATOM_IDS_BITS_) >> ATOM_IDS_SHIFT_);
+}
+
+static inline bool atomIsPermanent_(const multimapAtom *ma) {
+    return multimapAtomGetIds(ma) == MULTIMAP_ATOM_IDS_PERMANENT;
 }
 
 multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma) {
@@ -54,10 +64,59 @@ multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma) {
                                ATOM_INDEX_SHIFT_);
 }
 
+/* ====================================================================
+ * Ids
+ * ==================================================================== */
+uint64_t multimapAtomNextId(const multimapAtom *ma) {
+    uint64_t id;
+    if (ma->holes && multiroarMin(ma->holes, &id)) {
+        return id;
+    }
+
+    return atomNextId_(ma);
+}
+
+static void atomHolesReleaseIfEmpty_(multimapAtom *ma) {
+    if (ma->holes && multiroarIsEmpty(ma->holes)) {
+        multiroarFree(ma->holes);
+        ma->holes = nullptr;
+    }
+}
+
+/* 'id' is now in use: generated ids continue past it.  Under LOWEST a
+ * hole it fills leaves the free set, and the ids it skips past join it. */
+static void atomBindId_(multimapAtom *ma, const uint64_t id) {
+    const uint64_t next = atomNextId_(ma);
+    if (multimapAtomGetIds(ma) != MULTIMAP_ATOM_IDS_LOWEST) {
+        if (id >= next) {
+            atomSetNextId_(ma, id + 1);
+        }
+        return;
+    }
+
+    if (id < next) {
+        if (ma->holes) {
+            multiroarBitClear(ma->holes, id);
+            atomHolesReleaseIfEmpty_(ma);
+        }
+        return;
+    }
+
+    if (id > next) {
+        if (!ma->holes) {
+            /* @own: container; free=multimapAtomFree */
+            ma->holes = multiroarBitNew();
+        }
+        multiroarBitSetRange(ma->holes, next, id - next);
+    }
+
+    atomSetNextId_(ma, id + 1);
+}
+
 #ifdef DATAKIT_TEST
-/* The index multimapAtomNew and NewPermanent make, and the mask a hash
- * passes through: the suite runs once per index, and once with 2-bit
- * hashes so most values collide */
+/* The index multimapAtomNew makes (the suite's other tables take it too), and
+ * the mask a hash passes through: the suite runs once per index, and once with
+ * 2-bit hashes so most values collide */
 static multimapAtomIndex atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_HASHED;
 static uint32_t atomTestHashMask_ = UINT32_MAX;
 #endif
@@ -82,8 +141,8 @@ static void atomDictFree_(multidict *d) {
     }
 }
 
-static void atomInitIndexed_(multimapAtom *ma, const multimapAtomIndex index,
-                             const bool permanent) {
+static void atomInit_(multimapAtom *ma, const multimapAtomIndex index,
+                      const multimapAtomIds ids) {
     /* Every multimap of the table takes the atom family's node limit */
     const flexCapSizeLimit limit = dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM);
 
@@ -108,32 +167,32 @@ static void atomInitIndexed_(multimapAtom *ma, const multimapAtomIndex index,
         break;
     }
 
-    ma->highest = (permanent ? ATOM_PERMANENT_BIT_ : 0) |
+    ma->highest = ((uint64_t)ids << ATOM_IDS_SHIFT_) |
                   ((uint64_t)index << ATOM_INDEX_SHIFT_);
 }
 
-multimapAtom *multimapAtomNewIndexed(const multimapAtomIndex index,
-                                     const bool permanent) {
+multimapAtom *multimapAtomNewConfig(const multimapAtomConfig *config) {
+    const multimapAtomConfig settings =
+        config ? *config : (multimapAtomConfig){};
+    if (settings.index > MULTIMAP_ATOM_INDEX_DICT ||
+        settings.ids > MULTIMAP_ATOM_IDS_LOWEST) {
+        return nullptr;
+    }
+
     /* @own: caller; free=multimapAtomFree */
     multimapAtom *ma = zcalloc(1, sizeof(*ma));
-    atomInitIndexed_(ma, index, permanent);
+    atomInit_(ma, settings.index, settings.ids);
     return ma;
 }
 
-static multimapAtomIndex atomDefaultIndex_(void) {
-#ifdef DATAKIT_TEST
-    return atomTestDefaultIndex_;
-#else
-    return MULTIMAP_ATOM_INDEX_HASHED;
-#endif
-}
-
 multimapAtom *multimapAtomNew(void) {
-    return multimapAtomNewIndexed(atomDefaultIndex_(), false);
-}
-
-multimapAtom *multimapAtomNewPermanent(void) {
-    return multimapAtomNewIndexed(atomDefaultIndex_(), true);
+#ifdef DATAKIT_TEST
+    /* The suite runs once per index through the plain constructor */
+    return multimapAtomNewConfig(
+        &(multimapAtomConfig){.index = atomTestDefaultIndex_});
+#else
+    return multimapAtomNewConfig(nullptr);
+#endif
 }
 
 /* ====================================================================
@@ -148,6 +207,7 @@ void multimapAtomFree(multimapAtom *ma) {
             multimapFree(ma->mapAtomReverse);
         }
 
+        multiroarFree(ma->holes);
         zfree(ma);
     }
 }
@@ -464,10 +524,7 @@ static void abstractInsert(multimapAtom *ma, const databox *reverseKey,
     atomForwardAdd_(ma, id, reverseKey);
     atomIndexInsert_(ma, reverseKey, &atomId);
     assert(idRowsCount(ma->forward) == atomIndexCount_(ma));
-
-    if (id >= atomNextId_(ma)) {
-        atomSetNextId_(ma, id + 1);
-    }
+    atomBindId_(ma, id);
 }
 
 /* A new atom's forward row, made by atomFindOrCreate_ once its reverse
@@ -482,11 +539,7 @@ typedef struct atomCreate_ {
 static void atomCreateForward_(void *ctx) {
     const atomCreate_ *c = ctx;
     atomForwardAdd_(c->ma, c->id, c->key);
-
-    /* Generated ids continue past every id in use */
-    if (c->id >= atomNextId_(c->ma)) {
-        atomSetNextId_(c->ma, c->id + 1);
-    }
+    atomBindId_(c->ma, c->id);
 }
 
 /* The atom of 'key' in one reverse search: true when it existed ('ref'
@@ -543,14 +596,9 @@ static bool atomFindOrCreateWithId_(multimapAtom *ma, const databox *key,
     return false;
 }
 
-bool multimapAtomFindOrCreateWithId(multimapAtom *ma, const databox *key,
-                                    uint64_t id, databox *ref) {
-    return atomFindOrCreateWithId_(ma, key, id, ref);
-}
-
 static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
                               databox *ref) {
-    return atomFindOrCreateWithId_(ma, key, atomNextId_(ma), ref);
+    return atomFindOrCreateWithId_(ma, key, multimapAtomNextId(ma), ref);
 }
 
 /* Add 'delta' to the stored count of the atom 'ref' and return the result:
@@ -559,7 +607,7 @@ static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
  * reached by id, with no search. */
 static int64_t atomCountAdd_(multimapAtom *ma, const databox *ref,
                              const int64_t delta) {
-    assert(!multimapAtomIsPermanent(ma));
+    assert(!atomIsPermanent_(ma));
     int64_t next = 0;
     idRowsFieldIncr(ma->forward, ref->data.u, ATOM_ROW_COUNT_, delta, &next);
     return next;
@@ -570,7 +618,7 @@ static int64_t atomCountAdd_(multimapAtom *ma, const databox *ref,
  * 'ref' its reference. */
 static bool atomRetainKey_(multimapAtom *ma, const databox *key, databox *ref) {
     const bool existed = atomFindOrCreate_(ma, key, ref);
-    if (existed && !multimapAtomIsPermanent(ma)) {
+    if (existed && !atomIsPermanent_(ma)) {
         atomCountAdd_(ma, ref, 1);
     }
 
@@ -578,11 +626,11 @@ static bool atomRetainKey_(multimapAtom *ma, const databox *key, databox *ref) {
 }
 
 void multimapAtomInsert(multimapAtom *ma, const databox *box) {
-    abstractInsert(ma, box, atomNextId_(ma));
+    abstractInsert(ma, box, multimapAtomNextId(ma));
 }
 
 void multimapAtomInsertConvert(multimapAtom *ma, databox *box) {
-    const uint64_t id = atomNextId_(ma);
+    const uint64_t id = multimapAtomNextId(ma);
     const databox incr = {.data.u = id,
                           .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
 
@@ -620,8 +668,8 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
     atomIndexInsert_(ma, reverseKey, &atomId);
 
     /* After the deletes above, which restart ids when they empty the table */
-    if (atomRef >= atomNextId_(ma) && atomRef + 1 < MULTIMAP_ATOM_ID_LIMIT) {
-        atomSetNextId_(ma, atomRef + 1);
+    if (atomRef + 1 < MULTIMAP_ATOM_ID_LIMIT) {
+        atomBindId_(ma, atomRef);
     }
 }
 
@@ -729,7 +777,7 @@ bool multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
  * ==================================================================== */
 void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef) {
     assert(foundRef->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL);
-    if (multimapAtomIsPermanent(ma)) {
+    if (atomIsPermanent_(ma)) {
         return; /* no count is kept: the atom lives until Delete or Free */
     }
 
@@ -758,34 +806,47 @@ void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
  * Un-use
  * ==================================================================== */
 /* After the atom 'deletedId' is deleted, whichever call deleted it.  A
- * permanent table never hands an id out again.  A reusing table keeps its
- * ids small (fewer external-reference storage bytes) where that costs
- * nothing to discover: an empty table restarts at 0, and deleting the
- * atom with the highest id lowers the next id to just past the largest
- * live one (the forward rows' last id), so
- * last-in-first-out churn reuses the same ids.  An interior hole stays
- * unused until the table empties; multimapAtomDense reuses every hole,
- * lowest first.
+ * permanent table never hands an id out again.  REUSE and LOWEST keep ids
+ * small (fewer external-reference storage bytes): an empty table restarts
+ * at 0, and deleting the atom with the highest id lowers the next id to
+ * just past the largest live one (the forward rows' last id), so
+ * last-in-first-out churn reuses the same ids.  Under REUSE an interior
+ * hole stays unused until the table empties; LOWEST keeps it in 'holes'
+ * for the next new atom.
  *
- * CONTRACT (reusing tables): an id is valid while its atom exists.  A
+ * CONTRACT (REUSE and LOWEST): an id is valid while its atom exists.  A
  * caller MUST NOT keep a bare id/ref after releasing its references: it
  * may then resolve to an unrelated later entry. */
 static void atomAfterDelete_(multimapAtom *ma, const uint64_t deletedId) {
-    if (multimapAtomIsPermanent(ma)) {
+    if (atomIsPermanent_(ma)) {
         return;
     }
 
     if (idRowsCount(ma->forward) == 0) {
         atomSetNextId_(ma, 0);
+        multiroarFree(ma->holes);
+        ma->holes = nullptr;
         return;
     }
 
-    if (deletedId + 1 == atomNextId_(ma)) {
+    const uint64_t next = atomNextId_(ma);
+    if (deletedId + 1 == next) {
         uint64_t last;
         if (idRowsLast(ma->forward, &last) &&
             last + 1 < MULTIMAP_ATOM_ID_LIMIT) {
             atomSetNextId_(ma, last + 1);
+            /* The holes above the new next are past every live id */
+            if (ma->holes) {
+                multiroarBitClearRange(ma->holes, last + 1, next - last - 1);
+                atomHolesReleaseIfEmpty_(ma);
+            }
         }
+    } else if (multimapAtomGetIds(ma) == MULTIMAP_ATOM_IDS_LOWEST) {
+        if (!ma->holes) {
+            /* @own: container; free=multimapAtomFree */
+            ma->holes = multiroarBitNew();
+        }
+        multiroarBitSet(ma->holes, deletedId);
     }
 }
 
@@ -814,7 +875,7 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
      * We use 0-based internal refcounts for memory efficiency:
      * Internal 0 = 1 ref, 1 = 2 refs, etc. (DATABOX_FALSE = 1 byte vs 3 bytes)
      * When it goes negative, no more references exist. */
-    if (multimapAtomIsPermanent(ma)) {
+    if (atomIsPermanent_(ma)) {
         return false; /* permanent atoms live until Delete or Free */
     }
 
@@ -859,8 +920,7 @@ bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
         }
     }
 
-    /* else, releasing something we don't have is an error */
-    assert(false && "Releasing something not in the atom table?");
+    /* A value not in the table: nothing to release */
     return false;
 }
 
@@ -917,16 +977,19 @@ size_t multimapAtomCount(const multimapAtom *ma) {
 size_t multimapAtomBytes(const multimapAtom *ma) {
     assert(idRowsCount(ma->forward) == atomIndexCount_(ma));
 
-    return idRowsBytes(ma->forward) + atomIndexBytes_(ma);
+    return idRowsBytes(ma->forward) + atomIndexBytes_(ma) +
+           (ma->holes ? (size_t)multiroarMemoryUsage(ma->holes) : 0);
 }
 
 /* ====================================================================
  * Persistence (atomPersist.h)
  * ==================================================================== */
-static constexpr unsigned ATOM_PERSIST_FLAG_PERMANENT_ = 1u;
-/* The reverse index kind (multimapAtomIndex) in flag bits 1-2; the index
- * itself is rebuilt from the rows, never stored */
-static constexpr unsigned ATOM_PERSIST_INDEX_SHIFT_ = 1;
+/* The id behaviour (multimapAtomIds) in flag bits 0-1 and the reverse
+ * index kind (multimapAtomIndex) in bits 2-3; the index itself is rebuilt
+ * from the rows, never stored, and so is LOWEST's free set (the ids below
+ * the next id with no row) */
+static constexpr unsigned ATOM_PERSIST_FLAG_IDS_ = 3u;
+static constexpr unsigned ATOM_PERSIST_INDEX_SHIFT_ = 2;
 static constexpr unsigned ATOM_PERSIST_FLAG_INDEX_ =
     3u << ATOM_PERSIST_INDEX_SHIFT_;
 
@@ -967,7 +1030,7 @@ void multimapAtomGetStats(const multimapAtom *ma, multimapAtomStats *stats) {
 
     *stats = (multimapAtomStats){.tableBytes = multimapAtomBytes(ma),
                                  .unitLimit = unitLimit};
-    const bool permanent = multimapAtomIsPermanent(ma);
+    const bool permanent = atomIsPermanent_(ma);
 
     idRowsIterator iter;
     idRowsIteratorInit(ma->forward, &iter);
@@ -1005,7 +1068,7 @@ static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
     /* @own: caller; free=zfree */
     flex *f = flexNew();
     const databox flags = DATABOX_UNSIGNED(
-        (multimapAtomIsPermanent(ma) ? ATOM_PERSIST_FLAG_PERMANENT_ : 0) |
+        (unsigned)multimapAtomGetIds(ma) |
         ((unsigned)multimapAtomGetIndex(ma) << ATOM_PERSIST_INDEX_SHIFT_));
     const databox next = DATABOX_UNSIGNED(atomNextId_(ma));
     const databox *header[2] = {&flags, &next};
@@ -1172,6 +1235,31 @@ static bool atomPersistDictIndex_(multidict *d, const databoxBig *values,
     return true;
 }
 
+/* LOWEST: the free set from the ascending live 'ids' (the ids below the
+ * next id with no row); false unless the highest live id is the next id
+ * less one (an empty table's next id is 0), as a LOWEST table keeps it */
+static bool atomRestoreHoles_(multimapAtom *ma, const uint64_t *ids,
+                              const size_t atoms) {
+    const uint64_t next = atomNextId_(ma);
+    if (atoms ? ids[atoms - 1] + 1 != next : next != 0) {
+        return false;
+    }
+
+    uint64_t expected = 0;
+    for (size_t r = 0; r < atoms; r++) {
+        if (ids[r] > expected) {
+            if (!ma->holes) {
+                /* @own: container; free=multimapAtomFree */
+                ma->holes = multiroarBitNew();
+            }
+            multiroarBitSetRange(ma->holes, expected, ids[r] - expected);
+        }
+        expected = ids[r] + 1;
+    }
+
+    return true;
+}
+
 static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
         return nullptr;
@@ -1184,22 +1272,23 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     uint64_t next;
     if (n < 2 || (n - 2) % 3 || !flexReadUnsigned(f, &fe, &flags) ||
         !flexReadUnsigned(f, &fe, &next) ||
-        (flags & ~(uint64_t)(ATOM_PERSIST_FLAG_PERMANENT_ |
-                             ATOM_PERSIST_FLAG_INDEX_)) ||
+        (flags &
+         ~(uint64_t)(ATOM_PERSIST_FLAG_IDS_ | ATOM_PERSIST_FLAG_INDEX_)) ||
         next >= MULTIMAP_ATOM_ID_LIMIT) {
         return nullptr;
     }
 
-    const uint64_t indexField =
-        (flags & ATOM_PERSIST_FLAG_INDEX_) >> ATOM_PERSIST_INDEX_SHIFT_;
-    if (indexField > MULTIMAP_ATOM_INDEX_DICT) {
+    /* NewConfig refuses an unknown index or id behaviour */
+    const multimapAtomConfig config = {
+        .index = (multimapAtomIndex)((flags & ATOM_PERSIST_FLAG_INDEX_) >>
+                                     ATOM_PERSIST_INDEX_SHIFT_),
+        .ids = (multimapAtomIds)(flags & ATOM_PERSIST_FLAG_IDS_)};
+    cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNewConfig(&config);
+    if (!ma) {
         return nullptr;
     }
 
-    cleaner(multimapAtomFree) multimapAtom *ma =
-        multimapAtomNewIndexed((multimapAtomIndex)indexField,
-                               (flags & ATOM_PERSIST_FLAG_PERMANENT_) != 0);
-    const bool permanent = multimapAtomIsPermanent(ma);
+    const bool permanent = atomIsPermanent_(ma);
     const size_t atoms = (n - 2) / 3;
 
     /* Each value, kept in place (a 96/128-bit box points into itself) and
@@ -1264,6 +1353,11 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
     }
 
     atomSetNextId_(ma, next);
+    if (config.ids == MULTIMAP_ATOM_IDS_LOWEST &&
+        !atomRestoreHoles_(ma, ids, atoms)) {
+        return nullptr;
+    }
+
     multimapAtom *out = ma;
     ma = nullptr;
     return out;
@@ -1405,6 +1499,14 @@ void multimapAtomRepr(const multimapAtom *ma) {
 }
 
 /* Callback for iterator */
+/* A table with 'index' and 'ids' */
+static multimapAtom *atomTestNew_(multimapAtomIndex index,
+                                  multimapAtomIds ids) {
+    /* @own: caller; free=multimapAtomFree */
+    return multimapAtomNewConfig(
+        &(multimapAtomConfig){.index = index, .ids = ids});
+}
+
 static bool populateSet(void *userData, const databox *elements[]) {
     multimap **setMap = userData;
 
@@ -2846,9 +2948,10 @@ static int atomTestSuite_(void) {
     }
 
     TEST("permanent: atoms outlive their references; ids never repeat") {
-        multimapAtom *ma = multimapAtomNewPermanent();
+        multimapAtom *ma =
+            atomTestNew_(atomTestDefaultIndex_, MULTIMAP_ATOM_IDS_PERMANENT);
         multimapAtom *reusing = multimapAtomNew();
-        if (!multimapAtomIsPermanent(ma) || multimapAtomIsPermanent(reusing)) {
+        if (!atomIsPermanent_(ma) || atomIsPermanent_(reusing)) {
             ERR("the id behaviour is not what the constructor chose");
         }
 
@@ -3315,7 +3418,8 @@ static int atomTestSuite_(void) {
         }
 
         /* A permanent table counts one reference per atom */
-        multimapAtom *perm = multimapAtomNewPermanent();
+        multimapAtom *perm =
+            atomTestNew_(atomTestDefaultIndex_, MULTIMAP_ATOM_IDS_PERMANENT);
         databox p = databoxNewBytesString(longValue);
         multimapAtomInsertIfNewConvert(perm, &p);
         multimapAtomRetainById(perm, p.data.u);
@@ -3492,7 +3596,7 @@ static int atomTestDifferential_(void) {
     constexpr int32_t values = 600;
     multimapAtom *t[ATOM_TEST_KINDS];
     for (size_t k = 0; k < ATOM_TEST_KINDS; k++) {
-        t[k] = multimapAtomNewIndexed(atomTestKinds_[k].index, false);
+        t[k] = atomTestNew_(atomTestKinds_[k].index, MULTIMAP_ATOM_IDS_REUSE);
     }
 
     uint64_t rng = 0xD1FF;
@@ -3597,8 +3701,8 @@ static int atomTestDifferential_(void) {
                     ERR("a %s snapshot did not restore with its index",
                         atomTestKinds_[k].name);
                     if (!t[k]) {
-                        t[k] = multimapAtomNewIndexed(atomTestKinds_[k].index,
-                                                      false);
+                        t[k] = atomTestNew_(atomTestKinds_[k].index,
+                                            MULTIMAP_ATOM_IDS_REUSE);
                     }
                 }
             }
@@ -3607,6 +3711,334 @@ static int atomTestDifferential_(void) {
 
     for (size_t k = 0; k < ATOM_TEST_KINDS; k++) {
         multimapAtomFree(t[k]);
+    }
+
+    return err;
+}
+
+/* ====================================================================
+ * LOWEST ids: a differential soak against an oracle, and the free set
+ * ==================================================================== */
+static constexpr int ATOM_LOWEST_TEST_IDS_ = 2048;
+
+/* The oracle: which ids are live, the value each holds and its
+ * references */
+typedef struct atomLowestOracle_ {
+    bool live[ATOM_LOWEST_TEST_IDS_];
+    int64_t value[ATOM_LOWEST_TEST_IDS_];
+    uint32_t refs[ATOM_LOWEST_TEST_IDS_];
+    size_t count;
+} atomLowestOracle_;
+
+static uint64_t atomLowestOracleFree_(const atomLowestOracle_ *o) {
+    for (uint64_t id = 0; id < ATOM_LOWEST_TEST_IDS_; id++) {
+        if (!o->live[id]) {
+            return id;
+        }
+    }
+
+    return ATOM_LOWEST_TEST_IDS_;
+}
+
+/* A random live id, or ATOM_LOWEST_TEST_IDS_ when none */
+static uint64_t atomLowestOraclePick_(const atomLowestOracle_ *o,
+                                      uint64_t *rng) {
+    if (o->count == 0) {
+        return ATOM_LOWEST_TEST_IDS_;
+    }
+
+    uint64_t id = dkSplitmix64Next(rng) % ATOM_LOWEST_TEST_IDS_;
+    while (!o->live[id]) {
+        id = (id + 1) % ATOM_LOWEST_TEST_IDS_;
+    }
+
+    return id;
+}
+
+/* Values alternate between integers and strings so both kinds of key are
+ * interned; the string form spells the integer with a prefix */
+static databox atomLowestValue_(const int64_t v, char *buf, const size_t cap) {
+    if (v % 3 == 0) {
+        const int len = snprintf(buf, cap, "v%" PRId64, v);
+        return databoxNewBytes(buf, (size_t)len);
+    }
+
+    return databoxNewSigned(v);
+}
+
+static bool atomLowestValueIs_(const databox *got, const int64_t v) {
+    char buf[32];
+    const databox want = atomLowestValue_(v, buf, sizeof(buf));
+    return databoxCompare(got, &want) == 0;
+}
+
+static int atomLowestSoak_(const multimapAtomIndex index, const uint64_t seed,
+                           const size_t ops) {
+    int err = 0;
+    uint64_t rng = seed;
+    static atomLowestOracle_ o;
+    memset(&o, 0, sizeof(o));
+    int64_t nextValue = 1;
+    multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+    for (size_t op = 0; op < ops && !err; op++) {
+        const uint64_t r = dkSplitmix64Next(&rng) % 100;
+        const uint64_t pick = atomLowestOraclePick_(&o, &rng);
+        char buf[32];
+        if (r < 40 || pick == ATOM_LOWEST_TEST_IDS_) {
+            /* A new value gets the lowest free id */
+            if (o.count == ATOM_LOWEST_TEST_IDS_ - 1) {
+                continue;
+            }
+
+            const uint64_t want = atomLowestOracleFree_(&o);
+            const int64_t v = nextValue++;
+            databox key = atomLowestValue_(v, buf, sizeof(buf));
+            if (multimapAtomInsertIfNewConvert(ma, &key) || !key.created ||
+                key.data.u != want) {
+                ERR("op %zu: new value got id %" PRIuMAX ", want %" PRIu64, op,
+                    key.data.u, want);
+                break;
+            }
+
+            o.live[want] = true;
+            o.value[want] = v;
+            o.refs[want] = 1;
+            o.count++;
+        } else if (r < 50) {
+            /* An existing value: its id, no new reference */
+            databox key = atomLowestValue_(o.value[pick], buf, sizeof(buf));
+            if (!multimapAtomInsertIfNewConvert(ma, &key) || key.created ||
+                key.data.u != pick) {
+                ERR("op %zu: existing value did not return id %" PRIu64, op,
+                    pick);
+            }
+        } else if (r < 60) {
+            databox key = atomLowestValue_(o.value[pick], buf, sizeof(buf));
+            multimapAtomInsertIfNewConvertAndRetain(ma, &key);
+            o.refs[pick]++;
+        } else if (r < 70) {
+            multimapAtomRetainById(ma, pick);
+            o.refs[pick]++;
+        } else if (r < 95) {
+            /* Release by id, or by value one time in five */
+            const databox key =
+                atomLowestValue_(o.value[pick], buf, sizeof(buf));
+            const databox ref = atomRefBox_(pick);
+            const bool deleted = r >= 90 ? multimapAtomRelease(ma, &key)
+                                         : multimapAtomReleaseById(ma, &ref);
+            o.refs[pick]--;
+            if (deleted != (o.refs[pick] == 0)) {
+                ERR("op %zu: release of id %" PRIu64 " reported %s", op, pick,
+                    deleted ? "a delete" : "no delete");
+            }
+
+            if (o.refs[pick] == 0) {
+                o.live[pick] = false;
+                o.count--;
+            }
+        } else {
+            if (!multimapAtomDeleteById(ma, pick)) {
+                ERR("op %zu: DeleteById(%" PRIu64 ") failed", op, pick);
+            }
+
+            o.live[pick] = false;
+            o.refs[pick] = 0;
+            o.count--;
+        }
+
+        if (multimapAtomNextId(ma) != atomLowestOracleFree_(&o) ||
+            multimapAtomCount(ma) != o.count) {
+            ERR("op %zu: next id %" PRIu64 " / count %zu, want %" PRIu64
+                " / %zu",
+                op, multimapAtomNextId(ma), multimapAtomCount(ma),
+                atomLowestOracleFree_(&o), o.count);
+        }
+
+        if (op % 512 == 511) {
+            for (uint64_t id = 0; id < ATOM_LOWEST_TEST_IDS_; id++) {
+                if (!o.live[id]) {
+                    continue;
+                }
+
+                const databox ref = atomRefBox_(id);
+                databox got = {};
+                if (!multimapAtomLookup(ma, &ref, &got) ||
+                    !atomLowestValueIs_(&got, o.value[id])) {
+                    ERR("op %zu: id %" PRIu64 " does not resolve", op, id);
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Delete everything: the free set goes, ids restart at 0 */
+    for (uint64_t id = 0; id < ATOM_LOWEST_TEST_IDS_; id++) {
+        if (o.live[id] && !multimapAtomDeleteById(ma, id)) {
+            ERR("drain: DeleteById(%" PRIu64 ") failed", id);
+        }
+    }
+
+    if (multimapAtomCount(ma) != 0 || multimapAtomNextId(ma) != 0 ||
+        ma->holes || atomNextId_(ma) != 0) {
+        ERR("a drained table did not return to id 0 with no holes");
+    }
+
+    multimapAtomFree(ma);
+    return err;
+}
+
+/* Every LOWEST behaviour on a table with the index 'index' */
+static int atomTestLowest_(const multimapAtomIndex index) {
+    int err = 0;
+
+    TEST("LOWEST: delete by value frees its id; a replayed insert past the "
+         "next id leaves the ids it skips as holes") {
+        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        databox a = databoxNewSigned(1);
+        databox b = databoxNewSigned(2);
+        multimapAtomInsertConvert(ma, &a); /* id 0 */
+        multimapAtomInsertConvert(ma, &b); /* id 1 */
+        const databox one = databoxNewSigned(1);
+        if (!multimapAtomDelete(ma, &one) || multimapAtomCount(ma) != 1 ||
+            multimapAtomDelete(ma, &one)) {
+            ERR("a delete by value did not remove exactly that atom");
+        }
+        databox c = databoxNewSigned(3);
+        multimapAtomInsertConvert(ma, &c);
+        if (c.data.u != 0 || ma->holes) {
+            ERR("the freed id came back as %" PRIuMAX, c.data.u);
+        }
+
+        /* A WAL insert under id 6 while the next id is 2: 2..5 are holes,
+         * filled lowest first, and the next new id is 7 */
+        const databox id6 = databoxNewUnsigned(6);
+        const databox nine = databoxNewSigned(9);
+        const databox *args[2] = {&id6, &nine};
+        size_t len = 0;
+        uint8_t *body =
+            persistOpsMultimapAtom.encodeOp(PERSIST_OP_INSERT, args, 2, &len);
+        multimapAtom *target = ma;
+        if (!body || !persistOpsMultimapAtom.applyOp(&target, PERSIST_OP_INSERT,
+                                                     body, len)) {
+            ERR("the replayed insert was refused");
+        }
+        zfree(body);
+        const uint64_t want[] = {2, 3, 4, 5, 7};
+        for (size_t i = 0; i < countof(want); i++) {
+            databox x = databoxNewSigned(100 + (int64_t)i);
+            multimapAtomInsertConvert(ma, &x);
+            if (x.data.u != want[i]) {
+                ERR("atom %zu got id %" PRIuMAX ", want %" PRIu64, i, x.data.u,
+                    want[i]);
+            }
+        }
+        multimapAtomFree(ma);
+    }
+
+    TEST("LOWEST: lowest free id first, holes filled lowest first") {
+        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        for (int i = 0; i < 8; i++) {
+            databox v = databoxNewSigned(500 + i);
+            multimapAtomInsertConvert(ma, &v); /* ids 0..7 */
+        }
+
+        /* Free 5, 2 and 6: the next atoms take 2, 5, 6, then 8 */
+        const databox five = atomRefBox_(5);
+        const databox two = atomRefBox_(2);
+        multimapAtomReleaseById(ma, &five);
+        multimapAtomReleaseById(ma, &two);
+        multimapAtomDeleteById(ma, 6);
+        const uint64_t want[] = {2, 5, 6, 8};
+        for (size_t i = 0; i < countof(want); i++) {
+            databox x = databoxNewSigned(600 + (int64_t)i);
+            multimapAtomInsertConvert(ma, &x);
+            if (x.data.u != want[i]) {
+                ERR("atom %zu got id %" PRIuMAX ", want %" PRIu64, i, x.data.u,
+                    want[i]);
+            }
+        }
+
+        /* Freeing the top ids lowers the next id past holes below them */
+        multimapAtomDeleteById(ma, 6);
+        multimapAtomDeleteById(ma, 8);
+        multimapAtomDeleteById(ma, 7);
+        if (multimapAtomNextId(ma) != 6 || atomNextId_(ma) != 6 || ma->holes) {
+            ERR("next id %" PRIu64 " (counter %" PRIu64 "), want 6, no holes",
+                multimapAtomNextId(ma), atomNextId_(ma));
+        }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("LOWEST: a missing value or id releases and deletes nothing") {
+        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        databox a = databoxNewSigned(1);
+        multimapAtomInsertConvert(ma, &a);
+        const databox missing = databoxNewSigned(2);
+        const databox nine = atomRefBox_(9);
+        if (multimapAtomRelease(ma, &missing) ||
+            multimapAtomReleaseById(ma, &nine) ||
+            multimapAtomDelete(ma, &missing) || multimapAtomDeleteById(ma, 9) ||
+            multimapAtomCount(ma) != 1 || multimapAtomNextId(ma) != 1) {
+            ERR("a miss changed the table");
+        }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("LOWEST: differential soak against an oracle, allocations balanced") {
+        multimapTestAllocCountBegin();
+        for (uint64_t seed = 1; seed <= 3; seed++) {
+            err += atomLowestSoak_(index, seed, 6000);
+        }
+
+        const int64_t live = multimapTestAllocCountEnd();
+        if (live != 0) {
+            ERR("%" PRId64 " allocations outlived the soak", live);
+        }
+    }
+
+    TEST("LOWEST: holes cost bytes only while they exist; a snapshot "
+         "restores them") {
+        multimapAtom *ma = atomTestNew_(index, MULTIMAP_ATOM_IDS_LOWEST);
+        for (int i = 0; i < 1000; i++) {
+            databox x = databoxNewSigned(i);
+            multimapAtomInsertConvert(ma, &x);
+        }
+
+        if (ma->holes) {
+            ERR("a table without holes keeps a free set");
+        }
+
+        for (uint64_t id = 0; id < 1000; id += 2) {
+            multimapAtomDeleteById(ma, id);
+        }
+
+        if (!ma->holes || multimapAtomNextId(ma) != 0) {
+            ERR("500 holes are not tracked");
+        }
+
+        /* The snapshot keeps the policy; restore rebuilds the free set */
+        size_t len = 0;
+        uint8_t *snap = persistOpsMultimapAtom.snapshot(ma, &len);
+        multimapAtom *back = persistOpsMultimapAtom.restore(snap, len);
+        zfree(snap);
+        if (!back || multimapAtomGetIds(back) != MULTIMAP_ATOM_IDS_LOWEST ||
+            multimapAtomNextId(back) != 0 || multimapAtomCount(back) != 500) {
+            ERR("the restored table lost its free set");
+        }
+        multimapAtomFree(back);
+
+        for (int i = 0; i < 500; i++) {
+            databox x = databoxNewSigned(5000 + i);
+            multimapAtomInsertConvert(ma, &x);
+        }
+
+        if (ma->holes || multimapAtomNextId(ma) != 1000) {
+            ERR("refilling every hole did not release the free set");
+        }
+
+        multimapAtomFree(ma);
     }
 
     return err;
@@ -3623,6 +4055,7 @@ int multimapAtomTest(int, char *[]) {
                atomTestKinds_[k].name);
         atomTestDefaultIndex_ = atomTestKinds_[k].index;
         err += atomTestSuite_();
+        err += atomTestLowest_(atomTestKinds_[k].index);
     }
 
     atomTestDefaultIndex_ = MULTIMAP_ATOM_INDEX_HASHED;
@@ -3663,8 +4096,8 @@ int multimapAtomTest(int, char *[]) {
                     break;
                 }
 
-                multimapAtom *ma =
-                    multimapAtomNewIndexed(atomTestKinds_[k].index, false);
+                multimapAtom *ma = atomTestNew_(atomTestKinds_[k].index,
+                                                MULTIMAP_ATOM_IDS_REUSE);
                 for (int32_t i = 0; i < atoms; i++) {
                     databox value;
                     switch ((atomTestShape)shape) {
@@ -3689,10 +4122,11 @@ int multimapAtomTest(int, char *[]) {
                 const size_t reported = multimapAtomBytes(ma);
                 const size_t count = multimapAtomCount(ma);
                 multimapAtomFree(ma);
-                perAtom[k] = (double)heap / atoms;
+                perAtom[atomTestKinds_[k].index] = (double)heap / atoms;
                 printf("    %s, %s: %.1f heap bytes per atom (%.1f "
                        "reported)\n",
-                       shapeNames[shape], atomTestKinds_[k].name, perAtom[k],
+                       shapeNames[shape], atomTestKinds_[k].name,
+                       perAtom[atomTestKinds_[k].index],
                        (double)reported / atoms);
                 if (count != (size_t)atoms || heap <= 0 ||
                     reported > (size_t)heap) {
@@ -3722,7 +4156,7 @@ int multimapAtomTest(int, char *[]) {
         const persistOps *ops = &persistOpsMultimapAtom;
         for (size_t k = 0; k < countof(atomTestKinds_); k++) {
             multimapAtom *ma =
-                multimapAtomNewIndexed(atomTestKinds_[k].index, false);
+                atomTestNew_(atomTestKinds_[k].index, MULTIMAP_ATOM_IDS_REUSE);
             for (int i = 0; i < 3; i++) {
                 databox v = databoxNewSigned(1000 + i);
                 multimapAtomInsertConvert(ma, &v); /* ids 0, 1, 2 */
