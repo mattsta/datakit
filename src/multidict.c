@@ -1168,6 +1168,14 @@ bool multidictRehash(multidict *d, int32_t n) {
     if (HTCOUNT(d, 0) == 0) {
         DBG_PRINT("multidictRehash: COMPLETING REHASH - ht0 empty, moving ht1 "
                   "to ht0\n");
+        /* Slots past rehashidx hold no rows (deletes emptied them) but
+         * are still allocated: they go with the table */
+        for (uint32_t i = d->rehashidx; i < HTSIZE(d, 0); i++) {
+            if (SLOT(d, 0, i)) {
+                shared->freeSlot(shared, SLOT(d, 0, i));
+            }
+        }
+
         zfree(d->ht[0].table);
         d->ht[0] = d->ht[1];
         multidictResetHT(HT(d, 1));
@@ -6727,6 +6735,64 @@ static bool mdTestDoubleValue_(void *, const databox *current,
     return true;
 }
 
+/* The churn test's key 'v': a short string for every third, else 'v' */
+static databox mdChurnKey_(uint32_t v, char *buf, size_t cap) {
+    if (v % 3) {
+        return databoxNewSigned(v);
+    }
+
+    return databoxNewBytes(buf, (size_t)snprintf(buf, cap, "v%u", v));
+}
+
+/* 512 keys added and taken at random under 'seed', each operation's
+ * rehash finished at once, then every live key taken; the dict and its
+ * class are freed on return */
+static int multidictTestChurn_(int32_t seed) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, seed);
+    uint64_t rng = (uint64_t)seed;
+    bool live[512] = {};
+    size_t count = 0;
+    for (int op = 0; op < 6000 + 512; op++) {
+        /* The churn, then each key in turn so every live one goes */
+        const uint32_t v = op < 6000 ? (uint32_t)(dkSplitmix64Next(&rng) % 512)
+                                     : (uint32_t)(op - 6000);
+        if (op >= 6000 && !live[v]) {
+            continue;
+        }
+
+        char buf[16];
+        const databox key = mdChurnKey_(v, buf, sizeof(buf));
+        const databox val = databoxNewUnsigned(v);
+        if (!live[v]) {
+            if (multidictAdd(d, &key, &val) != MULTIDICT_OK_INSERTED) {
+                ERR("seed %d op %d: key %u was not added", seed, op, v);
+            }
+            live[v] = true;
+            count++;
+        } else {
+            databox got = {};
+            if (!multidictGetAndDelete(d, &key, &got) || got.data.u != v) {
+                ERR("seed %d op %d: key %u was not taken", seed, op, v);
+            }
+            live[v] = false;
+            count--;
+        }
+
+        while (multidictRehash(d, 1024)) {
+        }
+
+        if (multidictCount(d) != count) {
+            ERR("seed %d op %d: count %" PRIu64 ", want %zu", seed, op,
+                multidictCount(d), count);
+        }
+    }
+
+    return err;
+}
+
 int multidictTest(int, char *[]) {
     int err = 0;
 
@@ -11444,6 +11510,23 @@ int multidictTest(int, char *[]) {
             ERR("benchmark results wrong: found %" PRIu64 " iterated %" PRIu64
                 " deleted %" PRIu64,
                 found, iterated, deleted);
+        }
+    }
+
+    TEST("adds and taking deletes under growth and shrink rehashes free "
+         "every slot") {
+        /* Short strings and integers added and removed at random, each
+         * operation's rehash finished at once, then every key removed: no
+         * slot is lost from the tables, so freeing the dict frees all it
+         * held */
+        for (int32_t seed = 1; seed <= 8; seed++) {
+            multimapTestAllocCountBegin();
+            err += multidictTestChurn_(seed);
+            const int64_t leaked = multimapTestAllocCountEnd();
+            if (leaked != 0) {
+                ERR("seed %d: %" PRId64 " blocks outlived the dict", seed,
+                    leaked);
+            }
         }
     }
 
