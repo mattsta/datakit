@@ -25,6 +25,14 @@
  *   4. Strings: a type that stores strings keeps numeral-looking
  *      strings ("22", "007", "1.5", "-3", 128-bit numerals) as the same
  *      bytes through snapshot, restore and WAL replay.
+ *   5. Damaged ops (descriptors with a WAL): every truncation and a
+ *      seeded set of single-byte corruptions that clear bits of a
+ *      recorded op's body, applied through applyOp where the op belongs
+ *      in the log, are refused or applied, and either way the structure
+ *      still meets (1).  Never a crash, never a read past the body.
+ *      (Clearing bits never grows a numeric operand, so a damaged op
+ *      that still decodes asks no more work than its original; a valid
+ *      op's cost is its writer's.)
  *
  * A type registers a persistContractType (in its own file under
  * src/persist/contract/) and adds it to the registry in

@@ -8,6 +8,7 @@
 #include "../../cleaner.h"
 #include "../../ctest.h"
 #include "../../datakit.h"
+#include "../../dkC23.h" /* stdc_bit_width */
 #include "../../str.h"
 #include "../../timeUtil.h"
 
@@ -200,6 +201,8 @@ typedef struct pcRow {
     size_t opsReplayed;
     size_t damagedRefused;
     size_t damagedAccepted;
+    size_t damagedOpsRefused;
+    size_t damagedOpsAccepted;
     int failures;
     char at[64]; /* the build being checked, for failure lines */
 } pcRow;
@@ -413,6 +416,105 @@ static void pcDamage(pcRow *row, const persistOps *ops, const uint8_t *snap,
     }
 }
 
+/* Contract 5 on one damaged op body, applied to the structure restored
+ * from `state`: refused or applied, the structure meets (1) */
+static void pcDamagedOp(pcRow *row, const persistOps *ops, const uint8_t *state,
+                        size_t stateLen, const pcEntry *e, const uint8_t *body,
+                        size_t len, const char *what, size_t at) {
+    void *s = pcRestore(ops, state, stateLen);
+    if (!s) {
+        PC_FAIL(row, ops, "%s",
+                "op damage: the replayed state does not restore");
+        return;
+    }
+    /* An exact-size heap copy, so sanitizers see any read past the body */
+    cleanerName(zfree, Bytes) uint8_t *copy = zmalloc(len ? len : 1);
+    if (len) {
+        memcpy(copy, body, len);
+    }
+    if (ops->applyOp(&s, e->op, copy, len)) {
+        row->damagedOpsAccepted++;
+    } else {
+        row->damagedOpsRefused++;
+    }
+    char label[96];
+    snprintf(label, sizeof(label), "op %d %s at %zu", (int)e->op, what, at);
+    pcRoundTrip(row, ops, s, label, nullptr, nullptr);
+    ops->free(s);
+}
+
+/* Contract 5: for up to 8 entries spread over the log, every truncation
+ * and bit-clearing corruptions (every byte of a body up to 8 bytes, 8
+ * seeded positions of a longer one; its lowest set bit, its highest set
+ * bit, all of it) of the entry's body, applied right where the entry
+ * belongs.  Clearing bits never grows a numeric operand: a damaged body
+ * that still decodes asks no more work than the op it came from (a
+ * range op's extent cannot turn into 2^56 bits) */
+static void pcDamageOps(pcRow *row, const persistOps *ops,
+                        const persistContractLog *log, uint64_t seed) {
+    if (!log->start || log->count == 0) {
+        return;
+    }
+    uint64_t rng = seed;
+    const size_t picks = log->count < 8 ? log->count : 8;
+    for (size_t k = 0; k < picks; k++) {
+        const size_t idx = k * log->count / picks;
+        const pcEntry *e = &log->entries[idx];
+
+        /* The state the entry applies to: the start plus entries before it */
+        void *s = pcRestore(ops, log->start, log->startLen);
+        for (size_t i = 0; s && i < idx; i++) {
+            const pcEntry *p = &log->entries[i];
+            if (!ops->applyOp(&s, p->op, p->data, p->len)) {
+                PC_FAIL(row, ops, "op damage: entry %zu does not replay", i);
+                ops->free(s);
+                return;
+            }
+        }
+        if (!s) {
+            return;
+        }
+        size_t stateLen = 0;
+        cleanerName(zfree, Bytes) uint8_t *state = ops->snapshot(s, &stateLen);
+        ops->free(s);
+        if (!state) {
+            return;
+        }
+
+        for (size_t t = 0; t < e->len; t++) {
+            pcDamagedOp(row, ops, state, stateLen, e, e->data, t, "truncated",
+                        t);
+        }
+        if (e->len == 0) {
+            continue;
+        }
+        cleanerName(zfree, Bytes) uint8_t *body = zmalloc(e->len);
+        memcpy(body, e->data, e->len);
+        const size_t positions = e->len <= 8 ? e->len : 8;
+        for (size_t p = 0; p < positions; p++) {
+            const size_t at =
+                e->len <= 8 ? p : (size_t)(splitmix64(&rng) % e->len);
+            const uint8_t was = body[at];
+            if (was == 0) {
+                continue; /* no bit to clear */
+            }
+            const uint8_t high =
+                (uint8_t)(1u << (stdc_bit_width((unsigned)was) - 1));
+            const uint8_t cleared[3] = {(uint8_t)(was & (was - 1)),
+                                        (uint8_t)(was & ~high), 0};
+            for (size_t m = 0; m < countof(cleared); m++) {
+                if (m > 0 && cleared[m] == cleared[m - 1]) {
+                    continue; /* a one-bit byte: the same corruption */
+                }
+                body[at] = cleared[m];
+                pcDamagedOp(row, ops, state, stateLen, e, body, e->len,
+                            "bits cleared", at);
+            }
+            body[at] = was;
+        }
+    }
+}
+
 /* Numeral-looking strings (contract 4) */
 static const char *const pcNumerals[] = {
     "22",
@@ -482,6 +584,10 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
         const bool hasWal = ops->encodeOp && ops->applyOp;
         if (hasWal) {
             pcWal(row, ops, &log, snap, snapLen);
+            /* The damage builds (snapOut) damage the log too */
+            if (snapOut) {
+                pcDamageOps(row, ops, &log, seed);
+            }
         }
         if (strings) {
             pcHolds(row, t, live, strings, "live");
@@ -625,8 +731,10 @@ int persistContractTest(int, char *[]) {
 
     printf("| type | elements | snapshot B/elem | snapshot ns/elem | "
            "restore ns/elem | WAL ops replayed | damaged refused | "
-           "damaged accepted | result |\n");
-    printf("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+           "damaged accepted | damaged ops refused | damaged ops accepted | "
+           "result |\n");
+    printf("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- "
+           "|\n");
     for (size_t i = 0; i < countof(pcRegistry); i++) {
         const persistContractType *t = pcRegistry[i];
         if (only && strcmp(only, t->ops->name) != 0) {
@@ -639,12 +747,13 @@ int persistContractTest(int, char *[]) {
                 (unsigned)t->ops->type, persistTypeName(t->ops->type));
         }
         const pcRow row = pcRun(t);
-        printf("| %s | %zu | %.2f | %.1f | %.1f | %zu | %zu | %zu | %s |\n",
+        printf("| %s | %zu | %.2f | %.1f | %.1f | %zu | %zu | %zu | %zu | %zu "
+               "| %s |\n",
                t->ops->name, row.elements, pcPer(row.snapshotLen, row.elements),
                pcPer(row.snapshotNs, row.elements),
                pcPer(row.restoreNs, row.elements), row.opsReplayed,
-               row.damagedRefused, row.damagedAccepted,
-               row.failures ? "FAIL" : "pass");
+               row.damagedRefused, row.damagedAccepted, row.damagedOpsRefused,
+               row.damagedOpsAccepted, row.failures ? "FAIL" : "pass");
         fflush(stdout);
         if (row.failures) {
             ERR("%s: %d contract failures", t->ops->name, row.failures);
