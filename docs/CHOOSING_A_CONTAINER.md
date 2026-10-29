@@ -18,17 +18,17 @@ of magnitude and as ratios between containers, not as guarantees.
 
 Throughput spans 1K to 1M elements and every element kind measured.
 
-| You need                                      | Use             | Operations per second                        | Bytes per element                             |
-| --------------------------------------------- | --------------- | -------------------------------------------- | --------------------------------------------- |
-| Values by position, fixed width               | multiarray      | 3-30M; reads to 190M while small             | exactly the width                             |
-| A queue or log: append, pop, iterate          | multilist       | 3-17M appends and pops                       | 4-5 for small integers, width + 2 for strings |
-| Key -> value, lookups only                    | multidict       | 1.2-16M reads, 0.6-4.5M writes               | key + value + 6-11                            |
-| Key -> value in key order (ranges, iteration) | multimap        | 0.5-3M, every operation                      | key + value + 4-9 (the densest map)           |
-| Members ranked by score                       | multiOrderedSet | 1.8-14M reads, 0.3-2M writes                 | member twice + score + ~20                    |
-| Integer membership, read-mostly               | intset          | 20-72M reads                                 | 2, 4 or 8, by the widest value                |
-| Integer membership, write-heavy or large      | multiroar       | 2.7-7M sets, 37-56M reads (clustered values) | under 1 when values cluster                   |
-| Many copies of the same strings               | stringPool      | 5-15M reads by id                            | see [Open items](#open-items)                 |
-| Recency for a cache stored elsewhere          | multilru        | 16-92M                                       | 14-23 per entry, no values                    |
+| You need                                      | Use             | Operations per second                                     | Bytes per element                             |
+| --------------------------------------------- | --------------- | --------------------------------------------------------- | --------------------------------------------- |
+| Values by position, fixed width               | multiarray      | 3-30M; reads to 190M while small                          | exactly the width                             |
+| A queue or log: append, pop, iterate          | multilist       | 3-17M appends and pops                                    | 4-5 for small integers, width + 2 for strings |
+| Key -> value, lookups only                    | multidict       | 1.2-16M reads, 0.6-4.5M writes                            | key + value + 6-11                            |
+| Key -> value in key order (ranges, iteration) | multimap        | 0.5-3M, every operation                                   | key + value + 4-9 (the densest map)           |
+| Members ranked by score                       | multiOrderedSet | 1.8-14M reads, 0.3-2M writes                              | member twice + score + ~20                    |
+| Integer membership, read-mostly               | intset          | 20-72M reads                                              | 2, 4 or 8, by the widest value                |
+| Integer membership, write-heavy or large      | multiroar       | 2.7-7M sets, 37-56M reads (clustered values)              | under 1 when values cluster                   |
+| Many copies of the same values (interning)    | multimapAtom    | 1-2M interns (compact), 2-14M (fast); reads by id to 200M | value + 11-19 (compact), + 36-50 (fast)       |
+| Recency for a cache stored elsewhere          | multilru        | 16-92M                                                    | 14-23 per entry, no values                    |
 
 ## What the measurements show
 
@@ -97,11 +97,17 @@ whole 64-bit range each land in a container of their own: about 16 bytes
 and 1.5-2.9M operations/s per member. For scattered values use intset
 (read-mostly) or multidict.
 
-### Strings shared by many owners: stringPool
+### Values shared by many owners: multimapAtom
 
-stringPool hands out a 64-bit id per distinct string and counts
-references. Reading a string by its id runs at 5-15M/s, the fastest
-string read in the matrix in almost every table.
+multimapAtom interns values (strings, integers, any databox): each
+distinct value is held once and named by an id, with a count of the
+holders (see [ATOMS.md](modules/multi/ATOMS.md)). The matrix measures two
+tables. The default, compact one (a hashed index over packed rows) holds
+an atom in its value's bytes plus 11-19: 275 bytes for a 256-byte string.
+It interns at 1-2M/s and reads by id at 4.5-35M/s. The fast one (a slot
+index over one row per id) interns at 2-14M/s and reads by id at
+70-200M/s for integers and 5-14M/s for strings, for 25-30 more bytes per
+atom than the compact table.
 
 ### Cache recency: multilru
 
@@ -109,12 +115,6 @@ multilru keeps only recency and weights per handle, at 14-23 bytes each.
 It stores no values, so it pairs with a container that does. Promotions,
 weight updates and deletes run at 16-92M/s, and weight updates reach
 440M/s while small.
-
-## Open items
-
-- stringPool holds each string twice: once for lookups by id and once
-  inside the hash table that maps strings to ids. A 256-byte string
-  takes about 550 bytes, where one copy would take about 290.
 
 ## Measuring it yourself
 

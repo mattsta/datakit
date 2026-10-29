@@ -72,8 +72,6 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractSegmentFloat,
     &persistContractSegmentDouble,
     &persistContractMultimapAtom,
-    &persistContractStringPool,
-    &persistContractAtomPool,
     &persistContractIdRows,
 };
 

@@ -176,11 +176,32 @@ void multimapAtomRetainConvert(multimapAtom *ma, databox *key);
 void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef);
 void multimapAtomRetainById(multimapAtom *ma, uint64_t id);
 
-/* One reference fewer to the value 'key' or the reference 'foundRef'; the
- * last one deletes the atom.  True when the atom was deleted (false too
- * for a value or reference not in the table). */
+/* One reference fewer to the value 'key', the reference 'ref' or the id
+ * 'id'; the last one deletes the atom.  True when the atom was deleted
+ * (false too for a value, reference or id not in the table). */
 bool multimapAtomRelease(multimapAtom *ma, const databox *key);
-bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef);
+bool multimapAtomReleaseByRef(multimapAtom *ma, const databox *ref);
+bool multimapAtomReleaseById(multimapAtom *ma, uint64_t id);
+
+/* Interning by plain ids (an atom's id as a uint64_t, from 0):
+ * - Intern: the id of 'value' with one reference more, the atom created
+ *   with its one reference when new.
+ * - GetId: the id of 'value' without a reference; false when absent.
+ * - LookupById: the value of 'id' into 'value' (as multimapAtomLookup:
+ *   BYTES borrow from the table; a 96/128-bit value needs a
+ *   DATABOX_BIG_INIT'd databoxBig); false when no atom has the id.
+ * - RefcountById: the references held (a PERMANENT table's atoms hold
+ *   one), 0 when no atom has the id.
+ * Retain and release by id with RetainById / ReleaseById. */
+uint64_t multimapAtomIntern(multimapAtom *ma, const databox *value);
+bool multimapAtomGetId(const multimapAtom *ma, const databox *value,
+                       uint64_t *id);
+bool multimapAtomLookupById(const multimapAtom *ma, uint64_t id,
+                            databox *value);
+uint64_t multimapAtomRefcountById(const multimapAtom *ma, uint64_t id);
+
+/* Every atom gone, the settings kept: ids start over */
+void multimapAtomReset(multimapAtom *ma);
 bool multimapAtomDelete(multimapAtom *ma, const databox *key);
 
 bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref);

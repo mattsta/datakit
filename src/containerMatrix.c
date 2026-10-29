@@ -18,8 +18,8 @@
 #include "multilist.h"
 #include "multilru.h"
 #include "multimap.h"
+#include "multimapAtom.h"
 #include "multiroar.h"
-#include "stringPool.h"
 #include "timeUtil.h"
 
 #include <inttypes.h>
@@ -412,38 +412,53 @@ static size_t mxRoarCount(const mxCtx *x) {
     return (size_t)multiroarBitCount(x->c);
 }
 
-/* --- stringPool: interned strings by id ------------------------------ */
-static void mxPoolMake(mxCtx *x, size_t n) {
-    /* @own: container; free=stringPoolFree */
-    x->c = stringPoolNew();
+/* --- multimapAtom: interned values by id, compact and fast tables ---- */
+static void mxAtomMakeWith_(mxCtx *x, size_t n,
+                            const multimapAtomConfig *config) {
+    /* @own: container; free=multimapAtomFree */
+    x->c = multimapAtomNewConfig(config);
     /* @own: container; free=zfree */
     x->ids = zcalloc(n ? n : 1, sizeof(uint64_t));
 }
-static void mxPoolDestroy(mxCtx *x) {
-    stringPoolFree(x->c);
+static void mxAtomMake(mxCtx *x, size_t n) {
+    mxAtomMakeWith_(x, n, nullptr);
+}
+static void mxAtomFastMake(mxCtx *x, size_t n) {
+    mxAtomMakeWith_(x, n,
+                    &(multimapAtomConfig){.index = MULTIMAP_ATOM_INDEX_SLOTS,
+                                          .store = MULTIMAP_ATOM_STORE_DIRECT});
+}
+static void mxAtomDestroy(mxCtx *x) {
+    multimapAtomFree(x->c);
     zfree(x->ids);
 }
-static bool mxPoolCreate(mxCtx *x, size_t i) {
+static bool mxAtomCreate(mxCtx *x, size_t i) {
     uint8_t b[256];
-    const databox s = mxBox(x->kind, i, 0, b);
-    x->ids[i] = stringPoolIntern(x->c, &s);
-    return x->ids[i] != 0;
+    const databox v = mxBox(x->kind, i, 0, b);
+    const size_t before = multimapAtomCount(x->c);
+    x->ids[i] = multimapAtomIntern(x->c, &v);
+    return multimapAtomCount(x->c) == before + 1;
 }
-static bool mxPoolRead(mxCtx *x, size_t i) {
+static bool mxAtomRead(mxCtx *x, size_t i) {
     databox got = {};
-    return stringPoolLookup(x->c, x->ids[i], &got) &&
+    return multimapAtomLookupById(x->c, x->ids[i], &got) &&
            mxSame(&got, x->kind, i, 0);
 }
-static bool mxPoolRemove(mxCtx *x, size_t i) {
-    stringPoolRelease(x->c, x->ids[i]);
-    return true;
+static bool mxAtomRemove(mxCtx *x, size_t i) {
+    return multimapAtomReleaseById(x->c, x->ids[i]);
 }
-static size_t mxPoolBytes(const mxCtx *x) {
-    return stringPoolBytes(x->c);
+static size_t mxAtomBytes(const mxCtx *x) {
+    return multimapAtomBytes(x->c);
 }
-static size_t mxPoolCount(const mxCtx *x) {
-    return stringPoolCount(x->c);
+static size_t mxAtomCount(const mxCtx *x) {
+    return multimapAtomCount(x->c);
 }
+#define mxAtomFastDestroy mxAtomDestroy
+#define mxAtomFastCreate mxAtomCreate
+#define mxAtomFastRead mxAtomRead
+#define mxAtomFastRemove mxAtomRemove
+#define mxAtomFastBytes mxAtomBytes
+#define mxAtomFastCount mxAtomCount
 
 /* --- multilru: recency metadata per handle (no element data) --------- */
 static void mxLruMake(mxCtx *x, size_t n) {
@@ -510,8 +525,10 @@ static const mxDriver mxDrivers[] = {
               nullptr),
     MX_DRIVER("multiroar", "bitmap of positions", MX_INTS, 1'000'000, mxRoar,
               nullptr),
-    MX_DRIVER("stringPool", "interned strings by id",
-              (1u << MX_STR16) | (1u << MX_STR256), 1'000'000, mxPool, nullptr),
+    MX_DRIVER("multimapAtom", "interned values by id; compact", MX_ALL,
+              1'000'000, mxAtom, nullptr),
+    MX_DRIVER("multimapAtom fast", "interned values by id; slots, direct",
+              MX_ALL, 1'000'000, mxAtomFast, nullptr),
     MX_DRIVER("multilru", "recency per handle", 1u << MX_INT_SMALL, 1'000'000,
               mxLru, mxLruUpdate),
 };

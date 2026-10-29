@@ -217,8 +217,6 @@ typedef enum persistType {
 
     /* Atom tables (atomPersist.h) */
     PERSIST_TYPE_MULTIMAP_ATOM = 140,
-    PERSIST_TYPE_STRING_POOL = 142,
-    PERSIST_TYPE_ATOM_POOL = 143,
 
     /* Rows addressed by id */
     PERSIST_TYPE_ID_ROWS = 150,

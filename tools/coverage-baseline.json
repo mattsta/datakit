@@ -25,10 +25,6 @@
    "lines": 0,
    "branches": 0
   },
-  "src/atomPool.c": {
-   "lines": 28,
-   "branches": 44
-  },
   "src/bbits.c": {
    "lines": 15,
    "branches": 22
@@ -1212,10 +1208,6 @@
   "src/strDoubleFormat.c": {
    "lines": 19,
    "branches": 32
-  },
-  "src/stringPool.c": {
-   "lines": 50,
-   "branches": 68
   },
   "src/timeUtil.c": {
    "lines": 0,

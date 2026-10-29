@@ -70,7 +70,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 - [multilru](modules/multi/MULTILRU.md) - Least Recently Used cache
 - [multiroar](modules/multi/MULTIROAR.md) - Roaring bitmap implementation
 - [idRows](modules/multi/IDROWS.md) - Rows addressed by integer id, read and changed in place without a search
-- [Interning](modules/multi/ATOMS.md) - atomPool, stringPool and multimapAtom: choosing, ids and references, measured costs
+- [Interning](modules/multi/ATOMS.md) - the atom table (multimapAtom): index, store and id choices, ids and references, measured costs
 
 #### Persistence
 
@@ -181,7 +181,6 @@ installed. They carry their own upstream documentation:
 - **Version**: 0.3.0
 - **License**: The Sovereign Individual's Covenant License, v1.0 ([LICENSE](../LICENSE))
 - **Author**: Matt Stancliff
-- **Status**: Development snapshot - some components complete, others in refinement
 
 ## Quick Stats
 

@@ -632,10 +632,20 @@ void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef);
 void multimapAtomRetainById(multimapAtom *ma, uint64_t id);
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key);
-bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef);
+bool multimapAtomReleaseByRef(multimapAtom *ma, const databox *ref);
+bool multimapAtomReleaseById(multimapAtom *ma, uint64_t id);
 bool multimapAtomDelete(multimapAtom *ma, const databox *key);
 bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref);
 bool multimapAtomDeleteById(multimapAtom *ma, uint64_t id);
+
+/* Plain ids (ATOMS.md) */
+uint64_t multimapAtomIntern(multimapAtom *ma, const databox *value);
+bool multimapAtomGetId(const multimapAtom *ma, const databox *value,
+                       uint64_t *id);
+bool multimapAtomLookupById(const multimapAtom *ma, uint64_t id,
+                            databox *value);
+uint64_t multimapAtomRefcountById(const multimapAtom *ma, uint64_t id);
+void multimapAtomReset(multimapAtom *ma);
 
 size_t multimapAtomCount(const multimapAtom *ma);
 size_t multimapAtomBytes(const multimapAtom *ma);
@@ -724,11 +734,6 @@ highest ID lowers the next unused ID past any holes directly below it;
 `multimapAtomNextId()` reports the ID the next new atom gets under every
 behaviour.
 
-`atomPool` offers the same three behaviours on both its backends
-(`atomPoolNewWithIds(type, ATOM_POOL_IDS_REUSE | _PERMANENT | _LOWEST)`), and
-`stringPool` has them as `stringPoolNewWithIds()`; its reusing behaviour
-reuses the most recently freed ID first.
-
 > **ID contract**: in the reusing and lowest-first behaviours an ID is valid
 > while its atom exists. Keep an ID only while you hold a reference to it: once
 > the atom is gone, its ID may name a later, unrelated value. Permanent IDs
@@ -738,27 +743,16 @@ reuses the most recently freed ID first.
 
 `persistOpsMultimapAtom` (`atomPersist.h`, type id 140) keeps every ID
 exactly: a restored table resolves the same IDs and hands out the same IDs
-next. The snapshot is the ID behaviour, index kind and store, the next ID and each atom's (ID,
-value, count) in ID order; values are stored exactly, so `"22"` stays bytes.
-Restore rebuilds the reverse map from the values sorted once, instead of one
-search per atom (perf preset, 100k atoms: snapshot 66 ns, restore 641 ns per
-atom, against 2.2 µs per atom to intern them again). WAL ops: `INSERT [id,
-value]` (a new atom with one reference), `NUM_INCR [id, +1 | -1]` (retain;
-release, the last one deleting), `DELETE [id]`. Under LOWEST the free set is
-rebuilt from the IDs in use, so holes cost no bytes in the snapshot, and
-replaying an `INSERT` takes exactly its ID out of the free set.
-
-`persistOpsStringPool` (type id 142) snapshots the ID behaviour, the next ID,
-each string's (ID, bytes, count) and every free ID below the next ID (the
-reusing stack in order, since it hands out the most recently freed ID first),
-so a snapshot's length bounds what restore allocates. WAL ops: `INSERT [id,
-bytes]` (refused unless it is the ID the pool hands out next), `NUM_INCR [id,
-+1 | -1]`, `CLEAR` (Reset). Perf preset, 100k strings: snapshot 40 ns,
-restore 270 ns per string.
-
-`persistOpsAtomPool` (type id 143) wraps its backend's snapshot (stringPool's or
-multimapAtom's) with the backend and ID behaviour, and
-replays the same ops with the pool's 1-based IDs.
+next. The snapshot is the ID behaviour, index kind and store, the next ID and
+each atom's (ID, value, count) in ID order; values are stored exactly, so
+`"22"` stays bytes. Restore rebuilds the reverse index from the values instead
+of one search per atom (perf preset, 100k atoms, snapshot / restore per atom:
+61 / 374 ns for HASHED + PACKED, 42 / 66 ns for SLOTS + DIRECT). WAL ops:
+`INSERT [id, value]` (a new atom with one reference), `NUM_INCR [id, +1 | -1]`
+(retain; release, the last one deleting), `DELETE [id]`, `CLEAR` (Reset). Under
+LOWEST the free set is rebuilt from the IDs in use, so holes cost no bytes in
+the snapshot, and replaying an `INSERT` takes exactly its ID out of the free
+set.
 
 ### Using an Atom Container With a multimap
 

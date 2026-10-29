@@ -1,14 +1,12 @@
 # Exceptions to `dktools testchecks`: PATH :: NAME :: REASON (reason required).
 # NAME is the TEST's argument text as testchecks lists it.  A line whose
 # block gains a check (or goes) fails the gate as stale; delete it then.
-src/atomPool.c :: "Repr: both backends, empty and holding atoms" :: a printer: reaching every branch without a fault is its contract
 src/bigmathTest.c :: "Repr: zero and a negative value print without faults" :: a printer: reaching every branch without a fault is its contract
 src/fenwick/fenwickTypesTest.c :: "Repr: fenwick" #T " nil, Small and Full" :: a printer: reaching every branch without a fault is its contract
 src/intsetBig.c :: "Repr: empty and holding narrow and wide members" :: a printer: reaching every branch without a fault is its contract
 src/multiFenwickFlatTest.c :: "Repr: nil, empty and holding values" :: a printer: reaching every branch without a fault is its contract
 src/multiFenwickTest.c :: "Repr: nil, empty and holding values" :: a printer: reaching every branch without a fault is its contract
 src/segment/segmentTypesTest.c :: "Repr: segment" #T " nil, Small and Full" :: a printer: reaching every branch without a fault is its contract
-src/stringPool.c :: "Repr: empty and holding strings" :: a printer: reaching every branch without a fault is its contract
 src/linearBloomTest.c :: "linearBloom: free NULL safety" :: freeing NULL without a fault is the whole contract
 src/linearBloomTest.c :: "linearBloomCount: free NULL safety" :: freeing NULL without a fault is the whole contract
 src/multiTimerTest.c :: "multiTimer: free NULL safety" :: freeing NULL without a fault is the whole contract

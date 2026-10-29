@@ -538,9 +538,11 @@ multimapAtom *multimapAtomNew(void) {
 #ifdef DATAKIT_TEST
     /* The suite runs once per index and store through the plain
      * constructor */
+    /* @own: caller; free=multimapAtomFree */
     return multimapAtomNewConfig(&(multimapAtomConfig){
         .index = atomTestDefaultIndex_, .store = atomTestDefaultStore_});
 #else
+    /* @own: caller; free=multimapAtomFree */
     return multimapAtomNewConfig(nullptr);
 #endif
 }
@@ -548,18 +550,32 @@ multimapAtom *multimapAtomNew(void) {
 /* ====================================================================
  * Free
  * ==================================================================== */
+/* Everything the table holds freed (the struct itself kept) */
+static void atomFreeContents_(multimapAtom *ma) {
+    atomFwdFree_(ma);
+    if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
+        zfree(ma->slotsAtomReverse);
+    } else {
+        multimapFree(ma->mapAtomReverse);
+    }
+
+    multiroarFree(ma->holes);
+}
+
 void multimapAtomFree(multimapAtom *ma) {
     if (ma) {
-        atomFwdFree_(ma);
-        if (multimapAtomGetIndex(ma) == MULTIMAP_ATOM_INDEX_SLOTS) {
-            zfree(ma->slotsAtomReverse);
-        } else {
-            multimapFree(ma->mapAtomReverse);
-        }
-
-        multiroarFree(ma->holes);
+        atomFreeContents_(ma);
         zfree(ma);
     }
+}
+
+void multimapAtomReset(multimapAtom *ma) {
+    const multimapAtomConfig settings = {.index = multimapAtomGetIndex(ma),
+                                         .ids = multimapAtomGetIds(ma),
+                                         .store = multimapAtomGetStore(ma)};
+    atomFreeContents_(ma);
+    *ma = (multimapAtom){};
+    atomInit_(ma, &settings);
 }
 
 /* ====================================================================
@@ -1399,8 +1415,53 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
     return false;
 }
 
-bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef) {
-    return conformRefcountDecr(ma, foundRef, nullptr);
+bool multimapAtomReleaseByRef(multimapAtom *ma, const databox *ref) {
+    return conformRefcountDecr(ma, ref, nullptr);
+}
+
+bool multimapAtomReleaseById(multimapAtom *ma, const uint64_t id) {
+    const databox ref = atomRefBox_(id);
+    return conformRefcountDecr(ma, &ref, nullptr);
+}
+
+/* ====================================================================
+ * Plain ids
+ * ==================================================================== */
+uint64_t multimapAtomIntern(multimapAtom *ma, const databox *value) {
+    databox ref = {};
+    atomRetainKey_(ma, value, &ref);
+    return ref.data.u;
+}
+
+bool multimapAtomGetId(const multimapAtom *ma, const databox *value,
+                       uint64_t *id) {
+    databox ref = {};
+    if (!atomIndexFind_(ma, value, &ref)) {
+        return false;
+    }
+
+    *id = ref.data.u;
+    return true;
+}
+
+bool multimapAtomLookupById(const multimapAtom *ma, const uint64_t id,
+                            databox *value) {
+    databox count = {};
+    databox *elements[2] = {value, &count};
+    return atomFwdGet_(ma, id, elements, nullptr);
+}
+
+uint64_t multimapAtomRefcountById(const multimapAtom *ma, const uint64_t id) {
+    /* Zeroed: the value is discarded, so a 96/128-bit one decodes
+     * type-only */
+    databox value = {};
+    databox count = {};
+    databox *elements[2] = {&value, &count};
+    if (!atomFwdGet_(ma, id, elements, nullptr)) {
+        return 0;
+    }
+
+    return atomIsPermanent_(ma) ? 1 : (uint64_t)atomCountOfBox_(&count) + 1;
 }
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
@@ -1875,6 +1936,10 @@ static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
 static uint8_t *multimapAtomPersistEncodeOp_(persistOp op, const void *args,
                                              size_t argc, size_t *len) {
     *len = 0;
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
+    }
+
     const bool shaped = (op == PERSIST_OP_INSERT && argc == 2) ||
                         (op == PERSIST_OP_NUM_INCR && argc == 2) ||
                         (op == PERSIST_OP_DELETE && argc == 1);
@@ -1940,6 +2005,13 @@ static bool multimapAtomPersistApplyOp_(void *structure, persistOp op,
         return flexGetSingleDataboxBig(data, len, &a) &&
                atomPersistLiveRef_(ma, &a, &ref) &&
                multimapAtomDeleteByRef(ma, &ref);
+    case PERSIST_OP_CLEAR:
+        if (len) {
+            return false;
+        }
+
+        multimapAtomReset(ma);
+        return true;
     default:
         return false;
     }
@@ -2613,7 +2685,7 @@ static int atomTestSuite_(void) {
                         databoxReprSay("\tWITH REFERENCE", &box);
 #endif
                     [[maybe_unused]] const bool deleted =
-                        multimapAtomReleaseById(ma, &box);
+                        multimapAtomReleaseByRef(ma, &box);
 #if 0
                     if (key.data.i == 25) {
                         printf("%sDELETED!\n", deleted ? "" : "NOT ");
@@ -2717,8 +2789,8 @@ static int atomTestSuite_(void) {
                 /* Double release because, for testing, we do an extra Retain
                  * after we Create in the previous for loop, so it has a
                  * refcount of 2 at this point. */
-                multimapAtomReleaseById(ma, &box);
-                multimapAtomReleaseById(ma, &box);
+                multimapAtomReleaseByRef(ma, &box);
+                multimapAtomReleaseByRef(ma, &box);
             }
         }
 
@@ -2781,8 +2853,8 @@ static int atomTestSuite_(void) {
                 /* Double release because, for testing, we do an extra Retain
                  * after we Create in the previous for loop, so it has a
                  * refcount of 2 at this point. */
-                multimapAtomReleaseById(ma, &box);
-                multimapAtomReleaseById(ma, &box);
+                multimapAtomReleaseByRef(ma, &box);
+                multimapAtomReleaseByRef(ma, &box);
             }
 
             /* By here, everything should be deleted... */
@@ -2941,7 +3013,7 @@ static int atomTestSuite_(void) {
         for (size_t i = 0; i < numEntries; i++) {
             databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                            .data.u = i};
-            multimapAtomReleaseById(ma, &ref);
+            multimapAtomReleaseByRef(ma, &ref);
         }
         assert(multimapAtomCount(ma) == numEntries);
 
@@ -2950,7 +3022,7 @@ static int atomTestSuite_(void) {
         for (size_t i = 0; i < numEntries; i++) {
             databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                            .data.u = i};
-            multimapAtomReleaseById(ma, &ref);
+            multimapAtomReleaseByRef(ma, &ref);
         }
         int64_t releaseNs = timeUtilMonotonicNs() - startNs;
         printf("Release (delete): %zu ops in %.3f ms (%.0f/sec)\n", numEntries,
@@ -3365,7 +3437,7 @@ static int atomTestSuite_(void) {
                         ctestPoisonStack();
                         removed = i % 4 == 0
                                       ? multimapAtomRelease(ma, &vals[i])
-                                      : multimapAtomReleaseById(ma, &ref);
+                                      : multimapAtomReleaseByRef(ma, &ref);
                         if (removed != (r == 4)) {
                             ERR("pass %d value %zu: release %d reported %d",
                                 pass, i, r, removed);
@@ -3460,6 +3532,7 @@ static int atomTestSuite_(void) {
         multimapAtom *ma =
             atomTestNew_(atomTestDefaultIndex_, atomTestDefaultStore_,
                          MULTIMAP_ATOM_IDS_PERMANENT);
+        /* @own: caller; free=multimapAtomFree */
         multimapAtom *reusing = multimapAtomNew();
         if (!atomIsPermanent_(ma) || atomIsPermanent_(reusing)) {
             ERR("the id behaviour is not what the constructor chose");
@@ -3479,7 +3552,7 @@ static int atomTestSuite_(void) {
         const databox a = databoxNewSigned(100);
         for (int i = 0; i < 3; i++) {
             if (multimapAtomRelease(ma, &a) ||
-                multimapAtomReleaseById(ma, &ids[0])) {
+                multimapAtomReleaseByRef(ma, &ids[0])) {
                 ERR("a permanent atom reported being freed");
             }
         }
@@ -3530,7 +3603,7 @@ static int atomTestSuite_(void) {
         }
 
         /* Releasing the top atom frees its id for the next atom */
-        if (!multimapAtomReleaseById(ma, &v[4])) {
+        if (!multimapAtomReleaseByRef(ma, &v[4])) {
             ERR("the last release did not delete the atom");
         }
 
@@ -3542,7 +3615,7 @@ static int atomTestSuite_(void) {
         }
 
         /* An interior hole stays unused */
-        multimapAtomReleaseById(ma, &v[2]);
+        multimapAtomReleaseByRef(ma, &v[2]);
         databox g = databoxNewSigned(301);
         multimapAtomInsertConvert(ma, &g);
         if (g.data.u != 5) {
@@ -3552,8 +3625,8 @@ static int atomTestSuite_(void) {
 
         /* Releasing down from the top skips back over the hole only to
          * the largest live id */
-        multimapAtomReleaseById(ma, &g); /* live 0 1 3 4: next 5 */
-        multimapAtomReleaseById(ma, &f); /* live 0 1 3: next 4 */
+        multimapAtomReleaseByRef(ma, &g); /* live 0 1 3 4: next 5 */
+        multimapAtomReleaseByRef(ma, &f); /* live 0 1 3: next 4 */
         databox h = databoxNewSigned(302);
         multimapAtomInsertConvert(ma, &h);
         if (h.data.u != 4) {
@@ -3570,7 +3643,7 @@ static int atomTestSuite_(void) {
                 break;
             }
 
-            multimapAtomReleaseById(ma, &x);
+            multimapAtomReleaseByRef(ma, &x);
         }
 
         multimapAtomFree(ma);
@@ -3917,6 +3990,7 @@ static int atomTestSuite_(void) {
         }
 
         /* A lone 1-byte value costs more shared than inline */
+        /* @own: caller; free=multimapAtomFree */
         multimapAtom *lone = multimapAtomNew();
         databox x = databoxNewBytesString("x");
         multimapAtomInsertIfNewConvert(lone, &x);
@@ -4007,7 +4081,7 @@ static int atomTestSuite_(void) {
                 break;
             case ATOM_TEST_OP_RELEASE_BY_ID:
                 if (present) {
-                    multimapAtomReleaseById(ma, &ref);
+                    multimapAtomReleaseByRef(ma, &ref);
                     oracle[i]--;
                 }
                 break;
@@ -4348,7 +4422,7 @@ static int atomLowestSoak_(const atomTestKind_ *kind, const uint64_t seed,
                 atomLowestValue_(o.value[pick], buf, sizeof(buf));
             const databox ref = atomRefBox_(pick);
             const bool deleted = r >= 90 ? multimapAtomRelease(ma, &key)
-                                         : multimapAtomReleaseById(ma, &ref);
+                                         : multimapAtomReleaseByRef(ma, &ref);
             o.refs[pick]--;
             if (deleted != (o.refs[pick] == 0)) {
                 ERR("op %zu: release of id %" PRIu64 " reported %s", op, pick,
@@ -4470,8 +4544,8 @@ static int atomTestLowest_(const atomTestKind_ *kind) {
         /* Free 5, 2 and 6: the next atoms take 2, 5, 6, then 8 */
         const databox five = atomRefBox_(5);
         const databox two = atomRefBox_(2);
-        multimapAtomReleaseById(ma, &five);
-        multimapAtomReleaseById(ma, &two);
+        multimapAtomReleaseByRef(ma, &five);
+        multimapAtomReleaseByRef(ma, &two);
         multimapAtomDeleteById(ma, 6);
         const uint64_t want[] = {2, 5, 6, 8};
         for (size_t i = 0; i < countof(want); i++) {
@@ -4503,7 +4577,7 @@ static int atomTestLowest_(const atomTestKind_ *kind) {
         const databox missing = databoxNewSigned(2);
         const databox nine = atomRefBox_(9);
         if (multimapAtomRelease(ma, &missing) ||
-            multimapAtomReleaseById(ma, &nine) ||
+            multimapAtomReleaseByRef(ma, &nine) ||
             multimapAtomDelete(ma, &missing) || multimapAtomDeleteById(ma, 9) ||
             multimapAtomCount(ma) != 1 || multimapAtomNextId(ma) != 1) {
             ERR("a miss changed the table");

@@ -6,10 +6,8 @@
 #ifdef DATAKIT_TEST
 
 #include "../../atomPersist.h"
-#include "../../atomPool.h"
 #include "../../multimapAtom.h"
 #include "../../str.h"
-#include "../../stringPool.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -34,6 +32,7 @@ static void pcAtomRecordId(persistContractLog *log, persistOp op, uint64_t id,
  * Under LOWEST ids releases and deletes leave holes later interns fill. */
 static void *pcMultimapAtomBuild(const persistContractBuild *b) {
     /* Every index kind with every id behaviour in both stores, by seed */
+    /* @own: caller; free=multimapAtomFree */
     multimapAtom *ma = multimapAtomNewConfig(
         &(multimapAtomConfig){.index = (multimapAtomIndex)((b->seed / 3) % 3),
                               .ids = (multimapAtomIds)(b->seed % 3),
@@ -114,178 +113,6 @@ const persistContractType persistContractMultimapAtom = {
     .build = pcMultimapAtomBuild,
     .holdsBytes = pcMultimapAtomHoldsBytes,
     .sameSettings = pcMultimapAtomSameSettings,
-};
-
-/* String number 'i' of a build: words, digit strings and signed or
- * fractional numerals, a function of (seed, i) */
-static databox pcStringPoolValue(uint64_t seed, size_t i, char *buf,
-                                 size_t bufLen) {
-    uint64_t rng = seed ^ ((uint64_t)i * UINT64_C(0x9E3779B97F4A7C15));
-    const uint64_t r = splitmix64(&rng);
-    int len;
-    switch (r % 4) {
-    case 0:
-        len = snprintf(buf, bufLen, "%" PRIu64, r >> 20);
-        break;
-    case 1:
-        len = snprintf(buf, bufLen, "00%" PRIu64, r >> 50);
-        break;
-    case 2:
-        len = snprintf(buf, bufLen, "-%" PRIu64 ".5", r >> 44);
-        break;
-    default:
-        len = snprintf(buf, bufLen, "word-%" PRIx64, r >> 30);
-        break;
-    }
-
-    return databoxNewBytes(buf, (size_t)len);
-}
-
-/* Interns new and known strings, retains and releases by id (the last
- * release frees), and Resets once in larger builds; the seed picks the
- * id behaviour */
-static void *pcStringPoolBuild(const persistContractBuild *b) {
-    const stringPoolIds ids = (stringPoolIds)(b->seed % 3);
-    /* @own: caller; free=stringPoolFree */
-    stringPool *pool = stringPoolNewWithIds(ids);
-    persistContractStart(b->log, pool);
-
-    uint64_t rng = b->seed;
-    char buf[64];
-    const databox plusOne = DATABOX_SIGNED(1);
-    const databox minusOne = DATABOX_SIGNED(-1);
-    for (size_t i = 0; i < b->size; i++) {
-        const uint64_t roll = splitmix64(&rng) % 8;
-        const size_t k =
-            (roll >= 3 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
-        const databox str = pcStringPoolValue(b->seed, k, buf, sizeof(buf));
-        const uint64_t known = stringPoolGetId(pool, &str);
-        if (roll < 3 || !known) {
-            const uint64_t id = stringPoolIntern(pool, &str);
-            if (!known) {
-                pcAtomRecordId(b->log, PERSIST_OP_INSERT, id, &str);
-            } else if (ids != STRING_POOL_IDS_PERMANENT) {
-                pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, id, &plusOne);
-            }
-        } else if (roll < 5) {
-            stringPoolRetain(pool, known);
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, known, &plusOne);
-        } else {
-            stringPoolRelease(pool, known);
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, known, &minusOne);
-        }
-
-        if (b->size >= 100 && i == b->size / 3) {
-            stringPoolReset(pool);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
-        }
-    }
-
-    for (size_t i = 0; i < b->stringCount; i++) {
-        const uint64_t known = stringPoolGetId(pool, &b->strings[i]);
-        const uint64_t id = stringPoolIntern(pool, &b->strings[i]);
-        if (!known) {
-            pcAtomRecordId(b->log, PERSIST_OP_INSERT, id, &b->strings[i]);
-        } else if (ids != STRING_POOL_IDS_PERMANENT) {
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, id, &plusOne);
-        }
-    }
-
-    return pool;
-}
-
-static bool pcStringPoolHoldsBytes(const void *structure,
-                                   const databox *bytes) {
-    const stringPool *pool = structure;
-    databox got = {};
-    const uint64_t id = stringPoolGetId(pool, bytes);
-    return id && stringPoolLookup(pool, id, &got) &&
-           persistContractSameBytes(&got, bytes);
-}
-
-static bool pcStringPoolSameSettings(const void *original,
-                                     const void *restored) {
-    return stringPoolIdsOf(original) == stringPoolIdsOf(restored);
-}
-
-const persistContractType persistContractStringPool = {
-    .ops = &persistOpsStringPool,
-    .build = pcStringPoolBuild,
-    .holdsBytes = pcStringPoolHoldsBytes,
-    .sameSettings = pcStringPoolSameSettings,
-};
-
-/* As pcStringPoolBuild through the pool interface, over both backends and
- * all three id behaviours (picked by the seed) */
-static void *pcAtomPoolBuild(const persistContractBuild *b) {
-    const atomPoolType type = (atomPoolType)(b->seed % 2);
-    const atomPoolIds ids = (atomPoolIds)((b->seed / 2) % 3);
-    /* @own: caller; free=atomPoolFree */
-    atomPool *pool = atomPoolNewWithIds(type, ids);
-    persistContractStart(b->log, pool);
-
-    uint64_t rng = b->seed;
-    char buf[64];
-    const databox plusOne = DATABOX_SIGNED(1);
-    const databox minusOne = DATABOX_SIGNED(-1);
-    for (size_t i = 0; i < b->size; i++) {
-        const uint64_t roll = splitmix64(&rng) % 8;
-        const size_t k =
-            (roll >= 3 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
-        const databox str = pcStringPoolValue(b->seed, k, buf, sizeof(buf));
-        const uint64_t known = atomPoolGetId(pool, &str);
-        if (roll < 3 || !known) {
-            const uint64_t id = atomPoolIntern(pool, &str);
-            if (!known) {
-                pcAtomRecordId(b->log, PERSIST_OP_INSERT, id, &str);
-            } else if (ids != ATOM_POOL_IDS_PERMANENT) {
-                pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, id, &plusOne);
-            }
-        } else if (roll < 5) {
-            atomPoolRetain(pool, known);
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, known, &plusOne);
-        } else {
-            atomPoolRelease(pool, known);
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, known, &minusOne);
-        }
-
-        if (b->size >= 100 && i == b->size / 3) {
-            atomPoolReset(pool);
-            persistContractRecord(b->log, PERSIST_OP_CLEAR, nullptr, 0);
-        }
-    }
-
-    for (size_t i = 0; i < b->stringCount; i++) {
-        const uint64_t known = atomPoolGetId(pool, &b->strings[i]);
-        const uint64_t id = atomPoolIntern(pool, &b->strings[i]);
-        if (!known) {
-            pcAtomRecordId(b->log, PERSIST_OP_INSERT, id, &b->strings[i]);
-        } else if (ids != ATOM_POOL_IDS_PERMANENT) {
-            pcAtomRecordId(b->log, PERSIST_OP_NUM_INCR, id, &plusOne);
-        }
-    }
-
-    return pool;
-}
-
-static bool pcAtomPoolHoldsBytes(const void *structure, const databox *bytes) {
-    const atomPool *pool = structure;
-    databox got = {};
-    const uint64_t id = atomPoolGetId(pool, bytes);
-    return id && atomPoolLookup(pool, id, &got) &&
-           persistContractSameBytes(&got, bytes);
-}
-
-static bool pcAtomPoolSameSettings(const void *original, const void *restored) {
-    return atomPoolGetType(original) == atomPoolGetType(restored) &&
-           atomPoolGetIds(original) == atomPoolGetIds(restored);
-}
-
-const persistContractType persistContractAtomPool = {
-    .ops = &persistOpsAtomPool,
-    .build = pcAtomPoolBuild,
-    .holdsBytes = pcAtomPoolHoldsBytes,
-    .sameSettings = pcAtomPoolSameSettings,
 };
 
 #endif /* DATAKIT_TEST */

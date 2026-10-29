@@ -1,7 +1,6 @@
 #include "multiOrderedSetFull.h"
 #include "multiOrderedSetFullInternal.h"
 #include "multiOrderedSetMediumInternal.h"
-/* atomPool.h already included via multiOrderedSetFullInternal.h */
 
 #include "str.h" /* for random functions */
 
@@ -23,8 +22,7 @@ static uint64_t mosRandomState = 0xABCDEF0123456789ULL;
 static inline databox memberToPoolId(multiOrderedSetFull *m,
                                      const databox *member) {
     if (m->pool) {
-        uint64_t id = atomPoolIntern(m->pool, member);
-        return databoxNewUnsigned(id);
+        return databoxNewUnsigned(multimapAtomIntern(m->pool, member));
     }
     /* No pool - return member as-is */
     return *member;
@@ -45,7 +43,7 @@ static inline bool readMember(const multiOrderedSetFull *m,
             if (slot) {
                 mosBoxAim(member, slot);
             }
-            return atomPoolLookup(m->pool, idBox.data.u64, member);
+            return multimapAtomLookupById(m->pool, idBox.data.u64, member);
         }
     }
 
@@ -61,7 +59,7 @@ static inline bool readMember(const multiOrderedSetFull *m,
 static inline void releasePoolMember(multiOrderedSetFull *m,
                                      const databox *idBox) {
     if (m->pool && idBox->type == DATABOX_UNSIGNED_64) {
-        atomPoolRelease(m->pool, idBox->data.u64);
+        multimapAtomReleaseById(m->pool, idBox->data.u64);
     }
 }
 
@@ -580,8 +578,8 @@ static flexEntry *findEntryForScore(const multiOrderedSetFull *m,
     *mapIdx = 0;
     databox memberToMatch;
     if (m->pool) {
-        const uint64_t id = atomPoolGetId(m->pool, member);
-        if (id == 0) {
+        uint64_t id;
+        if (!multimapAtomGetId(m->pool, member, &id)) {
             return nullptr; /* Member not in pool */
         }
         memberToMatch = databoxNewUnsigned(id);
@@ -712,26 +710,33 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
     return m;
 }
 
-multiOrderedSetFull *multiOrderedSetFullNewWithPool(atomPool *pool) {
+multiOrderedSetFull *multiOrderedSetFullNewWithPool(multimapAtom *pool) {
     multiOrderedSetFull *m = multiOrderedSetFullNew();
     m->pool = pool;
     return m;
 }
 
-multiOrderedSetFull *multiOrderedSetFullNewWithOwnedPool(void) {
-    multiOrderedSetFull *m = multiOrderedSetFullNew();
+/* The atom table an owned pool gets by default: found and read by id in
+ * constant time */
+static const multimapAtomConfig mosOwnedPoolConfig_ = {
+    .index = MULTIMAP_ATOM_INDEX_SLOTS, .store = MULTIMAP_ATOM_STORE_DIRECT};
+
+multiOrderedSetFull *
+multiOrderedSetFullNewWithOwnedPoolConfig(const multimapAtomConfig *config) {
     /* @own: container; free=multiOrderedSetFullFree */
-    m->pool = atomPoolNewDefault(); /* Uses HASH backend for speed */
+    multimapAtom *pool = multimapAtomNewConfig(config);
+    if (!pool) {
+        return nullptr;
+    }
+
+    multiOrderedSetFull *m = multiOrderedSetFullNew();
+    m->pool = pool;
     m->flags |= MOS_FLAG_POOL_OWNED;
     return m;
 }
 
-multiOrderedSetFull *multiOrderedSetFullNewWithPoolType(atomPoolType type) {
-    multiOrderedSetFull *m = multiOrderedSetFullNew();
-    /* @own: container; free=multiOrderedSetFullFree */
-    m->pool = atomPoolNew(type);
-    m->flags |= MOS_FLAG_POOL_OWNED;
-    return m;
+multiOrderedSetFull *multiOrderedSetFullNewWithOwnedPool(void) {
+    return multiOrderedSetFullNewWithOwnedPoolConfig(&mosOwnedPoolConfig_);
 }
 
 multiOrderedSetFull *
@@ -818,9 +823,14 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
     /* Handle pool mode for copy */
     if (m->pool) {
         if (m->flags & MOS_FLAG_POOL_OWNED) {
-            /* Source owns pool - copy creates its own pool and re-interns */
+            /* Source owns pool - copy creates its own pool (the same
+             * settings) and re-interns */
+            const multimapAtomConfig settings = {
+                .index = multimapAtomGetIndex(m->pool),
+                .ids = multimapAtomGetIds(m->pool),
+                .store = multimapAtomGetStore(m->pool)};
             /* @own: container; free=multiOrderedSetFullFree */
-            copy->pool = atomPoolNewDefault();
+            copy->pool = multimapAtomNewConfig(&settings);
             copy->flags = MOS_FLAG_POOL_OWNED;
 
             /* Re-intern all members from scoreMaps into new pool */
@@ -840,12 +850,14 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                     databoxWide oldIdWide;
                     flexGetByTypeInto(memberEntry, &oldId, &oldIdWide);
                     databox member = {};
-                    if (atomPoolLookup(m->pool, oldId.data.u64, &member)) {
+                    if (multimapAtomLookupById(m->pool, oldId.data.u64,
+                                               &member)) {
                         /* Intern in new pool and update entry.  A new id
                          * of another width reallocates the map: the entry
                          * keeps its offset, so find it again from there */
                         const size_t at = (size_t)(memberEntry - map);
-                        uint64_t newId = atomPoolIntern(copy->pool, &member);
+                        uint64_t newId =
+                            multimapAtomIntern(copy->pool, &member);
                         databox newIdBox = databoxNewUnsigned(newId);
                         flexReplaceByType(&map, memberEntry, &newIdBox);
                         setSubMap(copy, i, map);
@@ -879,12 +891,8 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                     databoxWide idBoxWide;
                     flexGetByTypeInto(memberEntry, &idBox, &idBoxWide);
                     if (idBox.type == DATABOX_UNSIGNED_64) {
-                        /* Re-intern to increment refcount */
-                        databox member = {};
-                        if (atomPoolLookup(copy->pool, idBox.data.u64,
-                                           &member)) {
-                            atomPoolIntern(copy->pool, &member);
-                        }
+                        /* One more reference: the copy holds the id too */
+                        multimapAtomRetainById(copy->pool, idBox.data.u64);
                     }
                     ent = flexNext(map, memberEntry);
                 }
@@ -925,7 +933,7 @@ void multiOrderedSetFullFree(multiOrderedSetFull *m) {
         }
         /* Free pool if we own it */
         if (m->flags & MOS_FLAG_POOL_OWNED) {
-            atomPoolFree(m->pool);
+            multimapAtomFree(m->pool);
         }
     }
 
@@ -1001,7 +1009,7 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
         }
         /* If we own the pool, reset it too */
         if (m->flags & MOS_FLAG_POOL_OWNED) {
-            atomPoolReset(m->pool);
+            multimapAtomReset(m->pool);
         }
     }
 
@@ -1057,7 +1065,7 @@ size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m) {
 
     /* Include owned pool bytes in total */
     if (m->pool && (m->flags & MOS_FLAG_POOL_OWNED)) {
-        bytes += atomPoolBytes(m->pool);
+        bytes += multimapAtomBytes(m->pool);
     }
 
     return bytes;
@@ -2244,6 +2252,17 @@ static int mosfCheck_(const multiOrderedSetFull *m, const bool *present,
     return err;
 }
 
+/* The owned atom tables the pool tests run: the fewest bytes and the
+ * fastest */
+static const struct {
+    const char *name;
+    multimapAtomConfig config;
+} mosTestPoolConfigs_[] = {
+    {"compact", {}},
+    {"fast",
+     {.index = MULTIMAP_ATOM_INDEX_SLOTS, .store = MULTIMAP_ATOM_STORE_DIRECT}},
+};
+
 int multiOrderedSetFullTest(int, char *[]) {
     int err = 0;
 
@@ -2316,8 +2335,8 @@ int multiOrderedSetFullTest(int, char *[]) {
 
     TEST(
         "multiOrderedSetFull — pooled members: an external and an owned pool") {
-        /* @own: caller; free=atomPoolFree */
-        atomPool *shared = atomPoolNew(ATOM_POOL_HASH);
+        /* @own: caller; free=multimapAtomFree */
+        multimapAtom *shared = multimapAtomNew();
         multiOrderedSetFull *a = multiOrderedSetFullNewWithPool(shared);
         multiOrderedSetFull *b = multiOrderedSetFullNewWithOwnedPool();
         for (int i = 0; i < 50; i++) {
@@ -2335,17 +2354,17 @@ int multiOrderedSetFullTest(int, char *[]) {
             multiOrderedSetFullCount(b) != 50 ||
             !multiOrderedSetFullGetScore(a, &m7, &sa) || sa.data.i64 != 7 ||
             !multiOrderedSetFullGetScore(b, &m7, &sb) || sb.data.i64 != 7 ||
-            atomPoolCount(shared) != 50) {
+            multimapAtomCount(shared) != 50) {
             ERR("a pooled set lost members or scores");
         }
 
         /* Freeing the set leaves the external pool to its owner */
         multiOrderedSetFullFree(a);
         multiOrderedSetFullFree(b);
-        if (atomPoolCount(shared) > 50) {
+        if (multimapAtomCount(shared) > 50) {
             ERR("the external pool grew after its set was freed");
         }
-        atomPoolFree(shared);
+        multimapAtomFree(shared);
     }
 
     TEST("MOS-Full: one score over many sub-maps stays in member order") {
@@ -2579,8 +2598,8 @@ int multiOrderedSetFullTest(int, char *[]) {
          * and both ends removed (emptying middle sub-maps); the copy,
          * checked after its source is freed, answers every read as the
          * oracle does, and keeps working when written to */
-        /* @own: caller; free=atomPoolFree */
-        atomPool *shared = atomPoolNew(ATOM_POOL_HASH);
+        /* @own: caller; free=multimapAtomFree */
+        multimapAtom *shared = multimapAtomNew();
         static const char *kinds[] = {"plain", "owned pool", "shared pool"};
         for (int kind = 0; kind < 3; kind++) {
             /* @own: caller; free=multiOrderedSetFullFree */
@@ -2659,7 +2678,7 @@ int multiOrderedSetFullTest(int, char *[]) {
             err += mosCopyCheck_(copy, present, label);
             multiOrderedSetFullFree(copy);
         }
-        atomPoolFree(shared);
+        multimapAtomFree(shared);
     }
 
     TEST("multiOrderedSetFull — add and lookup") {
@@ -2708,22 +2727,18 @@ int multiOrderedSetFullTest(int, char *[]) {
         multiOrderedSetFullFree(mos);
     }
 
-    TEST("multiOrderedSetFull — atomPool mode basic (both backends)") {
-        /* Test both atomPool backends */
-        atomPoolType types[] = {ATOM_POOL_HASH, ATOM_POOL_TREE};
-        const char *typeNames[] = {"HASH", "TREE"};
-
-        for (int t = 0; t < 2; t++) {
-            /* Test basic operations with owned pool */
+    TEST("multiOrderedSetFull — atom table mode, compact and fast tables") {
+        for (size_t t = 0; t < countof(mosTestPoolConfigs_); t++) {
+            const char *name = mosTestPoolConfigs_[t].name;
             multiOrderedSetFull *mos =
-                multiOrderedSetFullNewWithPoolType(types[t]);
+                multiOrderedSetFullNewWithOwnedPoolConfig(
+                    &mosTestPoolConfigs_[t].config);
             if (!mos) {
                 ERR("[%s] Failed to create multiOrderedSetFull with pool",
-                    typeNames[t]);
+                    name);
                 continue;
             }
 
-            /* Add entries */
             for (int i = 0; i < 100; i++) {
                 databox score = databoxNewSigned(i * 10);
                 char buf[32];
@@ -2733,29 +2748,22 @@ int multiOrderedSetFullTest(int, char *[]) {
             }
 
             if (multiOrderedSetFullCount(mos) != 100) {
-                ERR("[%s] Pool mode: Count should be 100, got %zu",
-                    typeNames[t], multiOrderedSetFullCount(mos));
+                ERR("[%s] Pool mode: Count should be 100, got %zu", name,
+                    multiOrderedSetFullCount(mos));
             }
 
-            /* Verify lookups work correctly */
             for (int i = 0; i < 100; i++) {
                 char buf[32];
                 snprintf(buf, sizeof(buf), "poolmember%03d", i);
                 databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
                 databox score;
-
-                if (!multiOrderedSetFullGetScore(mos, &member, &score)) {
-                    ERR("[%s] Pool mode: GetScore for poolmember%03d failed",
-                        typeNames[t], i);
-                }
-                if (score.data.i != i * 10) {
-                    ERR("[%s] Pool mode: poolmember%03d score should be %d, "
-                        "got %" PRIdMAX,
-                        typeNames[t], i, i * 10, score.data.i);
+                if (!multiOrderedSetFullGetScore(mos, &member, &score) ||
+                    score.data.i != i * 10) {
+                    ERR("[%s] Pool mode: poolmember%03d score wrong", name, i);
                 }
             }
 
-            /* Verify iteration returns correct members */
+            /* Iteration and ranks hand back the members themselves */
             mosIterator iter;
             multiOrderedSetFullIteratorInit(mos, &iter, true);
             int count = 0;
@@ -2764,25 +2772,19 @@ int multiOrderedSetFullTest(int, char *[]) {
                 if (m.type != DATABOX_BYTES) {
                     ERR("[%s] Pool mode iteration: member should be BYTES, got "
                         "%d",
-                        typeNames[t], m.type);
+                        name, m.type);
                 }
                 count++;
             }
             if (count != 100) {
                 ERR("[%s] Pool mode iteration: should iterate 100, got %d",
-                    typeNames[t], count);
+                    name, count);
             }
 
-            /* Verify GetByRank returns correct members */
             for (int i = 0; i < 100; i++) {
-                if (!multiOrderedSetFullGetByRank(mos, i, &m, &s)) {
-                    ERR("[%s] Pool mode: GetByRank(%d) failed", typeNames[t],
-                        i);
-                }
-                if (m.type != DATABOX_BYTES) {
-                    ERR("[%s] Pool mode GetByRank: member should be BYTES, got "
-                        "%d",
-                        typeNames[t], m.type);
+                if (!multiOrderedSetFullGetByRank(mos, i, &m, &s) ||
+                    m.type != DATABOX_BYTES) {
+                    ERR("[%s] Pool mode: GetByRank(%d) failed", name, i);
                 }
             }
 
@@ -2790,261 +2792,63 @@ int multiOrderedSetFullTest(int, char *[]) {
         }
     }
 
-    TEST("multiOrderedSetFull — inline vs pool memory comparison") {
-        printf(
-            "\n=== Inline vs Pool Comparison (varying string lengths) ===\n");
-        printf("=== Testing both HASH and TREE atomPool backends ===\n\n");
-
-        /* Test with different string lengths to show where pool mode helps.
-         * Pool overhead is ~84 bytes/entry (HASH) or ~22 bytes/entry (TREE).
-         * With short strings, overhead dominates. With long strings, pool wins.
-         */
-        struct {
-            size_t strLen;
-            const char *name;
-        } strTests[] = {
-            {16, "Short (16 bytes)"},
-            {36, "Medium (36 bytes)"},
-            {48, "Realistic (48 bytes)"},
-            {64, "Long (64 bytes)"},
-        };
-
-        const size_t N = 5000; /* entries per test */
-
-        for (size_t st = 0; st < 4; st++) {
-            size_t strLen = strTests[st].strLen;
-            printf("--- %s strings, %zu entries ---\n", strTests[st].name, N);
-
-            /* Create test sets: inline, pool HASH, pool TREE */
-            multiOrderedSetFull *mosInline = multiOrderedSetFullNew();
-            multiOrderedSetFull *mosHash =
-                multiOrderedSetFullNewWithPoolType(ATOM_POOL_HASH);
-            multiOrderedSetFull *mosTree =
-                multiOrderedSetFullNewWithPoolType(ATOM_POOL_TREE);
-
-            /* Generate fixed-length member strings */
-            char buf[128];
-
-            /* Insert - Inline */
-            uint64_t inlineInsertStart = perfNowNs();
-            for (size_t i = 0; i < N; i++) {
-                databox score = databoxNewUnsigned(i);
-                /* Generate string of exact length */
-                memset(buf, 'A' + (i % 26), strLen);
-                snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
-                buf[strLen] = '\0';
-                databox member = databoxNewBytesAllowEmbed(buf, strLen);
-                multiOrderedSetFullAdd(mosInline, &score, &member);
+    TEST("multiOrderedSetFull — inline and atom table members: bytes and "
+         "times") {
+        /* The same members inline and in each atom table, every length:
+         * each set holds them all, and the bytes and times are reported */
+        static const size_t lengths[] = {16, 36, 48, 64};
+        constexpr size_t N = 5000;
+        for (size_t st = 0; st < countof(lengths); st++) {
+            const size_t strLen = lengths[st];
+            printf("--- %zu-byte members, %zu entries ---\n", strLen, N);
+            multiOrderedSetFull *sets[1 + countof(mosTestPoolConfigs_)];
+            const char *names[1 + countof(mosTestPoolConfigs_)];
+            sets[0] = multiOrderedSetFullNew();
+            names[0] = "inline";
+            for (size_t t = 0; t < countof(mosTestPoolConfigs_); t++) {
+                sets[1 + t] = multiOrderedSetFullNewWithOwnedPoolConfig(
+                    &mosTestPoolConfigs_[t].config);
+                names[1 + t] = mosTestPoolConfigs_[t].name;
             }
-            uint64_t inlineInsertEnd = perfNowNs();
 
-            /* Insert - Pool HASH */
-            uint64_t hashInsertStart = perfNowNs();
-            for (size_t i = 0; i < N; i++) {
-                databox score = databoxNewUnsigned(i);
-                memset(buf, 'A' + (i % 26), strLen);
-                snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
-                buf[strLen] = '\0';
-                databox member = databoxNewBytesAllowEmbed(buf, strLen);
-                multiOrderedSetFullAdd(mosHash, &score, &member);
+            for (size_t v = 0; v < countof(sets); v++) {
+                char buf[128];
+                const uint64_t addStart = perfNowNs();
+                for (size_t i = 0; i < N; i++) {
+                    databox score = databoxNewUnsigned(i);
+                    memset(buf, 'A' + (i % 26), strLen);
+                    snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
+                    databox member = databoxNewBytesAllowEmbed(buf, strLen);
+                    multiOrderedSetFullAdd(sets[v], &score, &member);
+                }
+                const uint64_t addNs = perfNowNs() - addStart;
+
+                const uint64_t findStart = perfNowNs();
+                size_t found = 0;
+                for (size_t i = 0; i < N; i++) {
+                    memset(buf, 'A' + (i % 26), strLen);
+                    snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
+                    databox member = databoxNewBytesAllowEmbed(buf, strLen);
+                    databox score;
+                    found +=
+                        multiOrderedSetFullGetScore(sets[v], &member, &score) &&
+                        score.data.u == i;
+                }
+                const uint64_t findNs = perfNowNs() - findStart;
+
+                printf("    %-8s %6.1f bytes/entry  add %6.1f ns  find %6.1f "
+                       "ns\n",
+                       names[v],
+                       (double)multiOrderedSetFullBytes(sets[v]) / (double)N,
+                       (double)addNs / (double)N, (double)findNs / (double)N);
+                if (found != N || multiOrderedSetFullCount(sets[v]) != N) {
+                    ERR("%s set of %zu-byte members: %zu of %zu found",
+                        names[v], strLen, found, N);
+                }
+
+                multiOrderedSetFullFree(sets[v]);
             }
-            uint64_t hashInsertEnd = perfNowNs();
-
-            /* Insert - Pool TREE */
-            uint64_t treeInsertStart = perfNowNs();
-            for (size_t i = 0; i < N; i++) {
-                databox score = databoxNewUnsigned(i);
-                memset(buf, 'A' + (i % 26), strLen);
-                snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
-                buf[strLen] = '\0';
-                databox member = databoxNewBytesAllowEmbed(buf, strLen);
-                multiOrderedSetFullAdd(mosTree, &score, &member);
-            }
-            uint64_t treeInsertEnd = perfNowNs();
-
-            size_t inlineBytes = multiOrderedSetFullBytes(mosInline);
-            size_t hashBytes = multiOrderedSetFullBytes(mosHash);
-            size_t treeBytes = multiOrderedSetFullBytes(mosTree);
-
-            printf("  Memory (bytes/entry):\n");
-            printf("    Inline:     %zu total (%.1f bytes/entry)\n",
-                   inlineBytes, (double)inlineBytes / N);
-            printf("    Pool HASH:  %zu total (%.1f bytes/entry) [%+.1f%%]\n",
-                   hashBytes, (double)hashBytes / N,
-                   100.0 * ((double)hashBytes / inlineBytes - 1.0));
-            printf("    Pool TREE:  %zu total (%.1f bytes/entry) [%+.1f%%]\n",
-                   treeBytes, (double)treeBytes / N,
-                   100.0 * ((double)treeBytes / inlineBytes - 1.0));
-
-            printf("  Insert (ns/op):\n");
-            printf("    Inline:     %.1f\n",
-                   (double)(inlineInsertEnd - inlineInsertStart) / N);
-            printf("    Pool HASH:  %.1f\n",
-                   (double)(hashInsertEnd - hashInsertStart) / N);
-            printf("    Pool TREE:  %.1f\n",
-                   (double)(treeInsertEnd - treeInsertStart) / N);
-
-            /* Lookup benchmark */
-            uint64_t inlineLookupStart = perfNowNs();
-            for (size_t i = 0; i < N; i++) {
-                memset(buf, 'A' + (i % 26), strLen);
-                snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
-                buf[strLen] = '\0';
-                databox member = databoxNewBytesAllowEmbed(buf, strLen);
-                databox score;
-                multiOrderedSetFullGetScore(mosInline, &member, &score);
-            }
-            uint64_t inlineLookupEnd = perfNowNs();
-
-            uint64_t hashLookupStart = perfNowNs();
-            for (size_t i = 0; i < N; i++) {
-                memset(buf, 'A' + (i % 26), strLen);
-                snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
-                buf[strLen] = '\0';
-                databox member = databoxNewBytesAllowEmbed(buf, strLen);
-                databox score;
-                multiOrderedSetFullGetScore(mosHash, &member, &score);
-            }
-            uint64_t hashLookupEnd = perfNowNs();
-
-            uint64_t treeLookupStart = perfNowNs();
-            for (size_t i = 0; i < N; i++) {
-                memset(buf, 'A' + (i % 26), strLen);
-                snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
-                buf[strLen] = '\0';
-                databox member = databoxNewBytesAllowEmbed(buf, strLen);
-                databox score;
-                multiOrderedSetFullGetScore(mosTree, &member, &score);
-            }
-            uint64_t treeLookupEnd = perfNowNs();
-
-            printf("  Lookup (ns/op):\n");
-            printf("    Inline:     %.1f\n",
-                   (double)(inlineLookupEnd - inlineLookupStart) / N);
-            printf("    Pool HASH:  %.1f\n",
-                   (double)(hashLookupEnd - hashLookupStart) / N);
-            printf("    Pool TREE:  %.1f\n",
-                   (double)(treeLookupEnd - treeLookupStart) / N);
-
-            /* Iteration benchmark */
-            mosIterator iter;
-            databox m, s;
-
-            uint64_t inlineIterStart = perfNowNs();
-            multiOrderedSetFullIteratorInit(mosInline, &iter, true);
-            while (multiOrderedSetFullIteratorNext(&iter, &m, &s)) {
-            }
-            uint64_t inlineIterEnd = perfNowNs();
-
-            uint64_t hashIterStart = perfNowNs();
-            multiOrderedSetFullIteratorInit(mosHash, &iter, true);
-            while (multiOrderedSetFullIteratorNext(&iter, &m, &s)) {
-            }
-            uint64_t hashIterEnd = perfNowNs();
-
-            uint64_t treeIterStart = perfNowNs();
-            multiOrderedSetFullIteratorInit(mosTree, &iter, true);
-            while (multiOrderedSetFullIteratorNext(&iter, &m, &s)) {
-            }
-            uint64_t treeIterEnd = perfNowNs();
-
-            printf("  Iteration (ns/op):\n");
-            printf("    Inline:     %.2f\n",
-                   (double)(inlineIterEnd - inlineIterStart) / N);
-            printf("    Pool HASH:  %.2f\n",
-                   (double)(hashIterEnd - hashIterStart) / N);
-            printf("    Pool TREE:  %.2f\n",
-                   (double)(treeIterEnd - treeIterStart) / N);
-
-            printf("\n");
-
-            multiOrderedSetFullFree(mosInline);
-            multiOrderedSetFullFree(mosHash);
-            multiOrderedSetFullFree(mosTree);
         }
-
-        /* Additional test: Demonstrate deduplication savings.
-         * Pool mode really shines when the same member is used multiple times
-         * (e.g., updating scores for existing members). */
-        printf("--- Deduplication Test (5000 unique from 50000 inserts) ---\n");
-        {
-            const size_t totalOps = 50000;
-            const size_t uniqueMembers = 5000;
-            const size_t strLen = 48;
-
-            multiOrderedSetFull *mosInline = multiOrderedSetFullNew();
-            multiOrderedSetFull *mosHash =
-                multiOrderedSetFullNewWithPoolType(ATOM_POOL_HASH);
-            multiOrderedSetFull *mosTree =
-                multiOrderedSetFullNewWithPoolType(ATOM_POOL_TREE);
-
-            char buf[128];
-
-            /* Insert with heavy reuse (10 score updates per member on avg) */
-            for (size_t i = 0; i < totalOps; i++) {
-                size_t memberIdx = i % uniqueMembers;
-                databox score = databoxNewUnsigned(i);
-                memset(buf, 'A' + (memberIdx % 26), strLen);
-                snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2),
-                         memberIdx);
-                buf[strLen] = '\0';
-                databox member = databoxNewBytesAllowEmbed(buf, strLen);
-                multiOrderedSetFullAdd(mosInline, &score, &member);
-                multiOrderedSetFullAdd(mosHash, &score, &member);
-                multiOrderedSetFullAdd(mosTree, &score, &member);
-            }
-
-            size_t inlineBytes = multiOrderedSetFullBytes(mosInline);
-            size_t hashBytes = multiOrderedSetFullBytes(mosHash);
-            size_t treeBytes = multiOrderedSetFullBytes(mosTree);
-
-            printf("  Memory after %zu ops (%zu unique 48-byte members):\n",
-                   totalOps, uniqueMembers);
-            printf("    Inline:     %zu bytes (%.1f bytes/member)\n",
-                   inlineBytes, (double)inlineBytes / uniqueMembers);
-            printf("    Pool HASH:  %zu bytes (%.1f bytes/member) [%+.1f%%]\n",
-                   hashBytes, (double)hashBytes / uniqueMembers,
-                   100.0 * ((double)hashBytes / inlineBytes - 1.0));
-            printf("    Pool TREE:  %zu bytes (%.1f bytes/member) [%+.1f%%]\n",
-                   treeBytes, (double)treeBytes / uniqueMembers,
-                   100.0 * ((double)treeBytes / inlineBytes - 1.0));
-
-            multiOrderedSetFullFree(mosInline);
-            multiOrderedSetFullFree(mosHash);
-            multiOrderedSetFullFree(mosTree);
-        }
-
-        /* Summary: Highlight the key tradeoffs */
-        printf("=== BACKEND SELECTION SUMMARY ===\n");
-        printf("┌─────────────────────────────────────────────────────────────┐"
-               "\n");
-        printf("│ ATOM_POOL_HASH (stringPool):                                "
-               "│\n");
-        printf("│   Memory:  ~84 bytes/entry overhead (2-3x more than TREE)   "
-               "│\n");
-        printf("│   Speed:   O(1) lookup, faster iteration                    "
-               "│\n");
-        printf("│   Best for: Read-heavy workloads, iteration-intensive apps  "
-               "│\n");
-        printf("├─────────────────────────────────────────────────────────────┤"
-               "\n");
-        printf("│ ATOM_POOL_TREE (multimapAtom):                              "
-               "│\n");
-        printf("│   Memory:  ~22 bytes/entry overhead (3-4x less than HASH)   "
-               "│\n");
-        printf("│   Speed:   O(log n) lookup, iteration 5-6x slower           "
-               "│\n");
-        printf("│   Best for: Memory-constrained, write-heavy, small pools    "
-               "│\n");
-        printf("├─────────────────────────────────────────────────────────────┤"
-               "\n");
-        printf("│ CRITICAL: TREE is 5-10x SLOWER for iteration than HASH!     "
-               "│\n");
-        printf("│ If you iterate frequently, use HASH despite memory cost.    "
-               "│\n");
-        printf("└─────────────────────────────────────────────────────────────┘"
-               "\n");
-        printf("\n");
     }
 
     /* ================================================================

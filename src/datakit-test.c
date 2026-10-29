@@ -12,7 +12,6 @@
 #include "OSRegulate.h"
 #include "aeadNonceLog.h"
 #include "aesGcm.h"
-#include "atomPool.h"
 #include "bbits.h"
 #include "blake3.h"
 #include "chacha20poly1305.h"
@@ -124,7 +123,6 @@ extern int ptrlibTest(int argc, char *argv[]);
 #include "sharrow.h"
 #include "str.h"
 #include "strDoubleFormat.h"
-#include "stringPool.h"
 #include "timeUtil.h"
 #include "timerWheel.h"
 #include "ulid.h"
@@ -12368,10 +12366,9 @@ static const TestEntry testRegistry[] = {
     T_A(perfRegression, "perf-baseline,perfbase"),
     T_A(containerMatrix, "matrix"), T(mflex), T_A(multilist, "ml"),
     T(multilistFull), T(multidict), T_ADJ(multimap), T(multimapFull),
-    T(multimapMedium), T_A_ADJ(multimapAtom, "atom"),
-    T_A_ADJ(stringPool, "sp,strpool"), T_A_ADJ(atomPool, "ap,apool"),
-    T_ADJ(multiarray), T_ADJ(multiarraySmall), T_ADJ(multiarrayMedium),
-    T_ADJ(multiarrayLarge), T_ADJ(multiroar), T_A_ADJ(multiOrderedSet, "mos"),
+    T(multimapMedium), T_A_ADJ(multimapAtom, "atom"), T_ADJ(multiarray),
+    T_ADJ(multiarraySmall), T_ADJ(multiarrayMedium), T_ADJ(multiarrayLarge),
+    T_ADJ(multiroar), T_A_ADJ(multiOrderedSet, "mos"),
     T_A_ADJ(multilru, "lru,mlru"), T_A_ADJ(ptrPrevNext, "ppn"),
     T_A(tierSim, "sim"),
 

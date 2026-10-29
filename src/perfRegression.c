@@ -11,7 +11,6 @@
 #ifdef DATAKIT_TEST
 
 #include "atomPersist.h"
-#include "atomPool.h"
 #include "blake3.h"
 #include "chacha20poly1305.h"
 #include "cleaner.h"
@@ -47,7 +46,6 @@
 #include "rapidhash.h"
 #include "sha256Internal.h"
 #include "str.h" /* StrScanScanReliable */
-#include "stringPool.h"
 #include "timeUtil.h"
 #include "ulid.h"
 
@@ -613,7 +611,6 @@ defcleaner(multiarray *, multiarrayFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(idRows *, idRowsFree);
-defcleaner(stringPool *, stringPoolFree);
 defcleaner(intset *, intsetFree);
 defcleaner(multilru *, multilruFree);
 defcleanerName(multilruPtr *, zfree, PerfLruPtrs);
@@ -2488,42 +2485,9 @@ static void benchMultilru(const uint32_t n) {
 }
 
 /* A reusing atom table of PERF_CONTAINER_N string atoms with the reverse
- * index 'index', its rows under 'module': interning new and present
- * values, retains and releases by value (the last release deletes), the
- * count update alone, and a snapshot and restore */
-/* atomPool over one backend (module atomPoolHash or atomPoolTree): new
- * strings interned (bytes: the pool's metered heap with every atom), the
- * same strings interned again, ids read back to their strings in scattered
- * order, a present string's id, and a retain and release by id */
-static void benchAtomPool(const char *module, const atomPoolType type,
-                          const char *keys) {
-    const uint32_t n = PERF_CONTAINER_N;
-    uint64_t sink = 0;
-    const bool metered = ctestHeapMeterStart();
-    atomPool *pool = atomPoolNew(type);
-    cleanerName(zfree, PerfIds) uint64_t *ids = zcalloc(n, sizeof(uint64_t));
-    double t0 = timeUtilMonotonicSec();
-    for (uint32_t i = 0; i < n; i++) {
-        const databox k = perfContainerKey(keys, i);
-        ids[i] = atomPoolIntern(pool, &k);
-    }
-    const double internSecs = timeUtilMonotonicSec() - t0;
-    emitRow(module, "internNew", perfHeapStop(metered), n, internSecs);
-
-    PERF_ROW(module, "internPresent", n,
-             const databox k = perfContainerKey(keys, i);
-             sink += atomPoolIntern(pool, &k));
-    PERF_ROW(module, "lookupByIdScattered", n, databox s = {};
-             sink += atomPoolLookup(pool, ids[perfScatter(i)], &s));
-    PERF_ROW(module, "getId", n,
-             const databox k = perfContainerKey(keys, perfScatter(i));
-             sink += atomPoolGetId(pool, &k));
-    PERF_ROW(module, "retainRelease", n, atomPoolRetain(pool, ids[i]);
-             sink += atomPoolRelease(pool, ids[i]));
-    atomPoolFree(pool);
-    perfContainerSink = sink;
-}
-
+ * index 'index' and the store 'store', its rows under 'module': interning
+ * new and present values, retains and releases by value (the last release
+ * deletes), the count update alone, and a snapshot and restore */
 static void benchAtomTable(const char *module, const multimapAtomIndex index,
                            const multimapAtomStore store, const char *keys) {
     const uint32_t n = PERF_CONTAINER_N;
@@ -2596,9 +2560,7 @@ static void benchAtomTable(const char *module, const multimapAtomIndex index,
     }
     emitRow(module, "retainById", 0, n, timeUtilMonotonicSec() - t0);
     for (uint32_t i = 0; i < n; i++) {
-        const databox ref = {.data.u = ids[i],
-                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
-        sink += multimapAtomReleaseById(ma, &ref);
+        sink += multimapAtomReleaseById(ma, ids[i]);
     }
 
     /* A reference read back to its value: what every holder of an id pays
@@ -2959,8 +2921,6 @@ static void benchMultimapAtom(void) {
                    MULTIMAP_ATOM_STORE_PACKED, keys);
     benchAtomTable("multimapAtomSlotsDirect", MULTIMAP_ATOM_INDEX_SLOTS,
                    MULTIMAP_ATOM_STORE_DIRECT, keys);
-    benchAtomPool("atomPoolHash", ATOM_POOL_HASH, keys);
-    benchAtomPool("atomPoolTree", ATOM_POOL_TREE, keys);
 
     const uint32_t n = PERF_CONTAINER_N;
     uint64_t sink = 0;
@@ -3001,25 +2961,6 @@ static void benchMultimapAtom(void) {
         persistOpsMultimapAtom.restore(holedSnap, holedLen);
     emitRow("multimapAtomLowest", "restore", 0, n, timeUtilMonotonicSec() - t0);
     sink += multimapAtomCount(holedRestored);
-
-    /* The hash-backed pool of the same strings */
-    cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
-    for (uint32_t i = 0; i < n; i++) {
-        const databox k = perfContainerKey(keys, i);
-        sink += stringPoolIntern(pool, &k);
-    }
-
-    size_t poolLen = 0;
-    t0 = timeUtilMonotonicSec();
-    cleanerName(zfree, U8Buf) uint8_t *poolSnap =
-        persistOpsStringPool.snapshot(pool, &poolLen);
-    emitRow("stringPool", "snapshot", 0, n, timeUtilMonotonicSec() - t0);
-
-    t0 = timeUtilMonotonicSec();
-    cleaner(stringPoolFree) stringPool *poolRestored =
-        persistOpsStringPool.restore(poolSnap, poolLen);
-    emitRow("stringPool", "restore", 0, n, timeUtilMonotonicSec() - t0);
-    sink += stringPoolCount(poolRestored);
 
     perfContainerSink = sink;
 }

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "atomPool.h"
 #include "multiOrderedSetCommon.h"
 #include "multiarray.h"
 #include "multidict.h"
+#include "multimapAtom.h"
 
 /* ====================================================================
  * multiOrderedSetFull - Dual structure tier
@@ -22,15 +22,11 @@
  *
  * Memory: ~64-80 bytes fixed overhead + actual data
  *
- * ATOM POOL MODE (opt-in):
+ * ATOM TABLE MODE (opt-in):
  *   When pool is non-NULL, scoreMap stores (score, memberID) instead of
- *   (score, member). This reduces memory duplication - member strings are
- *   stored once in the pool, and only integer IDs are stored in scoreMap.
+ *   (score, member): members are interned in the atom table (multimapAtom,
+ *   any index, ids and store) and only their ids are stored in scoreMap.
  *   The memberIndex still stores member strings as keys for O(1) lookup.
- *
- *   Two backends available via atomPool:
- *   - ATOM_POOL_HASH: O(1) operations, higher memory (~84 bytes/entry)
- *   - ATOM_POOL_TREE: O(log n) operations, lower memory (~22 bytes/entry)
  * ==================================================================== */
 
 struct multiOrderedSetFull {
@@ -39,7 +35,7 @@ struct multiOrderedSetFull {
     multiarray *scoreMap;    /* flex *; sorted (score,member/memberID) */
     multiarray *middle;      /* uint32_t; middle offsets per sub-map */
     multiarray *rangeBox;    /* databox; head score per sub-map */
-    atomPool *pool;          /* Optional: atom pool for member interning */
+    multimapAtom *pool;      /* Optional: atom table interning members */
     uint32_t mapCount;       /* Number of sub-maps */
     uint64_t
         totalEntries; /* Total (score, member) pairs - supports >4B entries */

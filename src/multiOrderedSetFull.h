@@ -1,8 +1,8 @@
 #pragma once
 
-#include "atomPool.h"
 #include "multiOrderedSet.h"
 #include "multiOrderedSetCommon.h"
+#include "multimapAtom.h"
 
 /* @handle: fixed: its address holds from creation to free */
 typedef struct multiOrderedSetFull multiOrderedSetFull;
@@ -13,18 +13,20 @@ struct multiOrderedSetMedium;
  * ==================================================================== */
 multiOrderedSetFull *multiOrderedSetFullNew(void);
 
-/* Create with external atomPool for member interning (pool not owned).
- * When using a pool, scoreMap stores member IDs instead of member bytes,
- * significantly reducing memory for large datasets with long strings. */
-multiOrderedSetFull *multiOrderedSetFullNewWithPool(atomPool *pool);
+/* Create interning members in the atom table 'pool' (not owned; it may
+ * be shared by several sets).  The score map then holds each member's id
+ * instead of its bytes. */
+multiOrderedSetFull *multiOrderedSetFullNewWithPool(multimapAtom *pool);
 
-/* Create with owned atomPool using default HASH backend (fast O(1)) */
+/* Create with an owned atom table: SLOTS index and DIRECT store (constant
+ * time finds and reads by id) */
 multiOrderedSetFull *multiOrderedSetFullNewWithOwnedPool(void);
 
-/* Create with owned atomPool using specified backend type:
- * - ATOM_POOL_HASH: O(1) operations, higher memory (~84 bytes/entry)
- * - ATOM_POOL_TREE: O(log n) operations, lower memory (~22 bytes/entry) */
-multiOrderedSetFull *multiOrderedSetFullNewWithPoolType(atomPoolType type);
+/* Create with an owned atom table of 'config's settings (multimapAtom.h:
+ * PACKED and ORDERED/HASHED for the fewest bytes); NULL for an unknown
+ * setting */
+multiOrderedSetFull *
+multiOrderedSetFullNewWithOwnedPoolConfig(const multimapAtomConfig *config);
 
 multiOrderedSetFull *
 multiOrderedSetFullNewFromMedium(struct multiOrderedSetMedium *medium,

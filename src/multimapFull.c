@@ -4495,6 +4495,7 @@ int multimapFullTest(int, char *[]) {
         /* The rangeBox of a surrogate-keyed map holds the resolved head
          * key.  The atom table holds narrow values and one wide value,
          * inserted last so building the table never resolves it. */
+        /* @own: caller; free=multimapAtomFree */
         multimapAtom *ma = multimapAtomNew();
         for (int64_t v = 10; v <= 30; v += 10) {
             const databox atom = databoxNewSigned(v);
@@ -4559,6 +4560,7 @@ int multimapFullTest(int, char *[]) {
          * oracle of the ids it holds right after the copy and again after
          * inserts and deletes on it; the source must stay unchanged. */
         constexpr int copyAtoms = 2400;
+        /* @own: caller; free=multimapAtomFree */
         multimapAtom *ma = multimapAtomNew();
         static __uint128_t wideVals[copyAtoms];
         static char strVals[copyAtoms][24];

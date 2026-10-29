@@ -2465,10 +2465,6 @@ const char *persistTypeName(persistType type) {
         return "segmentDouble";
     case PERSIST_TYPE_MULTIMAP_ATOM:
         return "multimapAtom";
-    case PERSIST_TYPE_STRING_POOL:
-        return "stringPool";
-    case PERSIST_TYPE_ATOM_POOL:
-        return "atomPool";
     case PERSIST_TYPE_ID_ROWS:
         return "idRows";
     default:
@@ -8101,18 +8097,6 @@ int persistTest(int, char *[]) {
               {PERSIST_OP_CLEAR, nullptr, 0}},
              3,
              false},
-            {&persistOpsStringPool,
-             {{PERSIST_OP_INSERT, row, 1},
-              {PERSIST_OP_INSERT, holeRow, 2},
-              {unknownOp, row, 2}},
-             3,
-             true},
-            {&persistOpsAtomPool,
-             {{PERSIST_OP_INSERT, row, 1},
-              {PERSIST_OP_NUM_INCR, holeRow, 2},
-              {unknownOp, row, 2}},
-             3,
-             true},
             {&persistOpsMultiFenwick,
              {{PERSIST_OP_NUM_INCR, row, 1},
               {PERSIST_OP_UPDATE, holeRow, 2},
@@ -8128,9 +8112,9 @@ int persistTest(int, char *[]) {
             {&persistOpsMultimapAtom,
              {{PERSIST_OP_INSERT, row, 1},
               {PERSIST_OP_DELETE, nullptr, 1},
-              {PERSIST_OP_CLEAR, nullptr, 0}},
+              {unknownOp, row, 2}},
              3,
-             false},
+             true},
             {&persistOpsIdRows,
              {{PERSIST_OP_INSERT, row, 1},
               {PERSIST_OP_UPDATE, row, 2},

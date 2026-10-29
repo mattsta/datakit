@@ -1500,6 +1500,7 @@ int multimapMediumTest(int, char *[]) {
          * map[1]'s head reference to its value.  The atom table holds a
          * narrow value and a wide one; the wide one is inserted last, so
          * building the table never resolves it. */
+        /* @own: caller; free=multimapAtomFree */
         multimapAtom *ma = multimapAtomNew();
         const databox narrow = databoxNewSigned(10);
         multimapAtomInsert(ma, &narrow);

@@ -88,7 +88,7 @@ auto-discovers CTest targets from it.
 
 ## Documentation
 
-**Comprehensive documentation is now available in the `docs/` directory!**
+Every module is documented under `docs/`.
 
 ### Quick Start
 
@@ -194,14 +194,6 @@ auto-discovers CTest targets from it.
 - [Container Performance Matrix](docs/PERFORMANCE_MATRIX.md) - Operations per second and bytes per element for every container, element kind and size (`dktools matrix`)
 - [Performance Baselines Ledger](docs/PERFORMANCE_BASELINES.md) - Dated benchmark captures
 - [Hash / Envelope Performance](docs/HASH_PERFORMANCE.md) - Hash and envelope throughput reference
-
-## Status
-
-This is a recently updated development snapshot.
-
-Many components are complete and now fully documented.
-
-Some components are a first or second draft and need another feature refactoring cycle or two.
 
 ## License
 

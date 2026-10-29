@@ -4405,11 +4405,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("reset then reuse: Full tier with TREE atom pool") {
-        /* End-to-end pin for the atomPool treeReset fix: the TREE
-         * backend used to no-op on reset, leaving atoms interned */
+    TEST("reset then reuse: Full tier with an owned compact atom table") {
+        /* A reset empties the owned atom table too: no atom stays
+         * interned, and the set is usable afterwards */
         multiOrderedSetFull *m =
-            multiOrderedSetFullNewWithPoolType(ATOM_POOL_TREE);
+            multiOrderedSetFullNewWithOwnedPoolConfig(&(multimapAtomConfig){});
         char member[32];
 
         for (int cycle = 0; cycle < 2; cycle++) {
@@ -4749,7 +4749,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     err += multiOrderedSetSmallTest(argc, argv);
     err += multiOrderedSetMediumTest(argc, argv);
 
-    /* Run multiOrderedSetFull-specific tests (including stringPool mode) */
+    /* Run multiOrderedSetFull-specific tests (atom table mode included) */
     err += multiOrderedSetFullTest(argc, argv);
 
     TEST_FINAL_RESULT;
