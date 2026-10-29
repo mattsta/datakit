@@ -1315,9 +1315,6 @@ bool multimapProcessPredicate(const multimapPredicate *p,
 
     int compared = databoxCompare(value, &p->compareAgainst);
     switch (p->condition) {
-    case MULTIMAP_CONDITION_ALL:
-        return true;
-        break;
     case MULTIMAP_CONDITION_LESS_THAN_EQUAL:
         if (compared <= 0) {
             return true;
@@ -1343,9 +1340,7 @@ bool multimapProcessPredicate(const multimapPredicate *p,
             return true;
         }
         break;
-    case MULTIMAP_CONDITION_NONE:
-        return false; /* no value meets it */
-    default:
+    default: /* ALL and NONE returned above */
         assert(false);
         unreachable();
     }
@@ -4923,6 +4918,49 @@ int multimapTest(int, char *[]) {
                     }
                 }
             }
+        }
+    }
+
+    TEST("DeleteByPredicate on an empty map and on rows wider than the "
+         "stack row") {
+        /* ALL and GREATER_THAN on an empty map remove nothing; on a map
+         * of 12-element rows (past the 8 kept on the stack) the suffix
+         * goes and the rest keep every field */
+        cleaner(multimapFree) multimap *m = multimapNew(12);
+        const multimapPredicate all = {.condition = MULTIMAP_CONDITION_ALL};
+        const multimapPredicate above = {.condition =
+                                             MULTIMAP_CONDITION_GREATER_THAN,
+                                         .compareAgainst = databoxNewSigned(9)};
+        if (multimapDeleteByPredicate(&m, &all) ||
+            multimapDeleteByPredicate(&m, &above)) {
+            ERR("an empty map reported a delete");
+        }
+
+        databox boxes[12];
+        const databox *row[12];
+        for (int64_t k = 0; k < 20; k++) {
+            for (int f = 0; f < 12; f++) {
+                boxes[f] = databoxNewSigned(k * 100 + f);
+                row[f] = &boxes[f];
+            }
+            boxes[0] = databoxNewSigned(k);
+            multimapInsert(&m, row);
+        }
+
+        if (!multimapDeleteByPredicate(&m, &above) || multimapCount(m) != 10) {
+            ERR("%zu rows left of 20 after > 9", multimapCount(m));
+        }
+        databox got[11];
+        databox *gotP[11];
+        for (int f = 0; f < 11; f++) {
+            gotP[f] = &got[f];
+        }
+        const databox nine = databoxNewSigned(9);
+        if (!multimapLookup(m, &nine, gotP) || got[10].data.i != 911) {
+            ERR("row 9 lost its fields%s", "");
+        }
+        if (!multimapDeleteByPredicate(&m, &all) || multimapCount(m) != 0) {
+            ERR("ALL left %zu rows", multimapCount(m));
         }
     }
 
