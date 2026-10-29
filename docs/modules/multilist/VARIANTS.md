@@ -114,9 +114,12 @@ multilistMedium (16 bytes)
 - After a pop, if `fl[0]` became empty while `fl[1]` still has data, the two
   pointers are swapped to restore that invariant
 - The tail flex is `fl[flexCount(fl[1]) > 0]`
-- There is no size-based rebalancing between the two flexes (the source marks
-  it `todo`), so a head-heavy or tail-heavy access pattern leaves one flex
-  much larger than the other until the list upgrades to Full
+- After a push or an insert, when one flex holds more than twice the other's
+  bytes (and at least 512), entries move from its inner end (`fl[0]`'s tail,
+  `fl[1]`'s head) to the other's inner end until the two hold about as many
+  each. Head-heavy and tail-heavy patterns stay split in halves, so a shift or
+  an index walk covers half the list; the move happens each time one side
+  doubles, so it costs amortized O(1) per push
 
 **When to Use:**
 

@@ -2220,6 +2220,20 @@ static void perfFillList(multilist **ml, mflexState *s) {
  * tail pushes, scattered index reads, drains from the head and from the
  * tail, and scattered single deletes (each drain empties the list and an
  * untimed refill follows) */
+/* One push of mediumPushHead's stack: a head push, onto a new list every
+ * 1500 */
+static void perfMediumHeadPush_(multilist **stack, mflexState *s,
+                                const uint32_t i) {
+    if (i % 1500 == 0) {
+        multilistFree(*stack);
+        /* @own: container; free=multilistFree */
+        *stack = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
+    }
+
+    const databox b = databoxNewSigned((int64_t)(i % 1000));
+    multilistPushByTypeHead(stack, s, &b);
+}
+
 static void benchMultilist(void) {
     const uint32_t n = PERF_CONTAINER_N;
     cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
@@ -2261,6 +2275,18 @@ static void benchMultilist(void) {
         dkTierStats st = {};
         multilistStats(queue, &st);
         sink += st.tier;
+    }
+
+    /* A stack built at the head in the Medium tier: head pushes of small
+     * counts up to 1500 (about 4 KB at the 2 KB limit), then a new list;
+     * every head push shifts the head flex */
+    {
+        /* @own: caller; free=multilistFree */
+        multilist *stack = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
+        PERF_ROW("multilist", "mediumPushHead", n,
+                 perfMediumHeadPush_(&stack, s, i));
+        sink += multilistCount(stack);
+        multilistFree(stack);
     }
 
     /* The pushTail elements again, 64 to a bulk push (ns per element) */

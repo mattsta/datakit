@@ -3460,6 +3460,66 @@ int multilistTest(int, char *[]) {
         }
     }
 
+    TEST("MEDIUM: head pushes and middle inserts keep the halves balanced, "
+         "in order") {
+        /* Head-only, tail-only and middle-insert patterns: after every
+         * head push or insert neither flex holds more than twice the
+         * other's bytes once past the 512-byte floor (tail appends shift
+         * nothing and leave the halves as they are), and the list reads
+         * back in the oracle's order */
+        for (int pattern = 0; pattern < 3; pattern++) {
+            cleaner(multilistMediumFree) multilistMedium *md =
+                multilistMediumNew(0, 0);
+            int64_t oracle[800];
+            size_t n = 0;
+            for (int64_t v = 0; v < 800 && !err; v++) {
+                const databox box = databoxNewSigned(v * 1000);
+                if (pattern == 0) {
+                    multilistMediumPushByTypeHead(md, &box);
+                    memmove(&oracle[1], &oracle[0], n * sizeof(oracle[0]));
+                    oracle[0] = v * 1000;
+                } else if (pattern == 1 || n < 2) {
+                    multilistMediumPushByTypeTail(md, &box);
+                    oracle[n] = v * 1000;
+                } else {
+                    /* Before the middle element */
+                    const size_t at = n / 2;
+                    multilistEntry entry = {};
+                    if (!multilistMediumIndex(md, (mlOffsetId)at, &entry)) {
+                        ERR("pattern %d: no element %zu", pattern, at);
+                        break;
+                    }
+                    multilistMediumInsertByTypeBefore(md, &entry, &box);
+                    memmove(&oracle[at + 1], &oracle[at],
+                            (n - at) * sizeof(oracle[0]));
+                    oracle[at] = v * 1000;
+                }
+                n++;
+
+                const size_t b0 = flexBytes(md->fl[0]);
+                const size_t b1 = flexBytes(md->fl[1]);
+                const size_t big = b0 > b1 ? b0 : b1;
+                const size_t small = b0 > b1 ? b1 : b0;
+                if (pattern != 1 && big >= 512 && big > 2 * small + 16) {
+                    ERR("pattern %d after %zu: F0 %zu bytes, F1 %zu bytes",
+                        pattern, n, b0, b1);
+                }
+                if (!flexCount(md->fl[0])) {
+                    ERR("pattern %d after %zu: F0 empty", pattern, n);
+                }
+            }
+
+            for (size_t i = 0; i < n && !err; i++) {
+                multilistEntry entry = {};
+                if (!multilistMediumIndex(md, (mlOffsetId)i, &entry) ||
+                    entry.box.data.i != oracle[i]) {
+                    ERR("pattern %d: element %zu is not %" PRId64, pattern, i,
+                        oracle[i]);
+                }
+            }
+        }
+    }
+
     TEST("MEDIUM: a queue's drained head half is refilled with half the "
          "tail") {
         /* 1500 small counts at the 2 KB limit (Medium), then 6000 tail

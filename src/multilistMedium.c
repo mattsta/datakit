@@ -38,6 +38,48 @@ static void multilistMediumRefillHead_(multilistMedium *ml) {
     F1 = flexSplit(&F0, 1);
 }
 
+/* Below this many bytes the larger flex is too small for the shifts a
+ * rebalance saves to pay for the move */
+static constexpr size_t MULTILIST_MEDIUM_BALANCE_MIN = 512;
+
+/* When the larger flex holds more than twice the smaller's bytes (and at
+ * least MULTILIST_MEDIUM_BALANCE_MIN), entries move from its inner end
+ * (F0's tail, F1's head) to the smaller's inner end until the two hold
+ * about as many each; list order holds, and F0 keeps at least one.  Run
+ * after the writes that shift a flex (head pushes and inserts): those
+ * would otherwise grow one flex while the other stays small, and every
+ * shift inside a flex costs its length.  A move happens each time the
+ * larger grows past twice the other, so its cost is amortized O(1) per
+ * write. */
+static void multilistMediumBalance_(multilistMedium *ml) {
+    const size_t bytes0 = flexBytes(F0);
+    const size_t bytes1 = flexBytes(F1);
+    const bool tailBig = bytes1 > bytes0;
+    const size_t big = tailBig ? bytes1 : bytes0;
+    const size_t small = tailBig ? bytes0 : bytes1;
+    if (big < MULTILIST_MEDIUM_BALANCE_MIN || big <= 2 * small) {
+        return;
+    }
+
+    const uint32_t count0 = (uint32_t)flexCount(F0);
+    const uint32_t count1 = (uint32_t)flexCount(F1);
+    const uint32_t move =
+        tailBig ? (count1 - count0) / 2 : (count0 - count1) / 2;
+    if (move == 0 || (tailBig && count0 == 0)) {
+        return;
+    }
+
+    if (tailBig) {
+        /* @own: container; free=flexFree */
+        flex *moved = flexSplitRange(&F1, 0, move);
+        F0 = flexMerge(&F0, &moved);
+    } else {
+        /* @own: container; free=flexFree */
+        flex *moved = flexSplitRange(&F0, -(int32_t)move, move);
+        F1 = flexMerge(&moved, &F1);
+    }
+}
+
 /* ====================================================================
  * Create
  * ==================================================================== */
@@ -196,7 +238,7 @@ void multilistMediumInsertByTypeBefore(multilistMedium *ml,
                                        const multilistEntry *entry,
                                        const databox *box) {
     flexInsertByType(&ml->fl[entry->nodeIdx], entry->fe, box);
-    /* todo: rebalance if necessary */
+    multilistMediumBalance_(ml);
 }
 
 void multilistMediumInsertByTypeAfter(multilistMedium *ml,
@@ -209,7 +251,7 @@ void multilistMediumInsertByTypeAfter(multilistMedium *ml,
     } else {
         flexInsertByType(fl, next, box);
     }
-    /* todo: rebalance if necessary */
+    multilistMediumBalance_(ml);
 }
 
 /* ====================================================================
@@ -356,7 +398,7 @@ bool multilistMediumDelRange(multilistMedium *ml, const mlOffsetId start,
  * ==================================================================== */
 bool multilistMediumReplaceByTypeAtIndex(multilistMedium *ml, mlOffsetId index,
                                          const databox *box) {
-    /* todo: need forward-back, cross-slot traversal */
+    /* Index crosses into F1 and counts a negative index from the tail */
     multilistEntry entry = {};
     if (multilistMediumIndex(ml, index, &entry)) {
         flexReplaceByType(&ml->fl[entry.nodeIdx], entry.fe, box);
@@ -626,9 +668,11 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail) {
  * Insert by endpoint
  * ==================================================================== */
 void multilistMediumPushByTypeHead(multilistMedium *ml, const databox *box) {
-    /* Into F0 whatever its size: moving elements to F1's head would shift
-     * F1 instead (a drained F0 is refilled by splitting F1, on pops) */
+    /* Into F0, which every head push shifts whole: balancing keeps it to
+     * about half the list (a drained F0 is refilled by splitting F1, on
+     * pops) */
     flexPushByTypeExact(&F0, box, FLEX_ENDPOINT_HEAD);
+    multilistMediumBalance_(ml);
 }
 
 void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box) {
@@ -637,9 +681,10 @@ void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box) {
     if (flexCount(F0) == 0 && flexCount(F1) == 0) {
         flexPushByTypeExact(&F0, box, FLEX_ENDPOINT_TAIL);
     } else {
+        /* No balance: a tail append shifts nothing, and pops at the head
+         * refill a drained F0 from F1 */
         flexPushByTypeExact(&F1, box, FLEX_ENDPOINT_TAIL);
     }
-    /* todo: rebalance */
 }
 
 /* ====================================================================
