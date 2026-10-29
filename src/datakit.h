@@ -263,7 +263,14 @@ typedef struct datakitConfig {
 } datakitConfig;
 
 extern datakitConfig datakitConfigMemory__;
-bool datakitConfigSet(datakitConfig *conf);
+/* Route every datakit allocation through 'conf' (a copy is kept).  Call
+ * it before the first allocation, or between allocations that the old
+ * and new allocators can each free.  False, changing nothing, for a NULL
+ * config or one missing any function but localUsableSize. */
+bool datakitConfigSet(const datakitConfig *conf);
+#ifdef DATAKIT_TEST
+int datakitTest(int argc, char *argv[]);
+#endif
 
 /* Bytes usable at the live allocation 'ptr', or 0 when the allocator
  * cannot report it (see datakitConfig.localUsableSize) */

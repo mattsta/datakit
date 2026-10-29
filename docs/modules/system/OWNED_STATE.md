@@ -212,6 +212,48 @@ bool latestQuote(quote *out) {
   `ownedSeqPublishAbandonedTotal` and `ownedSeqPublishRefusedOversizeTotal` over the process;
   `ownedSeqColumnTotal(&decl, column)` for one declaration's row.
 
+## The gate underneath: inflightGate
+
+An arena's reader gate is an `inflightGate` (`inflightGate.h`), usable on its
+own wherever a shutdown must wait for operations in flight:
+
+```c
+static inflightGate requests = INFLIGHT_GATE_INIT;
+static _Atomic bool open = true;
+
+bool handle(request *r) {
+    inflightGateEnter(&requests);
+    if (!atomic_load(&open)) {          /* the gate does not refuse work */
+        inflightGateExit(&requests);
+        return false;
+    }
+    serve(r);
+    inflightGateExit(&requests);
+    return true;
+}
+
+void shutdown(void) {
+    atomic_store(&open, false);
+    if (inflightGateAwaitZeroMs(&requests, 5000) == INFLIGHT_GATE_EXPIRED) {
+        /* still busy after 5 s: the caller decides */
+    }
+}
+```
+
+- Enter is one atomic increment; Exit a load and a CAS, taking the gate's
+  mutex only when it brings the count to zero while a waiter is parked
+  (`inflightGateExitArmed`, out of line). `inflightGateExitPrev` returns the
+  depth before its decrement (1: this exit reached zero).
+- `inflightGateAwaitZeroMs(&g, ms)` parks until the count is zero (IDLE) or
+  the budget ends (EXPIRED); `inflightGateVerdictName` names a verdict. After
+  IDLE the gate may be freed, provided nothing can Enter it again.
+- `inflightGateDepth` is a relaxed read for diagnostics;
+  `inflightGateSampleLatest` reads the latest count with an atomic RMW.
+  `inflightGateWakeAllWaiters` wakes parked waiters to re-check (harmless when
+  the gate is busy).
+- All scopes share one count word, so many cores entering at once contend
+  on its cache line.
+
 ## Release rules
 
 - `OWNED_RELEASE_GRACE_AND_READERS` (the default): a retired object is freed once `graceUs` has passed

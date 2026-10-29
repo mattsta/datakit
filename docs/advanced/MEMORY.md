@@ -330,6 +330,34 @@ multilistFree(logs);
 
 ## Memory Allocation Strategies
 
+### Routing datakit's allocations
+
+Every datakit allocation (`zmalloc`, `zcalloc`, `zrealloc`, `zfree`) goes
+through one process-wide `datakitConfig`: libc's functions by default. A
+program that uses another allocator (jemalloc in production) installs it once,
+before the first allocation:
+
+```c
+const datakitConfig conf = {
+    .localMalloc = je_malloc,
+    .localCalloc = je_calloc,
+    .localRealloc = je_realloc,
+    .localReallocSlate = je_realloc,
+    .localFree = je_free,
+    .localMemalign = je_posix_memalign,
+    .localUsableSize = je_malloc_usable_size, /* optional */
+};
+if (!datakitConfigSet(&conf)) {
+    /* refused: a function was missing; the old config stays */
+}
+```
+
+`localUsableSize` is optional: with it, secure wipes clear an allocation's
+slack too and small flexes may keep growth room (`flexSetGrowthSlack`).
+`datakitMemshardConfig()` builds the same config over the vendored memshard
+allocator, and `datakitUseMemshard()` installs it (link `memshard` and
+`memshardConfig.c`).
+
 ### membound - Bounded Allocator
 
 **Purpose**: Pre-allocate fixed pool, prevent unbounded growth.

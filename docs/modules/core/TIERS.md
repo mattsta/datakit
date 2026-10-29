@@ -58,6 +58,9 @@ dkTierLimitResult r =
 /* DK_TIER_LIMIT_SET, DK_TIER_LIMIT_BAD_FAMILY or
  * DK_TIER_LIMIT_OUT_OF_RANGE (outside 64 B..64 KB); a refusal changes
  * nothing.  Containers made earlier keep their limit. */
+
+flexCapSizeLimit now = dkTierDefaultLimit(DK_TIER_MULTIMAP);   /* in force */
+flexCapSizeLimit built = dkTierCompiledLimit(DK_TIER_MULTIMAP); /* to reset to */
 ```
 
 `dktools tune NAME` measures every limit on the machine it runs on, reads

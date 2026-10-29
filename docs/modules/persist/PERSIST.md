@@ -279,6 +279,39 @@ never appended to or overwritten.
 stamps, key id, element count and WAL sequence. `persistVerifySnapshot` /
 `persistVerifyWAL` check every envelope.
 
+### Stamping bytes of your own (`dkFormat.h`)
+
+A serialization handed to a caller, a cache or another process carries the
+same kind of stamp as a prefix, so a reader refuses bytes it does not
+understand instead of misreading them. A format is a `dkFormatSpec`: its id,
+the version this build writes, the oldest it reads, and the feature bits it
+knows (the low 32 bits must be understood; the high 32 may be skipped).
+
+```c
+static const dkFormatSpec mySpec = {
+    .name = "myIndex", .id = MY_FORMAT_ID, .version = 2,
+    .minReadVersion = 1, .knownFeatures = MY_FEATURE_BLOOM};
+
+/* Writing: the stamp this build writes, as a prefix */
+const dkFormatStamp stamp = dkFormatStampFor(&mySpec, MY_FEATURE_BLOOM);
+const size_t prefix = dkFormatPrefixSize(&stamp);
+dkFormatPrefixWrite(&stamp, out, cap);   /* then the payload after it */
+
+/* Reading: check the prefix before touching the payload */
+dkFormatStamp found;
+size_t at = 0;
+const dkFormatResult r = dkFormatPrefixRead(&mySpec, buf, len, &found, &at);
+if (r != DK_FORMAT_OK) {
+    fprintf(stderr, "refused %s: id %" PRIu32 " version %" PRIu32 "\n",
+            dkFormatResultName(r), found.id, found.version);
+}
+```
+
+`dkFormatCheck(&spec, &stamp)` checks a stamp read some other way (a file
+header). The results are `DK_FORMAT_OK`, `_MALFORMED`, `_WRONG_ID`,
+`_VERSION_TOO_NEW`, `_VERSION_TOO_OLD` and `_FEATURE_UNKNOWN`.
+`dkFormatManifest` lists every format this build writes and reads.
+
 ### Reading files by path (operators)
 
 `persistOpenFiles(snapshotPath, walPath, &why)` opens a snapshot and a WAL

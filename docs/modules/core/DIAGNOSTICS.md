@@ -103,6 +103,7 @@ Whether a report also writes one line to stderr is the print mode:
 
 ```c
 dkDiagSetPrintMode(DK_DIAG_PRINT_ALWAYS);
+const dkDiagPrintMode was = dkDiagGetPrintMode(); /* to restore it later */
 ```
 
 The line reads `datakit: misuse: MULTIROAR_WRONG_MODE in multiroarBitSet (multiroar.c:520): a bit operation

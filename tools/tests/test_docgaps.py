@@ -62,6 +62,16 @@ class DocGaps(unittest.TestCase):
             ("fenwick2dU16Get", "fenwickU32Bytes", "segmentWideFoo"),
         )
 
+    def test_system_functions_a_header_redeclares_are_not_api(self) -> None:
+        (self.repo / "src" / "sys.h").write_text(
+            "#pragma once\nint posix_memalign(void **p, size_t a, size_t n);\n"
+            "int pthread_cond_timedwait_relative_np(void *c, void *m, void *t);\n"
+            "void sysOwn(void);\n"
+        )
+        by = {g.header: g for g in self.report()}
+        self.assertEqual(by["src/sys.h"].declared, 1)
+        self.assertEqual(by["src/sys.h"].undocumented, ("sysOwn",))
+
     def test_per_structure_calls_document_every_structures_call(self) -> None:
         (self.repo / "src" / "p.h").write_text(
             "#pragma once\nvoid listNewP(void);\nvoid mapNewP(void);\n"

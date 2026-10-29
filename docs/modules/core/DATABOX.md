@@ -716,6 +716,31 @@ versus `==` (values).
 
 Comparing a `DATABOX_VOID` box asserts in debug builds.
 
+## Linear Encoding (`databoxLinear.h`)
+
+A compact, stable binary form of one box for disk or the network: a type
+byte, then the fewest value bytes (integers in 1 to 8 bytes, floats and
+doubles narrowed to float16 or float32 when that is exact, booleans and null
+in the type byte alone). Type ids never change.
+
+```c
+/* Fixed-width boxes (numbers, booleans, null) */
+databoxLinear linear;
+const ssize_t valueLen = databoxLinearEncode(&box, &linear); /* -1: unsupported */
+/* write linear.type, then valueLen bytes of linear.data */
+
+databox back;
+databoxLinearDecode(&linear, &back);              /* false: unknown type */
+databoxLinearDecodeParts(type, valueBytes, &back); /* type and bytes kept apart */
+```
+
+Bytes carry their own length, so they go through macros that take it:
+`DATABOX_LINEAR_PARTS_ENCODE(box, len, value, type, &scratch)` gives the type
+byte and the value span for any box (bytes point at the box's own bytes), and
+`DATABOX_LINEAR_DECODE(&linear, &box, len)` /
+`DATABOX_LINEAR_PARTS_DECODE(type, value, len, &box)` decode any type, a
+decoded bytes box pointing into the encoded buffer.
+
 ## Canonical Numerals and Minimal Storage
 
 These functions give a value its minimal-storage form: a byte string that

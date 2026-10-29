@@ -5,8 +5,9 @@
 Every function a public header under ``src/`` declares (the headers and
 declarations ``dktools coverage`` counts as public API) is looked for, as
 a whole word, in the user-level docs: ``docs/**/*.md`` and ``README.md``
-(suite and benchmark entry points, ``fooTest`` / ``fooBench``, and
-declarations under ``#ifdef DATAKIT_TEST`` are not API and are not
+(suite and benchmark entry points, ``fooTest`` / ``fooBench``,
+declarations under ``#ifdef DATAKIT_TEST``, and system functions a header
+redeclares, libc's allocators and ``pthread_*``, are not API and are not
 counted).
 Typed families are documented once: a doc that writes ``prefix<T>rest``
 (``segment<T>NewFromArray``) documents ``prefix`` + every type + ``rest``,
@@ -44,6 +45,12 @@ _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 #: A suite's or benchmark's entry point (``fooTest(argc, argv)``), not API
 _ENTRY_POINT = re.compile(r"(Test|Bench)$")
+
+#: A system function a header redeclares (libc's allocators, pthreads),
+#: not datakit's API
+_SYSTEM = re.compile(
+    r"^(pthread_\w+|posix_memalign|aligned_alloc|malloc|calloc|realloc|free)$"
+)
 
 #: ``prefix<T>rest`` in a doc: a typed family's name pattern
 _FAMILY = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)<T>([A-Za-z0-9_]*)")
@@ -154,7 +161,7 @@ def gaps(
             {
                 n
                 for n in declared_functions(api_text(text))
-                if not _ENTRY_POINT.search(n)
+                if not _ENTRY_POINT.search(n) and not _SYSTEM.match(n)
             }
         )
         if names:

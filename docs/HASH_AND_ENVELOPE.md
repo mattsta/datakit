@@ -66,6 +66,15 @@ introspect + force-override hooks (see "test-only override" below).
 | ChaCha20 (keystream)                      | AVX2 (8-block) → NEON (4-block) → scalar                        | `hash/chacha20AVX2.c`, `hash/chacha20Neon.c`, `chacha20poly1305.c`         | `chacha20ActiveBackend()`         | `chacha20SetForceBackend()` |
 | Poly1305 (one-shot + streaming Update)    | AVX2 (4-block parallel r²/r³/r⁴) → NEON (2-block) → scalar      | `hash/poly1305AVX2.c`, `hash/poly1305Neon.c`, `chacha20poly1305.c`         | `poly1305ActiveBackend()`         | `poly1305SetForceBackend()` |
 
+Each backend exports an availability probe and its compression entry
+points, which the dispatcher calls; call them directly only from a parity
+test or a benchmark: `sha256ShaNiAvailable`, `sha256ShaNiCompressBlocks`,
+`sha256ShaNiCompressBlocksMulti4` (four independent states at once);
+`sha256ArmCryptoAvailable`, `sha256ArmCryptoCompressBlocks`,
+`sha256ArmCryptoCompressBlocksMulti4`; `blake3AVX2Available`,
+`blake3AVX2CompressInPlace`, `blake3AVX2CompressXof`, `blake3AVX2Compress8`
+(eight chunk states at once).
+
 All backends for one primitive are bit-identical on every input — the
 parity tests in `datakit-test` enumerate the table and assert
 scalar-vs-SIMD agreement on RFC test vectors plus 100K random inputs
