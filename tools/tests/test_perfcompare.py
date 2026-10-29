@@ -166,6 +166,19 @@ class Table(unittest.TestCase):
         self.assertAlmostEqual(p, 4 / 252)
         self.assertEqual(perfcompare.verdict(base, crossed), "~")
 
+    def test_tied_runs_within_a_side_still_get_the_exact_p(self) -> None:
+        # Short rows repeat their timings: ties inside each side leave a
+        # full separation at 2/252
+        base = [30.1, 30.1, 30.2, 30.4, 30.4]
+        faster = [2.7, 2.7, 2.7, 2.8, 2.9]
+        self.assertAlmostEqual(perfcompare.rank_sum_p(base, faster), 2 / 252)
+        self.assertEqual(perfcompare.verdict(base, faster), "faster")
+        # A value both sides share counts half a pair either way
+        shared = [2.7, 2.7, 2.7, 2.8, 30.1]
+        p = perfcompare.rank_sum_p(base, shared)
+        assert p is not None
+        self.assertGreater(p, 0.01)
+
     def test_exact_and_normal_p_agree_where_both_apply(self) -> None:
         # Past the exact limit the normal approximation takes over; at
         # moderate sizes the two are close

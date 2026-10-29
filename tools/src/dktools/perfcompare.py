@@ -45,6 +45,7 @@ input error.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import math
 import re
 import statistics
@@ -205,15 +206,47 @@ def _u_counts(m: int, n: int) -> list[int]:
     return counts[n]
 
 
+#: Up to this many ways to split the runs between the sides, the p is
+#: counted over every split (ties included); 8 runs a side is 12870
+ENUMERATION_LIMIT = 20000
+
+
+def _enumerated_p(a: list[float], b: list[float]) -> float:
+    """The exact permutation p of the rank sum: the share of the ways to
+    choose len(a) of the pooled runs whose midrank sum lies at least as
+    far from its mean as 'a''s does (ties take their average rank)"""
+    pooled = sorted(a + b)
+    midrank: dict[float, float] = {}
+    i = 0
+    while i < len(pooled):
+        j = i
+        while j + 1 < len(pooled) and pooled[j + 1] == pooled[i]:
+            j += 1
+        midrank[pooled[i]] = (i + j) / 2 + 1
+        i = j + 1
+    ranks = [midrank[v] for v in a + b]
+    n1 = len(a)
+    mean = n1 * (len(ranks) + 1) / 2
+    deviation = abs(sum(ranks[:n1]) - mean) - 1e-9
+    total = extreme = 0
+    for chosen in itertools.combinations(ranks, n1):
+        total += 1
+        extreme += abs(sum(chosen) - mean) >= deviation
+    return extreme / total
+
+
 def rank_sum_p(a: list[float], b: list[float]) -> float | None:
     """The two-sided p of the Mann-Whitney U (rank-sum) test that 'a' and
-    'b' come from one distribution: exact for untied samples of up to
-    EXACT_LIMIT runs in all, else rank_sum_normal_p.  Ranks, not values,
-    so one stray run moves it by one rank.  None when a side has fewer
-    than MIN_SAMPLES."""
+    'b' come from one distribution: counted over every split of the runs
+    when there are at most ENUMERATION_LIMIT, else exact from the U
+    distribution for untied samples of up to EXACT_LIMIT runs, else
+    rank_sum_normal_p.  Ranks, not values, so one stray run moves it by
+    one rank.  None when a side has fewer than MIN_SAMPLES."""
     n1, n2 = len(a), len(b)
     if n1 < MIN_SAMPLES or n2 < MIN_SAMPLES:
         return None
+    if math.comb(n1 + n2, n1) <= ENUMERATION_LIMIT:
+        return _enumerated_p(a, b)
     if n1 + n2 > EXACT_LIMIT or len(set(a) | set(b)) != n1 + n2:
         return rank_sum_normal_p(a, b)
     u = sum(1 for x in a for y in b if x > y)

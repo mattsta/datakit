@@ -1242,7 +1242,8 @@ uv run dktools perfcompare NAME --base REV [--current REV] \
 - Prints, and writes to `result.txt`, the median ns/op of each side per
   row (module, name, bytes) with the change in percent, and the rows only
   one side has. Each row's verdict compares the sides' runs with a
-  rank-sum (Mann-Whitney U) test (exact for untied samples of up to 40
+  rank-sum (Mann-Whitney U) test (counted over every split of the runs up
+  to 8 a side, ties included; exact for untied samples of up to 40
   runs in all, else the normal approximation): `slower` / `faster` when the two-sided
   p is below 0.01, `~` when the runs do not tell the sides apart (a stray
   run moves one rank, not the verdict), `-` with fewer than five runs a
