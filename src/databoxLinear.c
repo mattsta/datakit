@@ -267,7 +267,13 @@ static bool databoxLinearDecodeAbstract(const databoxLinearType type,
     case DL_NEG_56B:
     case DL_NEG_64B:
         varintExternalGetQuick_(start, DL_WIDTH_FROM_ENCODING(type),
-                                box->data.i64);
+                                box->data.u64);
+        /* A magnitude past INT64_MAX is below INT64_MIN: no writer emits
+         * one, so the bytes are refused */
+        if (box->data.u64 >> 63) {
+            return false;
+        }
+
         box->type = DATABOX_SIGNED_64;
         box->data.i64 =
             SIGNED_RESTORE(box->data.i64); /* restore sign and offset */
@@ -299,8 +305,8 @@ static bool databoxLinearDecodeAbstract(const databoxLinearType type,
         box->type = DATABOX_NULL;
         break;
     default:
-        /* Invalid type - cannot decode */
-        assert(0 && "invalid databoxLinear type");
+        /* No such type: refused, as databoxLinear.h states (the type byte
+         * may come from outside the process) */
         return false;
     }
 
@@ -661,6 +667,36 @@ int databoxLinearTest(int, char *[]) {
         }
         if (b.data.u != 12345) {
             ERR("DecodeParts value mismatch: got %" PRIuMAX, b.data.u);
+        }
+    }
+
+    TEST("DecodeParts refuses bytes no writer emits") {
+        /* Every type byte with no encoding, and a 64-bit negative whose
+         * magnitude is past INT64_MAX (below INT64_MIN): refused, with
+         * no assertion on the way */
+        const uint8_t zeroes[sizeof(databoxUnion)] = {};
+        const uint8_t unknown[] = {DL_INVALID, DL_NULL + 1, 0x8a, 0xff};
+        for (size_t i = 0; i < countof(unknown); i++) {
+            databox box = {};
+            if (databoxLinearDecodeParts(unknown[i], zeroes, &box)) {
+                ERR("type byte 0x%02x decoded", unknown[i]);
+            }
+        }
+
+        uint8_t wide[sizeof(databoxUnion)];
+        memset(wide, 0xff, sizeof(wide));
+        databox box = {};
+        if (databoxLinearDecodeParts(DL_NEG_64B, wide, &box)) {
+            ERR("a negative below INT64_MIN decoded as %" PRId64, box.data.i64);
+        }
+
+        /* INT64_MIN itself is the largest magnitude, and decodes */
+        databox min = databoxNewSigned(INT64_MIN);
+        databoxLinear dl = {};
+        databoxLinearEncode(&min, &dl);
+        if (!databoxLinearDecodeParts(dl.type, &dl.data, &box) ||
+            box.data.i64 != INT64_MIN) {
+            ERR("INT64_MIN did not decode");
         }
     }
 

@@ -6101,6 +6101,36 @@ DK_INLINE_ALWAYS bool flexRawEntryLengthSafe(const flexEntry *const fe,
     return true;
 }
 
+/* True when the trailer at the end of the 'entryLen' bytes of 'fe' (an
+ * entry whose leading encoding flexRawEntryLengthSafe accepted) gives a
+ * backward walk the same entry: a one-byte entry has none, a fixed-width
+ * entry repeats its type byte, and a string's reversed length varint has
+ * the forward one's width and value */
+DK_INLINE_ALWAYS bool flexTrailerMatches_(const flexEntry *const fe,
+                                          const size_t entryLen) {
+    const flexEntry *const last = fe + entryLen - 1;
+    if (FLEX_IS_IMMEDIATE(fe[0])) {
+        return true;
+    }
+
+    if (!FLEX_IS_STR(fe[0])) {
+        return last[0] == fe[0];
+    }
+
+    varintWidth width;
+    size_t len;
+    varintSplitFullNoZeroGet_(fe, width, len);
+    if (!FLEX_IS_STR(last[0]) ||
+        (varintWidth)varintSplitFullNoZeroGetLenQuick_(last) != width) {
+        return false;
+    }
+
+    varintWidth backWidth;
+    size_t backLen;
+    varintSplitFullNoZeroReversedGet_(last, backWidth, backLen);
+    return backWidth == width && backLen == len;
+}
+
 bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
     /* Step 1: O(1) envelope check — leading total-bytes varint widths,
      * header room for count.  If this fails the deep walk would too. */
@@ -6163,6 +6193,12 @@ bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
 
         /* The entry fits, so its whole payload is readable. */
         if (flexNeg128OutOfRange_((const flexEntry *)cursor)) {
+            return false;
+        }
+
+        /* A backward walk (flexPrev, flexTail, a negative index) reads
+         * the trailer, so it must describe the same entry */
+        if (!flexTrailerMatches_((const flexEntry *)cursor, entry_len)) {
             return false;
         }
         cursor += entry_len;
@@ -7471,8 +7507,8 @@ static int32_t flexTestWideDecoders(void) {
  *     reader would decode it: flexHead/flexNext visit exactly flexCount
  *     entries, flexGetByTypeBig returns in-bounds payloads
  *     and never a pointer, a plain databox gets the type only for a
- *     96/128-bit entry, and when every trailer is the one the writer
- *     emits, flexTail/flexPrev visit the same entries in reverse.
+ *     96/128-bit entry, every trailer is the one the writer emits, and
+ *     flexTail/flexPrev visit the same entries in reverse.
  * Unmutated buffers must pass both gates and have intact trailers.
  *
  * Corpus: strings (split-varint lengths of one, two and three bytes),
@@ -7698,6 +7734,11 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
                 err += flexValidateSweepDecode(name, scratch, bytes, pos, v,
                                                false, seen, &reversed);
                 reverseWalked += reversed;
+                if (!reversed) {
+                    ERR("%s: offset %zu value %" PRIu32
+                        " passed deep with a trailer the writer never emits",
+                        name, pos, v);
+                }
             }
         }
 

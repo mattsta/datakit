@@ -1179,7 +1179,10 @@ DK_FN_PURE static double hllTau(double x) {
 DK_INLINE_ALWAYS uint64_t hyperloglogCount_(hyperloglog *hdr, bool *invalid) {
     double m = HLL_REGISTERS;
     double E;
-    int32_t reghisto[HLL_Q + 2] = {};
+    /* One slot per value a 6-bit register holds: a damaged register past
+     * HLL_Q + 1 (the most a hash gives) is counted, not written past the
+     * end, and makes the sketch invalid below */
+    int32_t reghisto[HLL_REGISTER_MAX + 1] = {};
 
     /* Compute register histogram */
     if (isDense(hdr)) {
@@ -1197,6 +1200,15 @@ DK_INLINE_ALWAYS uint64_t hyperloglogCount_(hyperloglog *hdr, bool *invalid) {
             *invalid = true;
         }
         return 0;
+    }
+
+    for (int_fast32_t j = HLL_Q + 2; j <= HLL_REGISTER_MAX; j++) {
+        if (reghisto[j]) {
+            if (invalid) {
+                *invalid = true;
+            }
+            return 0;
+        }
     }
 
     /* Estimate cardinality form register histogram. See:
@@ -1502,6 +1514,17 @@ bool hyperloglogDetect(hyperloglog *h) {
     /* Dense representation string length should match exactly. */
     if ((h->encoding == HLL_DENSE) && (len != HLL_DENSE_SIZE)) {
         return false;
+    }
+
+    /* No dense register past HLL_Q + 1, the most a hash gives */
+    if (h->encoding == HLL_DENSE) {
+        for (uint_fast32_t j = 0; j < HLL_REGISTERS; j++) {
+            uint64_t reg;
+            HLL_DENSE_GET_REGISTER(reg, h->registers, j);
+            if (reg > HLL_Q + 1) {
+                return false;
+            }
+        }
     }
 
     /* All tests passed. */
@@ -1958,6 +1981,40 @@ approximationDone:
         if (count != 0 || !invalid) {
             ERR("unknown encoding: count %" PRIu64 ", invalid %d", count,
                 invalid);
+        }
+    }
+
+    TEST("a dense register past HLL_Q + 1 is refused and counts invalid") {
+        /* Every 6-bit value past the most a hash gives, in the first,
+         * a middle and the last register: Detect refuses the sketch, and
+         * a count of it is 0 and invalid (no histogram write past its
+         * end, which ASan reports) */
+        const uint32_t places[] = {0, HLL_REGISTERS / 2 + 3, HLL_REGISTERS - 1};
+        for (uint64_t value = HLL_Q + 2; value <= HLL_REGISTER_MAX; value++) {
+            for (size_t p = 0; p < countof(places); p++) {
+                cleaner(hyperloglogFree) hyperloglog *bad =
+                    hyperloglogNewDense();
+                HLL_DENSE_SET_REGISTER(bad->registers, places[p], value);
+                HLL_INVALIDATE_CACHE(bad);
+                bool invalid = false;
+                const uint64_t count = hyperloglogCount(bad, &invalid);
+                if (hyperloglogDetect(bad) || count != 0 || !invalid) {
+                    ERR("register %u = %" PRIu64 ": detected %d, count %" PRIu64
+                        ", invalid %d",
+                        places[p], value, hyperloglogDetect(bad), count,
+                        invalid);
+                }
+            }
+        }
+
+        /* The largest valid value is accepted */
+        cleaner(hyperloglogFree) hyperloglog *top = hyperloglogNewDense();
+        HLL_DENSE_SET_REGISTER(top->registers, 7, HLL_Q + 1);
+        HLL_INVALIDATE_CACHE(top);
+        bool topInvalid = false;
+        hyperloglogCount(top, &topInvalid);
+        if (!hyperloglogDetect(top) || topInvalid) {
+            ERR("register = HLL_Q + 1 refused");
         }
     }
 

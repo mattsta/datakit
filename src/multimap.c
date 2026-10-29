@@ -388,10 +388,13 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
         return nullptr;
     }
 
-    /* Up to what Medium holds under 'limit': insert the rows */
+    /* No rows, or up to what Medium holds under 'limit': insert the rows
+     * (an empty dump is over a 0-byte limit's size, and has no rows to
+     * cut into maps) */
+    const size_t total = flexCount(rows) / elementsPerEntry;
     const size_t bytes = flexBytes(rows);
     const size_t splitSize = flexOptimizationSizeLimit[limit];
-    if (bytes <= splitSize * 3) {
+    if (total == 0 || bytes <= splitSize * 3) {
         /* @own: caller; free=multimapFree */
         multimap *m =
             multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
@@ -400,7 +403,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
         databoxBig *boxes = storage;
         const databox **row = (const databox **)(boxes + elementsPerEntry);
         flexEntry *fe = flexHead(rows);
-        for (size_t r = 0; r < flexCount(rows) / elementsPerEntry; r++) {
+        for (size_t r = 0; r < total; r++) {
             for (multimapElements e = 0; e < elementsPerEntry; e++) {
                 flexGetByTypeBig(fe, &boxes[e]);
                 row[e] = (const databox *)&boxes[e];
@@ -415,7 +418,6 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
     /* Larger: cut whole rows into inner maps of about the split size
      * (tail first, so each cut only shortens the rows) and build Full
      * directly from them */
-    const size_t total = flexCount(rows) / elementsPerEntry;
     size_t perMap = (total * splitSize) / bytes;
     perMap = perMap ? perMap : 1;
     const size_t maps = dkDivCeil(total, perMap);
@@ -9424,6 +9426,18 @@ int multimapTest(int, char *[]) {
                     }
                     multimapVerify(b);
                 }
+            }
+        }
+
+        /* An empty dump under every size limit (the 0-byte limit's
+         * included, where even an empty flex is over the limit) rebuilds
+         * as an empty map */
+        for (int limit = FLEX_CAP_LEVEL_0; limit <= FLEX_CAP_LEVEL_65536;
+             limit++) {
+            cleaner(multimapFree) multimap *empty = multimapNewFromDump(
+                2, false, false, (flexCapSizeLimit)limit, flexNew());
+            if (!empty || multimapCount(empty) != 0) {
+                ERR("limit %d: an empty dump did not rebuild empty", limit);
             }
         }
 

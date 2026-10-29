@@ -77,9 +77,10 @@ void flexGrowthSlack(uint32_t *percent, uint32_t *minBytes, uint32_t *maxBytes);
  * asserting and without reading outside [buf, buf + buflen).
  *
  * The rest of flex assumes well-formed input and asserts on it.  Pass
- * untrusted bytes to flexHead / flexNext / flexGetByType / flexCount
- * only after flexValidateBufferDeep accepts them.  That check covers
- * forward iteration and decoding of this flex's own entries:
+ * untrusted bytes to flexHead / flexNext / flexTail / flexPrev /
+ * flexGetByType / flexCount (or any flex call that walks them) only
+ * after flexValidateBufferDeep accepts them.  That check covers walking
+ * this flex's entries in either direction and decoding them:
  *   - It rejects MDSC entries, whose payload is a pointer into the
  *     process that wrote them, so validated bytes never decode to a
  *     pointer flex would dereference.  Container references
@@ -89,8 +90,8 @@ void flexGrowthSlack(uint32_t *percent, uint32_t *minBytes, uint32_t *maxBytes);
  *   - A 96/128-bit entry decodes fully only into wide-capable storage:
  *     flexGetByTypeBig, or a databoxBig set up with DATABOX_BIG_INIT;
  *     see flexGetByType.
- *   - It does not verify reverse-traversal trailers, so walk untrusted
- *     bytes forward only (flexHead / flexNext, not flexTail / flexPrev).
+ *   - Every entry's trailer, which a backward walk reads, describes the
+ *     same entry as its leading encoding.
  *
  * flexTest runs every single-byte mutation of several valid flexes
  * through these functions and decodes every buffer the deep check
@@ -123,14 +124,15 @@ bool flexValidateBuffer(const uint8_t *buf, size_t buflen);
  * entry fits within the buffer; confirms the entry count claimed by the
  * header matches the number of entries actually present; confirms the
  * walk terminates exactly at the buffer's claimed end (no trailing
- * garbage, no truncation); confirms every negative 128-bit entry holds
- * a value no lower than INT128_MIN (its stored magnitude has bit 127
- * clear; every 96-bit negative magnitude is in range).
+ * garbage, no truncation); confirms every entry's trailer gives a
+ * backward walk the same entry; confirms every negative 128-bit entry
+ * holds a value no lower than INT128_MIN (its stored magnitude has bit
+ * 127 clear; every 96-bit negative magnitude is in range).
  *
- * Returns true iff the buffer is structurally valid for safe forward
- * iteration with flexHead / flexNext / flexGetByType / flexCount, holds
- * no MDSC (pointer) entry, and holds no integer outside the 128-bit
- * range; see the paragraph above for what it does not cover.
+ * Returns true iff the buffer is structurally valid for safe iteration
+ * in either direction with flexHead / flexNext / flexTail / flexPrev /
+ * flexGetByType / flexCount, holds no MDSC (pointer) entry, and holds no
+ * integer outside the 128-bit range; see the paragraph above.
  *
  * Designed for callers that consume flex bytes from untrusted sources
  * WITHOUT a wrapping MAC (synthetic fuzzers, cross-process IPC, on-disk
@@ -139,8 +141,8 @@ bool flexValidateBuffer(const uint8_t *buf, size_t buflen);
  * this variant when they are not.
  *
  * Cost: O(N) in entry count.  Reads every entry's encoding byte plus
- * its length-encoding bytes, and the top payload byte of a negative
- * 128-bit entry.  Does NOT otherwise decode entry payloads. */
+ * its length-encoding bytes at both ends, and the top payload byte of a
+ * negative 128-bit entry.  Does NOT otherwise decode entry payloads. */
 bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen);
 
 /* flexPeekTotalBytes — safely read the leading total-bytes claim from a
