@@ -22,6 +22,8 @@ typedef struct hmacHashAlgo {
     /* Fields ordered largest -> smallest to minimize padding. */
     hmacHashInitFn init;
     hmacHashUpdateFn update;
+    /* Writes the digest, then wipes the ctx with dkSecureZero: an HMAC
+     * hash ctx has absorbed K' XOR pad, and hmacFinal relies on this */
     hmacHashFinalFn final;
     size_t ctx_size;    /* sizeof underlying hash ctx */
     size_t block_size;  /* hash internal block size (64 for SHA-256) */
@@ -60,13 +62,11 @@ void hmacInit(hmacCtx *ctx, const hmacHashAlgo *algo, void *storage,
 void hmacUpdate(hmacCtx *ctx, const void *data, size_t len);
 /* Finalise: writes `algo->digest_size` bytes of HMAC tag to `out`.
  *
- * SIDE EFFECT: zeroes `ctx->scratch` (the K_ipad / K_opad blocks left
- * there by hmacInit) via dkSecureZero. After Final the ctx is tainted
- * as cleared — callers MUST treat it as discarded and re-initialise
- * via hmacInit or hmacInitFromPrepared before reuse. The inner/outer
- * hash ctxs are NOT explicitly wiped here (they hold absorbed pad-
- * blocks too); when full secret-hygiene matters the caller should
- * zero its entire `storage` buffer after Final returns. */
+ * SIDE EFFECT: zeroes, with dkSecureZero, every key-bearing byte of the
+ * storage: the K_ipad / K_opad scratch and both hash states.  After
+ * Final the ctx is discarded: re-initialise it with hmacInit or
+ * hmacInitFromPrepared before reuse.  A ctx abandoned before Final still
+ * holds them: zero its storage. */
 void hmacFinal(hmacCtx *ctx, uint8_t *out);
 
 /* One-shot convenience: writes algo->digest_size bytes to out. */

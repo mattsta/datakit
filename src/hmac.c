@@ -12,10 +12,12 @@
 #include "cleaner.h"
 #include "ctmem.h" /* dkSecureZero */
 #include "datakit.h"
+#include "dkC23.h" /* stdc_bit_width */
 #include "hash/sha256ArmCrypto.h"
 #include "hash/sha256ShaNi.h"
 #include "sha256.h"
 
+#include <stddef.h> /* offsetof */
 #include <string.h>
 
 /* Scope-exit cleaner for the overflow heap storage buffers (see
@@ -99,10 +101,16 @@ void hmacInit(hmacCtx *ctx, const hmacHashAlgo *algo, void *storage,
 }
 
 void hmacUpdate(hmacCtx *ctx, const void *data, size_t len) {
+    if (!ctx->algo) {
+        return; /* a refused Init left the ctx zeroed */
+    }
     ctx->algo->update(ctx->inner_ctx, data, len);
 }
 
 void hmacFinal(hmacCtx *ctx, uint8_t *out) {
+    if (!ctx->algo) {
+        return; /* a refused Init left the ctx zeroed: 'out' untouched */
+    }
     /* inner = H(K' XOR ipad || message); then outer = H(K' XOR opad || inner).
      */
     uint8_t inner_digest[64]; /* large enough for SHA-512; HMAC_MAX_BLOCK
@@ -127,6 +135,8 @@ void hmacFinal(hmacCtx *ctx, uint8_t *out) {
     if (ctx->scratch != nullptr && ctx->algo != nullptr) {
         dkSecureZero(ctx->scratch, ctx->algo->block_size * 2u);
     }
+    /* The hash states need no wipe here: every algorithm's final wipes
+     * its own ctx (sha256Final; blake3_final_wrapper) */
 }
 
 void hmacCompute(const hmacHashAlgo *algo, const uint8_t *key, size_t key_len,
@@ -237,6 +247,7 @@ void hmacComputeWithKey(const hmacKey *prep, const void *data, size_t data_len,
     algo->final(outer, out);
 
     dkSecureZero(inner_digest, sizeof(inner_digest));
+    /* The two finals wiped the copies of the prepared states */
 }
 
 /* Type signature of the platform 4-lane SHA-256 compressor we pick at
@@ -336,6 +347,7 @@ static void hmacBatch4Sha256(const hmacKey *const prep[4],
                 p[i] += common_blocks * SHA256_BLOCK_LEN;
                 remaining[i] -= common_blocks * SHA256_BLOCK_LEN;
             }
+            dkSecureZero(states_buf, sizeof(states_buf));
         }
     }
 
@@ -470,7 +482,22 @@ static void blake3_update_wrapper(void *ctx, const void *data, size_t len) {
 }
 static void blake3_final_wrapper(void *ctx, uint8_t *out) {
     /* HMAC always wants the standard 32-byte hash output. */
-    blake3HasherFinalize((const blake3Hasher *)ctx, out, BLAKE3_OUT_LEN);
+    blake3Hasher *h = ctx;
+    blake3HasherFinalize(h, out, BLAKE3_OUT_LEN);
+    /* Finalize leaves the hasher as it was (it can extend output), and
+     * an HMAC hasher has absorbed K' XOR pad: wipe it, as sha256Final
+     * wipes its ctx, so every algorithm's final leaves no key state.
+     * Only the stack slots a hash of chunk_counter chunks can have
+     * reached hold chaining values: after t chunks the stack holds
+     * popcount(t) <= bit_width(chunk_counter) of them, plus the slot a
+     * merge works in; the rest of the 1.7 KiB stack was never written */
+    static_assert(offsetof(blake3Hasher, cv_stack) == 0,
+                  "the chaining-value stack leads the hasher");
+    const size_t reached = (size_t)(stdc_bit_width(h->chunk_counter) + 2) * 32;
+    dkSecureZero(h->cv_stack,
+                 reached < sizeof(h->cv_stack) ? reached : sizeof(h->cv_stack));
+    dkSecureZero((uint8_t *)h + sizeof(h->cv_stack),
+                 sizeof(*h) - sizeof(h->cv_stack));
 }
 
 const hmacHashAlgo hmacAlgoBLAKE3 = {
@@ -648,6 +675,100 @@ int hmacTest(int, char *[]) {
         }
         if (!b3_all_zero) {
             ERR("hmacFinal did not zero BLAKE3 ctx->scratch");
+        }
+    }
+
+    TEST("hmacFinal leaves no key pad block in the caller's storage") {
+        /* K' XOR ipad and K' XOR opad are key-equivalent: a hash state or
+         * block buffer still holding either lets a reader compute tags.
+         * After Final no 16-byte run of either may remain anywhere in the
+         * storage, for every algorithm, init path and message length
+         * (BLAKE3 keeps its last block buffered, so an empty message
+         * leaves the ipad block itself there unless Final wipes it) */
+        const uint8_t key[40] = {
+            0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9,
+            0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF, 0xD0, 0xD1, 0xD2, 0xD3,
+            0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD,
+            0xDE, 0xDF, 0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7,
+        };
+        uint8_t ipad[16];
+        uint8_t opad[16];
+        for (size_t i = 0; i < sizeof(ipad); i++) {
+            ipad[i] = key[i] ^ 0x36;
+            opad[i] = key[i] ^ 0x5C;
+        }
+        const hmacHashAlgo *algos[] = {&hmacAlgoSHA256, &hmacAlgoBLAKE3};
+        /* Up to many BLAKE3 chunks (1 KiB each), so its chaining-value
+         * stack grows and shrinks */
+        const size_t lens[] = {0, 25, 200, 3000, 70000};
+        cleanerName(zfree, Bytes) uint8_t *msg = zmalloc(70000);
+        for (size_t i = 0; i < 70000; i++) {
+            msg[i] = (uint8_t)(i * 131 + 7);
+        }
+        for (size_t a = 0; a < countof(algos); a++) {
+            const size_t size = hmacCtxSize(algos[a]);
+            cleanerName(zfree, Bytes) uint8_t *storage = zmalloc(size);
+            cleanerName(zfree, Bytes) uint8_t *prepStorage =
+                zmalloc(hmacPreparedSize(algos[a]));
+            hmacKey prep;
+            hmacPrepareKey(&prep, algos[a], prepStorage,
+                           hmacPreparedSize(algos[a]), key, sizeof(key));
+            for (size_t l = 0; l < countof(lens); l++) {
+                for (int prepared = 0; prepared < 2; prepared++) {
+                    memset(storage, 0xA5, size);
+                    hmacCtx ctx;
+                    if (prepared) {
+                        hmacInitFromPrepared(&ctx, &prep, storage, size);
+                    } else {
+                        hmacInit(&ctx, algos[a], storage, size, key,
+                                 sizeof(key));
+                    }
+                    hmacUpdate(&ctx, msg, lens[l]);
+                    uint8_t tag[32];
+                    hmacFinal(&ctx, tag);
+                    bool held = false;
+                    for (size_t at = 0; at + sizeof(ipad) <= size; at++) {
+                        held |= !memcmp(storage + at, ipad, sizeof(ipad)) ||
+                                !memcmp(storage + at, opad, sizeof(opad));
+                    }
+                    /* Every byte either never written (the fill) or
+                     * wiped: no hash state of any kind survives */
+                    size_t left = 0;
+                    for (size_t at = 0; at < size; at++) {
+                        left += storage[at] != 0xA5 && storage[at] != 0;
+                    }
+                    if (held || left) {
+                        ERR("algo %zu, %zu bytes, prepared %d: a key pad "
+                            "block survived Final (%d), %zu state bytes left",
+                            a, lens[l], prepared, held, left);
+                    }
+                }
+            }
+        }
+    }
+
+    TEST("a refused Init makes Update and Final no-ops") {
+        /* Storage below hmacCtxSize: Init zeroes the ctx; Update and Final
+         * on it change nothing (Final leaves 'out' as it was) */
+        uint8_t small[16];
+        const uint8_t key[] = "k";
+        uint8_t out[32];
+        memset(out, 0xEE, sizeof(out));
+        hmacCtx ctx;
+        hmacInit(&ctx, &hmacAlgoSHA256, small, sizeof(small), key, 1);
+        hmacUpdate(&ctx, "data", 4);
+        hmacFinal(&ctx, out);
+        hmacCtx prepared;
+        hmacKey prep = {.algo = &hmacAlgoSHA256};
+        hmacInitFromPrepared(&prepared, &prep, small, sizeof(small));
+        hmacUpdate(&prepared, "data", 4);
+        hmacFinal(&prepared, out);
+        bool untouched = ctx.algo == nullptr && prepared.algo == nullptr;
+        for (size_t i = 0; i < sizeof(out); i++) {
+            untouched &= out[i] == 0xEE;
+        }
+        if (!untouched) {
+            ERR("%s", "a refused Init's ctx wrote a tag");
         }
     }
 
