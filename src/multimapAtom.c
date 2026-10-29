@@ -3720,6 +3720,89 @@ int multimapAtomTest(int, char *[]) {
             }
         }
     }
+
+    TEST("a WAL op the table refuses changes nothing: wrong shapes, dead and "
+         "out-of-range ids, a bound id, every truncation") {
+        const persistOps *ops = &persistOpsMultimapAtom;
+        for (size_t k = 0; k < countof(atomTestKinds_); k++) {
+            multimapAtom *ma =
+                multimapAtomNewIndexed(atomTestKinds_[k].index, false);
+            for (int i = 0; i < 3; i++) {
+                databox v = databoxNewSigned(1000 + i);
+                multimapAtomInsertConvert(ma, &v); /* ids 0, 1, 2 */
+            }
+
+            size_t beforeLen = 0;
+            cleanerName(zfree, Void) void *before =
+                ops->snapshot(ma, &beforeLen);
+            if (ops->estimateSize(ma) != multimapAtomBytes(ma)) {
+                ERR("%s: estimateSize differs from Bytes",
+                    atomTestKinds_[k].name);
+            }
+
+            const databox live = databoxNewUnsigned(1);
+            const databox dead = databoxNewUnsigned(7);
+            const databox past = databoxNewUnsigned(MULTIMAP_ATOM_ID_LIMIT);
+            const databox negative = databoxNewSigned(-1);
+            const databox value = databoxNewBytesString("new");
+            const databox two = databoxNewSigned(2);
+            /* A reference to another container is no value an atom holds
+             * (a pointer would be: it is stored as an integer) */
+            const databox ptr = {.data.u = 1,
+                                 .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+            const struct {
+                persistOp op;
+                const databox *args[2];
+                size_t argc;
+            } refused[] = {
+                {PERSIST_OP_INSERT, {&live, &value}, 2},     /* id bound */
+                {PERSIST_OP_INSERT, {&past, &value}, 2},     /* past the ids */
+                {PERSIST_OP_INSERT, {&negative, &value}, 2}, /* not an id */
+                {PERSIST_OP_INSERT, {&dead, &ptr}, 2},       /* not a value */
+                {PERSIST_OP_NUM_INCR, {&dead, &two}, 2},     /* dead id */
+                {PERSIST_OP_NUM_INCR, {&live, &two}, 2},     /* not +1 or -1 */
+                {PERSIST_OP_NUM_INCR, {&live, &value}, 2},   /* not a number */
+                {PERSIST_OP_DELETE, {&dead}, 1},             /* dead id */
+                {PERSIST_OP_DELETE, {&past}, 1},             /* past the ids */
+            };
+            for (size_t r = 0; r < countof(refused); r++) {
+                size_t len = 0;
+                cleanerName(zfree, Void) void *body = persistOpEncodeBoxes(
+                    refused[r].args, refused[r].argc, &len);
+                if (ops->applyOp(&ma, refused[r].op, body, len)) {
+                    ERR("%s: refused op %zu was applied",
+                        atomTestKinds_[k].name, r);
+                }
+            }
+
+            /* A valid insert's body cut short, and an op the table has
+             * no meaning for */
+            const databox *insertArgs[2] = {&dead, &value};
+            size_t len = 0;
+            cleanerName(zfree, Void) void *insert =
+                ops->encodeOp(PERSIST_OP_INSERT, insertArgs, 2, &len);
+            for (size_t cut = 0; cut < len; cut++) {
+                if (ops->applyOp(&ma, PERSIST_OP_INSERT, insert, cut)) {
+                    ERR("%s: an insert cut to %zu bytes was applied",
+                        atomTestKinds_[k].name, cut);
+                }
+            }
+            if (ops->applyOp(&ma, PERSIST_OP_CLEAR, insert, len) ||
+                ops->encodeOp(PERSIST_OP_INSERT, insertArgs, 1, &len)) {
+                ERR("%s: an op without its shape was taken",
+                    atomTestKinds_[k].name);
+            }
+
+            size_t afterLen = 0;
+            cleanerName(zfree, Void) void *after = ops->snapshot(ma, &afterLen);
+            if (afterLen != beforeLen || memcmp(before, after, afterLen) != 0) {
+                ERR("%s: a refused op changed the table",
+                    atomTestKinds_[k].name);
+            }
+            multimapAtomFree(ma);
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif
