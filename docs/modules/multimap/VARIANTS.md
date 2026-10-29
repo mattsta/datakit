@@ -577,8 +577,8 @@ void multimapAtomLookupConvert(const multimapAtom *ma, databox *box);
 void multimapAtomLookupConvertBig(const multimapAtom *ma, databoxBig *box);
 void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
                               multimapAtomResult *result);
-void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
-                                databox *count);
+bool multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
+                                databox *count); /* false: no such id */
 bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
                                  databox *atomRef);
 

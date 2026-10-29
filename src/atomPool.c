@@ -170,17 +170,12 @@ static bool treeRelease(void *impl, uint64_t id) {
 
 static uint64_t treeRefcount(const void *impl, uint64_t id) {
     const multimapAtom *ma = (const multimapAtom *)impl;
-    databox ref = ATOM_REF(TREE_ID_FROM_EXTERNAL(id));
-    databox key;
+    const databox ref = ATOM_REF(TREE_ID_FROM_EXTERNAL(id));
+    databox count = {};
 
-    if (multimapAtomLookup(ma, &ref, &key)) {
-        /* multimapAtomLookupRefcount expects the atom reference (ID), not key.
-         * mapAtomForward is indexed by atom ID: {ID, Key, Refcount} */
-        databox count;
-        multimapAtomLookupRefcount(ma, &ref, &count);
-        /* multimapAtom uses 0-based internal refcounts for memory efficiency
-         * (DATABOX_FALSE = 1 byte vs 3 bytes for number 1).
-         * Translate to 1-based for consistent API: internal 0 = 1 ref. */
+    /* multimapAtom keeps 0-based counts (internal 0 = one reference, a
+     * 1-byte entry); this API counts references */
+    if (multimapAtomLookupRefcount(ma, &ref, &count)) {
         return count.data.u + 1;
     }
     return 0;

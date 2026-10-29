@@ -436,6 +436,29 @@ static void idRowsDropPage_(idRows *r, const uint64_t p) {
 /* ====================================================================
  * Find
  * ==================================================================== */
+/* A page's size and its span, before a row of it is rewritten in place */
+typedef struct idRowsExtent {
+    size_t bytes;
+    size_t span;
+} idRowsExtent;
+
+/* The first entry of the row in 'slot' of page 'f'; NULL when the slot is
+ * empty.  '*extentOut', when given, receives the page's extent. */
+DK_INLINE_ALWAYS flexEntry *idRowsPageFind_(const flex *f, const uint32_t slot,
+                                            idRowsExtent *extentOut) {
+    const idRowsIndex ix = idRowsIndexOf_(f);
+    if (!(ix.present >> slot & 1)) {
+        return nullptr;
+    }
+
+    if (extentOut) {
+        *extentOut = (idRowsExtent){.bytes = flexBytes(f),
+                                    .span = idRowsSpan_(f, ix.at)};
+    }
+
+    return ix.at + idRowsOffset_(ix.at, idRowsRank_(ix.present, slot));
+}
+
 /* The first entry of the row of 'id', its page in '*pageOut'; NULL when
  * the id is absent */
 DK_INLINE_ALWAYS flexEntry *idRowsFind_(const idRows *r, const uint64_t id,
@@ -445,15 +468,13 @@ DK_INLINE_ALWAYS flexEntry *idRowsFind_(const idRows *r, const uint64_t id,
         return nullptr;
     }
 
-    flex *f = *cell;
-    const idRowsIndex ix = idRowsIndexOf_(f);
-    const uint32_t slot = (uint32_t)(id % IDROWS_PAGE);
-    if (!(ix.present >> slot & 1)) {
-        return nullptr;
+    flexEntry *fe =
+        idRowsPageFind_(*cell, (uint32_t)(id % IDROWS_PAGE), nullptr);
+    if (fe) {
+        *pageOut = *cell;
     }
 
-    *pageOut = f;
-    return ix.at + idRowsOffset_(ix.at, idRowsRank_(ix.present, slot));
+    return fe;
 }
 
 /* Decode the row at 'fe' of 'f' into 'row' (wide elements into 'slots'
@@ -595,38 +616,45 @@ bool idRowsSet(idRows *r, const uint64_t id, const databox *row[]) {
     return !present;
 }
 
-/* Element 'field' of the row of 'id', its page cell in '*ffOut' and its
- * slot in '*slotOut'; NULL when the id is absent */
+/* Element 'field' of the row of 'id', its page cell in '*ffOut', its
+ * slot in '*slotOut' and the page's extent in '*extentOut'; NULL when the
+ * id is absent */
 static flexEntry *idRowsField_(idRows *r, const uint64_t id,
                                const uint32_t field, flex ***ffOut,
-                               uint32_t *slotOut) {
+                               uint32_t *slotOut, idRowsExtent *extentOut) {
     assert(field < r->elementsPerRow);
-    flex *f;
-    flexEntry *fe = idRowsFind_(r, id, &f);
+    flex **cell = idRowsCell_(r, id / IDROWS_PAGE);
+    if (!cell) {
+        return nullptr;
+    }
+
+    const uint32_t slot = (uint32_t)(id % IDROWS_PAGE);
+    flexEntry *fe = idRowsPageFind_(*cell, slot, extentOut);
     if (!fe) {
         return nullptr;
     }
 
     for (uint32_t i = 0; i < field; i++) {
-        fe = flexNext(f, fe);
+        fe = flexNext(*cell, fe);
     }
 
-    *ffOut = idRowsCell_(r, id / IDROWS_PAGE);
-    *slotOut = (uint32_t)(id % IDROWS_PAGE);
+    *ffOut = cell;
+    *slotOut = slot;
     return fe;
 }
 
-static size_t idRowsSpanOf_(const flex *f) {
-    return idRowsSpan_(f, idRowsIndexOf_(f).at);
-}
-
-/* After the row of 'slot' changed size in place: move the later rows'
- * offsets by the bytes gained or lost since the span was 'spanBefore' */
+/* After the row of 'slot' was rewritten in place: move the later rows'
+ * offsets by the bytes gained or lost since the page had 'before'.  A
+ * page of the same size kept every row's size, as most rewrites do. */
 static void idRowsRowResized_(flex **ff, const uint32_t slot,
-                              const size_t spanBefore) {
+                              const idRowsExtent before) {
+    if (flexBytes(*ff) == before.bytes) {
+        return;
+    }
+
     const idRowsIndex ix = idRowsIndexOf_(*ff);
     const int64_t delta =
-        (int64_t)idRowsSpan_(*ff, ix.at) - (int64_t)spanBefore;
+        (int64_t)idRowsSpan_(*ff, ix.at) - (int64_t)before.span;
     for (uint32_t k = idRowsRank_(ix.present, slot) + 1; k < ix.rows; k++) {
         idRowsSetOffset_(ix.at, k, (int64_t)idRowsOffset_(ix.at, k) + delta);
     }
@@ -636,14 +664,14 @@ bool idRowsReplaceField(idRows *r, const uint64_t id, const uint32_t field,
                         const databox *box) {
     flex **ff;
     uint32_t slot;
-    flexEntry *fe = idRowsField_(r, id, field, &ff, &slot);
+    idRowsExtent before;
+    flexEntry *fe = idRowsField_(r, id, field, &ff, &slot, &before);
     if (!fe) {
         return false;
     }
 
-    const size_t spanBefore = idRowsSpanOf_(*ff);
     flexReplaceByType(ff, fe, box);
-    idRowsRowResized_(ff, slot, spanBefore);
+    idRowsRowResized_(ff, slot, before);
     return true;
 }
 
@@ -651,7 +679,8 @@ bool idRowsFieldIncr(idRows *r, const uint64_t id, const uint32_t field,
                      const int64_t incrBy, int64_t *newValue) {
     flex **ff;
     uint32_t slot;
-    flexEntry *fe = idRowsField_(r, id, field, &ff, &slot);
+    idRowsExtent before;
+    flexEntry *fe = idRowsField_(r, id, field, &ff, &slot, &before);
     if (!fe) {
         if (newValue) {
             *newValue = 0;
@@ -660,7 +689,6 @@ bool idRowsFieldIncr(idRows *r, const uint64_t id, const uint32_t field,
         return false;
     }
 
-    const size_t spanBefore = idRowsSpanOf_(*ff);
     int64_t sum = 0;
     if (!flexIncrbySigned(ff, fe, incrBy, &sum)) {
         if (newValue) {
@@ -672,7 +700,7 @@ bool idRowsFieldIncr(idRows *r, const uint64_t id, const uint32_t field,
         return false;
     }
 
-    idRowsRowResized_(ff, slot, spanBefore);
+    idRowsRowResized_(ff, slot, before);
     if (newValue) {
         *newValue = sum;
     }
@@ -1432,6 +1460,51 @@ int idRowsTest(int, char *[]) {
             idRowsFieldIncr(r, 5, 0, 1, &now) || now != INT64_MAX ||
             idRowsFieldIncr(r, 6, 0, 1, &now) || now != 0) {
             ERR("increments at the edge: now %" PRId64, now);
+        }
+    }
+
+    TEST("a full page's rows read back while one count grows through every "
+         "integer width and shrinks back") {
+        cleaner(idRowsFree) idRows *r = idRowsNew(2);
+        for (uint64_t id = 0; id < IDROWS_PAGE; id++) {
+            const databox name = databoxNewSigned((int64_t)id * 1000);
+            const databox count = databoxNewSigned((int64_t)id);
+            const databox *row[2] = {&name, &count};
+            idRowsSet(r, id, row);
+        }
+
+        /* The count of row 37 grows to 1, 2, 4, 5 and 8 bytes (with steps
+         * that keep its width between), turns negative, and returns to 37 */
+        constexpr uint64_t grown = 37;
+        static const int64_t steps[] = {
+            1,  200,       -150, 70000,
+            1,  INT32_MAX, 5,    INT64_C(1) << 40,
+            -9, 0,         -1,   -(INT64_C(1) << 41)};
+        int64_t expect = (int64_t)grown;
+        for (size_t s = 0; s <= countof(steps); s++) {
+            const int64_t by =
+                s < countof(steps) ? steps[s] : (int64_t)grown - expect;
+            int64_t now = 0;
+            if (!idRowsFieldIncr(r, grown, 1, by, &now) || now != expect + by) {
+                ERR("step %zu: incr by %" PRId64 " gave %" PRId64, s, by, now);
+                break;
+            }
+            expect += by;
+
+            for (uint64_t id = 0; id < IDROWS_PAGE; id++) {
+                databox name = {};
+                databox count = {};
+                databox *row[2] = {&name, &count};
+                const int64_t want = id == grown ? expect : (int64_t)id;
+                if (!idRowsGet(r, id, row) ||
+                    name.data.i != (intmax_t)id * 1000 ||
+                    count.data.i != want) {
+                    ERR("step %zu: row %" PRIu64 " reads %" PRIdMAX
+                        " / %" PRIdMAX,
+                        s, id, name.data.i, count.data.i);
+                    break;
+                }
+            }
         }
     }
 

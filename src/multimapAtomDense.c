@@ -136,8 +136,7 @@ void multimapAtomDenseRetainById(multimapAtomDense *d, const uint64_t id) {
 bool multimapAtomDenseReleaseById(multimapAtomDense *d, const uint64_t id) {
     const databox ref = denseRef_(id);
     databox count = {};
-    multimapAtomLookupRefcount(d->atoms, &ref, &count);
-    if (count.type == DATABOX_VOID) {
+    if (!multimapAtomLookupRefcount(d->atoms, &ref, &count)) {
         return false; /* not in the table */
     }
 
@@ -245,8 +244,8 @@ static bool densePersistInsert_(multimapAtomDense *d, const uint64_t id,
     databox ref = denseRef_(id);
     databox count = {};
     databox found = {};
-    multimapAtomLookupRefcount(d->atoms, &ref, &count);
-    if (id + 1 >= MULTIMAP_ATOM_ID_LIMIT || count.type != DATABOX_VOID ||
+    if (id + 1 >= MULTIMAP_ATOM_ID_LIMIT ||
+        multimapAtomLookupRefcount(d->atoms, &ref, &count) ||
         multimapAtomLookupReference(d->atoms, value, &found)) {
         return false;
     }
@@ -293,8 +292,7 @@ static bool densePersistApplyOp_(void *structure, persistOp op,
     const uint64_t id = a.data.u64;
     databox count = {};
     const databox ref = denseRef_(id);
-    multimapAtomLookupRefcount(d->atoms, &ref, &count);
-    const bool live = count.type != DATABOX_VOID;
+    const bool live = multimapAtomLookupRefcount(d->atoms, &ref, &count);
     switch (op) {
     case PERSIST_OP_INSERT:
         return atomPersistValueOk((const databox *)&b) &&

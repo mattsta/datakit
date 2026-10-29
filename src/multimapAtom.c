@@ -718,14 +718,14 @@ bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
     return atomIndexFind_(ma, key, atomRef);
 }
 
-void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
+bool multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
                                 databox *count) {
     /* Zeroed: the value is discarded, so a 96/128-bit one decodes
      * type-only instead of through a stale pointer. */
     databox val = {};
     databox *elements[2] = {&val, count};
 
-    atomForwardLookup_(ma, key, elements);
+    return atomForwardLookup_(ma, key, elements);
 }
 
 /* ====================================================================
@@ -2878,8 +2878,12 @@ static int atomTestSuite_(void) {
         multimapAtomRetainById(ma, ids[1].data.u);
         databox count = {};
         databox found = {};
-        multimapAtomLookupRefcount(ma, &ids[1], &count);
-        if (multimapAtomCount(ma) != 3 ||
+        const databox absent = {.data.u = 3,
+                                .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        databox none = {};
+        if (!multimapAtomLookupRefcount(ma, &ids[1], &count) ||
+            multimapAtomLookupRefcount(ma, &absent, &none) ||
+            none.type != DATABOX_VOID || multimapAtomCount(ma) != 3 ||
             !multimapAtomLookup(ma, &ids[0], &found) || found.data.i != 100 ||
             count.data.u != 0) {
             ERR("Release or Retain changed a permanent table");

@@ -130,7 +130,9 @@ void multimapAtomLookupConvertBig(const multimapAtom *ma, databoxBig *box);
  * type-only (data.ptr NULL, big = 0). */
 void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
                               multimapAtomResult *result);
-void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
+/* The stored 0-based count of the atom 'key' (a reference); false, with
+ * 'count' untouched, when no atom has that id */
+bool multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
                                 databox *count);
 bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
                                  databox *atomRef);
