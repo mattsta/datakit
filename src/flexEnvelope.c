@@ -2881,6 +2881,184 @@ int flexEnvelopeTest(int, char *[]) {
         }
     }
 
+    TEST("envelope: every entry point refuses missing arguments and "
+         "truncated frames") {
+        uint8_t key[32];
+        uint8_t nonce[12];
+        for (size_t i = 0; i < sizeof(key); i++) {
+            key[i] = (uint8_t)(i * 5 + 3);
+        }
+        for (size_t i = 0; i < sizeof(nonce); i++) {
+            nonce[i] = (uint8_t)(0x40 + i);
+        }
+        const uint8_t payload[24] = "entry point refusals...";
+
+        /* Algorithm queries: no algorithm is deprecated, an unknown one
+         * has no size, and a size past size_t is 0 */
+        for (int a = 0; a <= FLEX_ENV_ALGO_AEAD_AES256_GCM + 1; a++) {
+            if (flexEnvelopeAlgoIsDeprecated((flexEnvelopeAlgo)a)) {
+                ERR("algorithm %d reports deprecated", a);
+            }
+        }
+        if (flexEnvelopeWrappedSize(8, (flexEnvelopeAlgo)0x7FFF, 0) != 0 ||
+            flexEnvelopeWrappedSize(UINT64_MAX - 4, FLEX_ENV_ALGO_XXH64, 0) !=
+                0) {
+            ERR("WrappedSize sized an unknown algorithm or an overflow");
+        }
+
+        /* A valid keyed envelope with a key id: every proper prefix of it
+         * is refused by Verify, Peek and Open */
+        const flexEnvelopeWrapParams wp = {.key = key,
+                                           .key_len = sizeof(key),
+                                           .algo = FLEX_ENV_ALGO_HMAC_SHA256,
+                                           .key_id = 9};
+        uint8_t env[256];
+        size_t envLen = 0;
+        if (!flexEnvelopeWrap(env, sizeof(env), payload, sizeof(payload), &wp,
+                              &envLen)) {
+            ERR("wrap");
+        }
+        const flexEnvelopeVerifyParams vp = {.key = key,
+                                             .key_len = sizeof(key)};
+        for (size_t cut = 0; cut < envLen; cut++) {
+            cleanerName(zfree, Bytes) uint8_t *prefix = zmalloc(cut ? cut : 1);
+            memcpy(prefix, env, cut);
+            const uint8_t *got = nullptr;
+            uint64_t gotLen = 0;
+            flexEnvelopeHeader hdr;
+            uint8_t plain[256];
+            size_t plainLen = 0;
+            if (flexEnvelopeVerify(prefix, cut, &vp, &got, &gotLen) ||
+                (cut < envLen - 32 && flexEnvelopePeek(prefix, cut, &hdr)) ||
+                flexEnvelopeOpen(prefix, cut, &vp, plain, sizeof(plain),
+                                 &plainLen)) {
+                ERR("a %zu-byte prefix of a %zu-byte envelope was accepted",
+                    cut, envLen);
+            }
+        }
+
+        /* Missing outputs and inputs */
+        uint8_t out[256];
+        size_t outLen = 0;
+        uint8_t *region = nullptr;
+        size_t headLen = 0;
+        if (flexEnvelopePeek(env, envLen, nullptr) ||
+            flexEnvelopeWrap(nullptr, 0, payload, sizeof(payload), &wp,
+                             &outLen) ||
+            flexEnvelopeWrap(out, sizeof(out), payload, sizeof(payload),
+                             nullptr, &outLen) ||
+            flexEnvelopeWrap(out, sizeof(out), nullptr, 5, &wp, &outLen) ||
+            flexEnvelopeReserveWrap(out, sizeof(out), 5, &wp, nullptr,
+                                    &headLen) ||
+            flexEnvelopeReserveWrap(out, sizeof(out), 5, &wp, &region,
+                                    nullptr) ||
+            flexEnvelopeOpen(nullptr, envLen, &vp, out, sizeof(out), &outLen) ||
+            flexEnvelopeOpen(env, envLen, &vp, nullptr, 0, &outLen)) {
+            ERR("an entry point accepted a missing argument");
+        }
+
+        /* UnwrapAsFlex with the caller's params: it still checks the
+         * payload is a flex */
+        cleaner(flexFree) flex *inner = flexNew();
+        flexPushUnsigned(&inner, 77, FLEX_ENDPOINT_TAIL);
+        if (!flexEnvelopeWrap(out, sizeof(out), inner, flexBytes(inner), &wp,
+                              &outLen)) {
+            ERR("wrap flex");
+        }
+        cleaner(flexFree) flex *unwrapped =
+            flexEnvelopeUnwrapAsFlex(out, outLen, &vp);
+        cleaner(flexFree) flex *notFlex =
+            flexEnvelopeUnwrapAsFlex(env, envLen, &vp);
+        if (!unwrapped || flexBytes(unwrapped) != flexBytes(inner) ||
+            memcmp(unwrapped, inner, flexBytes(inner)) != 0 || notFlex) {
+            ERR("UnwrapAsFlex with params: got %p, non-flex payload %p",
+                (void *)unwrapped, (void *)notFlex);
+        }
+
+        /* Seal and Reserve/Finalize Seal: missing arguments, a plaintext
+         * pointer missing for a length, and Finalize against a header it
+         * did not reserve */
+        const flexEnvelopeSealParams sp = {
+            .key = key,
+            .key_len = sizeof(key),
+            .nonce = nonce,
+            .nonce_len = sizeof(nonce),
+            .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305};
+        size_t hpn = 0;
+        if (flexEnvelopeSeal(out, sizeof(out), payload, sizeof(payload),
+                             nullptr, &outLen) ||
+            flexEnvelopeSeal(nullptr, 0, payload, sizeof(payload), &sp,
+                             &outLen) ||
+            flexEnvelopeSeal(out, sizeof(out), nullptr, 5, &sp, &outLen) ||
+            flexEnvelopeReserveSeal(out, sizeof(out), 5, &sp, nullptr, &hpn) ||
+            flexEnvelopeReserveSeal(out, sizeof(out), 5, &sp, &region,
+                                    nullptr) ||
+            flexEnvelopeReserveSeal(out, sizeof(out), 5, nullptr, &region,
+                                    &hpn) ||
+            flexEnvelopeFinalizeSeal(nullptr, 0, 0, 5, &sp, &outLen) ||
+            flexEnvelopeFinalizeSeal(out, sizeof(out), 0, 5, nullptr,
+                                     &outLen)) {
+            ERR("a seal entry point accepted a missing argument");
+        }
+
+        uint8_t sealed[256];
+        if (!flexEnvelopeReserveSeal(sealed, sizeof(sealed), sizeof(payload),
+                                     &sp, &region, &hpn)) {
+            ERR("reserve seal");
+        }
+        memcpy(region, payload, sizeof(payload));
+        flexEnvelopeSealParams flagged = sp;
+        flagged.on_wire_flags = FLEX_ENV_FLAG_KEYID_PRESENT;
+        const bool flagNoId = flexEnvelopeFinalizeSeal(
+            sealed, sizeof(sealed), hpn, sizeof(payload), &flagged, &outLen);
+        const bool wrongHeader = flexEnvelopeFinalizeSeal(
+            sealed, sizeof(sealed), hpn + 1, sizeof(payload), &sp, &outLen);
+        const bool shortBuffer = flexEnvelopeFinalizeSeal(
+            sealed, hpn + sizeof(payload), hpn, sizeof(payload), &sp, &outLen);
+        sealed[0] ^= 0xFF;
+        const bool mangled = flexEnvelopeFinalizeSeal(
+            sealed, sizeof(sealed), hpn, sizeof(payload), &sp, &outLen);
+        sealed[0] ^= 0xFF;
+        if (flagNoId || wrongHeader || shortBuffer || mangled ||
+            !flexEnvelopeFinalizeSeal(sealed, sizeof(sealed), hpn,
+                                      sizeof(payload), &sp, &outLen)) {
+            ERR("finalize seal: key-id flag with no id %d, wrong header %d, "
+                "short buffer %d, mangled magic %d",
+                flagNoId, wrongHeader, shortBuffer, mangled);
+        }
+
+        /* Streams: a header buffer too small, empty and missing chunks
+         * (a missing one poisons the stream), and no context */
+        flexEnvelopeWrapStream ws;
+        uint8_t head[64];
+        size_t headWritten = 0;
+        if (flexEnvelopeWrapStreamInit(&ws, sizeof(payload), &wp, head, 3,
+                                       &headWritten) ||
+            !flexEnvelopeWrapStreamInit(&ws, sizeof(payload), &wp, head,
+                                        sizeof(head), &headWritten) ||
+            !flexEnvelopeWrapStreamUpdate(&ws, payload, 0) ||
+            flexEnvelopeWrapStreamUpdate(&ws, nullptr, 3) ||
+            flexEnvelopeWrapStreamUpdate(&ws, payload, sizeof(payload))) {
+            ERR("wrap stream: a short header buffer or a missing chunk");
+        }
+
+        flexEnvelopeVerifyStream vs;
+        size_t consumed = 0;
+        uint64_t streamLen = 0;
+        flexEnvelopeAlgo algo = FLEX_ENV_ALGO_NONE;
+        if (flexEnvelopeVerifyStreamInit(nullptr, &vp, env, envLen, &consumed,
+                                         &streamLen, &algo) ||
+            !flexEnvelopeVerifyStreamInit(&vs, &vp, env, envLen, &consumed,
+                                          &streamLen, &algo) ||
+            !flexEnvelopeVerifyStreamUpdate(&vs, env + consumed, 0) ||
+            flexEnvelopeVerifyStreamUpdate(&vs, nullptr, 3) ||
+            flexEnvelopeVerifyStreamUpdate(&vs, env + consumed,
+                                           envLen - consumed) ||
+            flexEnvelopeVerifyStreamFinal(&vs)) {
+            ERR("verify stream: no context or a missing chunk");
+        }
+    }
+
     TEST("envelope: Seal resolves its key from a bound keyring by key id") {
         hmacKeyring *ring = hmacKeyringCreate();
         uint8_t key32[32];
