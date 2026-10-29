@@ -12,6 +12,11 @@
 #include <string.h>
 #include <unistd.h>
 
+struct multilruP {
+    multilru *mlru;  /* Underlying multilru */
+    persistCtx *ctx; /* Persistence context */
+};
+
 defcleanerName(multilruP *, zfree, MultilruP);
 defcleanerName(multilruPtr *, zfree, MultilruPtrs);
 

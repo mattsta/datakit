@@ -12,6 +12,11 @@
 #include <string.h>
 #include <unistd.h>
 
+struct multiOrderedSetP {
+    multiOrderedSet *mos; /* Underlying multiOrderedSet */
+    persistCtx *ctx;      /* Persistence context */
+};
+
 defcleanerName(multiOrderedSetP *, zfree, MultiOrderedSetP);
 
 /* ============================================================================

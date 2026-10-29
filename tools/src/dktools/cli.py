@@ -42,6 +42,7 @@ from . import (
     retoken,
     spell,
     stdattr,
+    structs,
     testbytes,
     testchecks,
     testtime,
@@ -369,6 +370,14 @@ def main(argv: list[str] | None = None) -> int:
     hnd.add_argument(
         "--list", action="store_true", help="list every handle, tag and T ** call"
     )
+
+    sts = sub.add_parser(
+        "structs",
+        help="list struct bodies in public headers that are handles or that "
+        "no public call names (a report: exit 0)",
+    )
+    sts.add_argument("headers", nargs="*", help="repo-relative public headers")
+    sts.add_argument("--all", action="store_true", help="also list the data structs")
 
     dg = sub.add_parser(
         "docgaps",
@@ -1372,6 +1381,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return docgaps.run(args.repo, tuple(args.headers), args.names)
     if args.command == "handles":
         return handles.run(args.repo, tuple(args.headers), args.list)
+    if args.command == "structs":
+        return structs.run(args.repo, tuple(args.headers), args.all)
     if args.command == "headers":
         return headers.run(
             args.repo, tuple(args.paths), args.build, args.preset, args.jobs

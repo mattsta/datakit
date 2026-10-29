@@ -30,11 +30,8 @@
  * ============================================================================
  */
 
-typedef struct multimapP {
-    multimap *m;               /* Underlying multimap */
-    persistCtx *ctx;           /* Persistence context */
-    uint32_t elementsPerEntry; /* Cached for encoding */
-} multimapP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multimapP multimapP;
 
 /* ============================================================================
  * Lifecycle

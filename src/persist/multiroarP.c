@@ -12,6 +12,11 @@
 #include <string.h>
 #include <unistd.h>
 
+struct multiroarP {
+    multiroar *r;    /* Underlying multiroar */
+    persistCtx *ctx; /* Persistence context */
+};
+
 defcleanerName(multiroarP *, zfree, MultiroarP);
 
 /* ============================================================================

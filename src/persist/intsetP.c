@@ -11,6 +11,11 @@
 #include <string.h>
 #include <unistd.h>
 
+struct intsetP {
+    intset *is;      /* Underlying intset */
+    persistCtx *ctx; /* Persistence context */
+};
+
 defcleanerName(intsetP *, zfree, IntsetP);
 
 /* ============================================================================

@@ -11,6 +11,11 @@
 #include <string.h>
 #include <unistd.h>
 
+struct flexP {
+    flex *f;         /* Underlying flex */
+    persistCtx *ctx; /* Persistence context */
+};
+
 defcleanerName(flexP *, zfree, FlexP);
 
 /* ============================================================================

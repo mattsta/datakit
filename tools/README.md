@@ -797,6 +797,22 @@ uv run --project tools dktools handles [HEADER ...] [--list]
   when every handle is tagged and consistent, 1 otherwise, 2 for a
   header that is not public. `headers` runs the same check.
 
+## structs — struct bodies public headers show but should not
+
+```sh
+uv run --project tools dktools structs [HEADER ...] [--all]
+```
+
+- Sorts each struct with a body in a public header: `handle` (a public
+  call returns it by pointer, so callers hold it as a handle and its
+  fields belong behind an opaque typedef), `unnamed` (no public call
+  names it, directly or through a struct one does) or `data` (a struct
+  callers fill or read: configurations, results, statistics,
+  iterators). Public calls are the prototypes, inline definitions and
+  function pointers of every public header.
+- Lists the `handle` and `unnamed` ones (`--all`: every one) and the
+  totals. A report: exit 0, 2 for a header that is not public.
+
 ## testchecks — TEST blocks that check nothing
 
 ```sh

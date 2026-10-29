@@ -62,36 +62,8 @@ persistCtxConfig persistCtxDefaultConfig(void);
  * ============================================================================
  */
 
-typedef struct persistCtx {
-    /* Core persistence layer */
-    persist *p;
-
-    /* File paths */
-    char *basePath;     /* Base path for files */
-    char *snapshotPath; /* path.snap */
-    char *walPath;      /* path.wal */
-
-    /* Configuration */
-    persistCtxConfig config;
-
-    /* State tracking */
-    size_t opsSinceCompact; /* Operations since last compaction */
-    uint64_t lastSyncTime;  /* Microseconds since epoch */
-
-    /* Statistics */
-    uint64_t totalOps;
-    uint64_t totalSyncs;
-    uint64_t notDurableOps;
-    uint64_t totalCompactions;
-
-    /* Bad-entry notification, kept until the structure's persist exists */
-    persistBadEntryNotify *badEntryNotify;
-    void *badEntryNotifyCtx;
-
-    /* A live wrapper (made by a *NewP or *OpenP, not yet closed) holds the
-     * context: one structure's snapshot and WAL belong to one live wrapper */
-    bool claimed;
-} persistCtx;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct persistCtx persistCtx;
 
 /* How a context binds: the first *NewP / *OpenP fixes the structure type
  * (persistCtxInitForType; any other type is refused from then on), and the
@@ -110,7 +82,8 @@ void persistCtxRelease(persistCtx *ctx);
  *     another type, or the snapshot cannot be written.
  *   persistCtxStartRecovered: bind, recover the structure from snapshot
  *     plus WAL, and hold the context; nullptr (nothing held) on the same
- *     refusals or a failed recovery.
+ *     refusals or a failed recovery.  With nothing on disk
+ *     (persistCtxExists false) it is nullptr and the context stays unbound.
  *   persistCtxFinish: the close: sync, then let the context go (a null
  *     context is a no-op). */
 bool persistCtxStartNew(persistCtx *ctx, void *structure,

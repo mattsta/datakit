@@ -25,10 +25,8 @@
  * ============================================================================
  */
 
-typedef struct multiroarP {
-    multiroar *r;    /* Underlying multiroar */
-    persistCtx *ctx; /* Persistence context */
-} multiroarP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multiroarP multiroarP;
 
 /* ============================================================================
  * Lifecycle

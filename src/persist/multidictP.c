@@ -11,6 +11,11 @@
 #include <string.h>
 #include <unistd.h>
 
+struct multidictP {
+    multidict *d;    /* Underlying multidict */
+    persistCtx *ctx; /* Persistence context */
+};
+
 defcleanerName(multidictP *, zfree, MultidictP);
 defcleaner(multidict *, multidictFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);

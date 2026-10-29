@@ -12,6 +12,12 @@
 #include <string.h>
 #include <unistd.h>
 
+struct multilistP {
+    multilist *ml;     /* Underlying multilist */
+    persistCtx *ctx;   /* Persistence context */
+    mflexState *state; /* State for compressed node operations */
+};
+
 defcleanerName(multilistP *, zfree, MultilistP);
 
 /* The 2-slot mflex state array the read-only iterator requires */

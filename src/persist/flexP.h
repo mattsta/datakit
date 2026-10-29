@@ -26,10 +26,8 @@
  * ============================================================================
  */
 
-typedef struct flexP {
-    flex *f;         /* Underlying flex */
-    persistCtx *ctx; /* Persistence context */
-} flexP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct flexP flexP;
 
 /* ============================================================================
  * Lifecycle

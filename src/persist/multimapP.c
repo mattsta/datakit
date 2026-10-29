@@ -11,6 +11,12 @@
 #include <string.h>
 #include <unistd.h>
 
+struct multimapP {
+    multimap *m;               /* Underlying multimap */
+    persistCtx *ctx;           /* Persistence context */
+    uint32_t elementsPerEntry; /* Cached for encoding */
+};
+
 defcleanerName(multimapP *, zfree, MultimapP);
 
 /* ============================================================================
@@ -52,11 +58,6 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
 }
 
 multimapP *multimapOpenP(persistCtx *ctx) {
-    /* Only existing files open */
-    if (!ctx || !persistCtxExists(ctx->basePath)) {
-        return nullptr;
-    }
-
     multimap *recovered = persistCtxStartRecovered(ctx, &persistOpsMultimap);
     if (!recovered) {
         return nullptr;

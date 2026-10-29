@@ -28,10 +28,8 @@
  * ============================================================================
  */
 
-typedef struct multiOrderedSetP {
-    multiOrderedSet *mos; /* Underlying multiOrderedSet */
-    persistCtx *ctx;      /* Persistence context */
-} multiOrderedSetP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multiOrderedSetP multiOrderedSetP;
 
 /* ============================================================================
  * Lifecycle

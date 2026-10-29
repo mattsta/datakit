@@ -33,10 +33,8 @@
 /* The wrapped multilru's auto-eviction is off: each insert logs itself,
  * then enforces the limits one logged step at a time (a demotion or an
  * eviction), so replay never runs the eviction policy. */
-typedef struct multilruP {
-    multilru *mlru;  /* Underlying multilru */
-    persistCtx *ctx; /* Persistence context */
-} multilruP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multilruP multilruP;
 
 /* ============================================================================
  * Lifecycle

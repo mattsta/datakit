@@ -13,6 +13,37 @@
 #include <stdio.h> /* snprintf */
 #include <string.h>
 
+struct persistCtx {
+    /* Core persistence layer */
+    persist *p;
+
+    /* File paths */
+    char *basePath;     /* Base path for files */
+    char *snapshotPath; /* path.snap */
+    char *walPath;      /* path.wal */
+
+    /* Configuration */
+    persistCtxConfig config;
+
+    /* State tracking */
+    size_t opsSinceCompact; /* Operations since last compaction */
+    uint64_t lastSyncTime;  /* Microseconds since epoch */
+
+    /* Statistics */
+    uint64_t totalOps;
+    uint64_t totalSyncs;
+    uint64_t notDurableOps;
+    uint64_t totalCompactions;
+
+    /* Bad-entry notification, kept until the structure's persist exists */
+    persistBadEntryNotify *badEntryNotify;
+    void *badEntryNotifyCtx;
+
+    /* A live wrapper (made by a *NewP or *OpenP, not yet closed) holds the
+     * context: one structure's snapshot and WAL belong to one live wrapper */
+    bool claimed;
+};
+
 defcleanerName(char *, zfree, Chars);
 
 /* ============================================================================
@@ -234,7 +265,10 @@ bool persistCtxStartNew(persistCtx *ctx, void *structure,
 }
 
 void *persistCtxStartRecovered(persistCtx *ctx, const persistOps *ops) {
-    if (!ctx || !persistCtxInitForType(ctx, ops)) {
+    /* Nothing on disk is nothing to open: the context stays unbound, so a
+     * New of any type can still take it */
+    if (!ctx || !persistCtxExists(ctx->basePath) ||
+        !persistCtxInitForType(ctx, ops)) {
         return nullptr;
     }
 
@@ -710,6 +744,30 @@ int persistCtxTest(int, char *[]) {
             persistCtxFree(ctx);
         }
         dkDiagSetPrintMode(priorPrint);
+    }
+
+    TEST("an open with nothing on disk leaves the context unbound") {
+        /* A flexP open of an empty path finds nothing and binds nothing:
+         * a structure of another type then starts on the same context */
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxOpenNothing", path,
+                              sizeof(path))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            persistCtx *ctx = persistCtxNew(path, nullptr);
+            flexP *opened = flexOpenP(ctx);
+            const uint64_t before = dkDiagCount();
+            const bool bound = persistCtxInitForType(ctx, &persistOpsIntset);
+            if (opened || !bound || dkDiagCount() != before ||
+                persistCtxStartRecovered(nullptr, &persistOpsFlex) ||
+                persistCtxStartRecovered(ctx, &persistOpsFlex)) {
+                ERR("open of nothing gave %p, another type bound %d (%" PRIu64
+                    " reports)",
+                    (void *)opened, bound, dkDiagCount() - before);
+            }
+            flexCloseP(opened);
+            persistCtxFree(ctx);
+        }
     }
 
     TEST("a live wrapper holds its context until it closes") {

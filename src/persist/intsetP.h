@@ -25,10 +25,8 @@
  * ============================================================================
  */
 
-typedef struct intsetP {
-    intset *is;      /* Underlying intset */
-    persistCtx *ctx; /* Persistence context */
-} intsetP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct intsetP intsetP;
 
 /* ============================================================================
  * Lifecycle

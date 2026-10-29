@@ -30,11 +30,8 @@
  * ============================================================================
  */
 
-typedef struct multilistP {
-    multilist *ml;     /* Underlying multilist */
-    persistCtx *ctx;   /* Persistence context */
-    mflexState *state; /* State for compressed node operations */
-} multilistP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multilistP multilistP;
 
 /* ============================================================================
  * Lifecycle

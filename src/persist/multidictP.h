@@ -31,10 +31,8 @@
  * ============================================================================
  */
 
-typedef struct multidictP {
-    multidict *d;    /* Underlying multidict */
-    persistCtx *ctx; /* Persistence context */
-} multidictP;
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multidictP multidictP;
 
 /* ============================================================================
  * Lifecycle
