@@ -1046,6 +1046,42 @@ int blake3Test(int, char *[]) {
         }
     }
 
+    TEST("blake3 extended outputs match the official vectors whole, from "
+         "every seek") {
+        /* All BLAKE3_TEST_OUTPUT_LEN bytes of each mode's output, read
+         * from offsets inside and across the 64-byte output blocks */
+        static const uint64_t seeks[] = {
+            0, 1, 31, 32, 63, 64, 65, 127, 128, BLAKE3_TEST_OUTPUT_LEN - 1};
+        for (size_t i = 0; i < BLAKE3_TEST_VECTOR_COUNT; i++) {
+            const blake3TestVector *v = &blake3TestVectors[i];
+            blake3Hasher modes[3];
+            blake3HasherInit(&modes[0]);
+            blake3HasherInitKeyed(&modes[1], keyed_key);
+            blake3HasherInitDeriveKey(&modes[2], BLAKE3_TEST_DERIVE_CONTEXT);
+            const char *hex[3] = {v->hash_hex, v->keyed_hash_hex,
+                                  v->derive_key_hex};
+            for (size_t m = 0; m < 3; m++) {
+                blake3HasherUpdate(&modes[m], input, v->input_len);
+                uint8_t want[BLAKE3_TEST_OUTPUT_LEN];
+                if (!StrHexToBytes(hex[m], 2 * BLAKE3_TEST_OUTPUT_LEN, want,
+                                   BLAKE3_TEST_OUTPUT_LEN)) {
+                    ERR("vector at input_len=%zu mode %zu is not hex",
+                        v->input_len, m);
+                    continue;
+                }
+
+                for (size_t s = 0; s < countof(seeks); s++) {
+                    const size_t len = BLAKE3_TEST_OUTPUT_LEN - seeks[s];
+                    uint8_t got[BLAKE3_TEST_OUTPUT_LEN];
+                    blake3HasherFinalizeSeek(&modes[m], seeks[s], got, len);
+                    TEST_BYTES(err, got, want + seeks[s], len,
+                               "input_len=%zu mode %zu seek %" PRIu64,
+                               v->input_len, m, seeks[s]);
+                }
+            }
+        }
+    }
+
     TEST("blake3DeriveKey one-shot matches manual init+update+finalize") {
         const uint8_t *ctx_bytes = (const uint8_t *)BLAKE3_TEST_DERIVE_CONTEXT;
         const size_t ctx_len = strlen(BLAKE3_TEST_DERIVE_CONTEXT);

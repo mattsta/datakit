@@ -1186,6 +1186,23 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   `multidictSetDefaultLoadFactors`
   (`src/multidict.h`), which `multidictNew` reads.
 
+## blake3vectors — the BLAKE3 test vectors from the canonical JSON
+
+```sh
+curl -sSfLo test_vectors.json \
+  https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/master/test_vectors/test_vectors.json
+uv run --project tools dktools blake3vectors test_vectors.json [--write]
+```
+
+- `src/hash/blake3TestVectors.h` holds every case of the BLAKE3 team's
+  `test_vectors.json`: its input length and its three extended outputs
+  (plain hash, keyed hash, derive key), whole, as hex. The blake3 tests
+  compare digests, every output byte and output read from seek offsets
+  across the 64-byte blocks against it.
+- Without `--write` the command checks that the header is exactly what the
+  JSON renders (exit 0, or 1 when it differs); `--write` rewrites it. Exit 2
+  for a file that is not the vectors' JSON.
+
 ## matrix — every container's throughput and bytes per element
 
 ```sh

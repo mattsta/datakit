@@ -11,6 +11,7 @@ from pathlib import Path
 from . import (
     allocaudit,
     atomicaudit,
+    blake3vectors,
     buildstore,
     c23probe,
     commit,
@@ -294,6 +295,16 @@ def main(argv: list[str] | None = None) -> int:
     di.add_argument("header", help="the header, such as stdbool.h")
     di.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
     di.add_argument("--dry-run", action="store_true", help="report, change no file")
+
+    b3 = sub.add_parser(
+        "blake3vectors",
+        help="check src/hash/blake3TestVectors.h against the canonical "
+        "test_vectors.json (or rewrite it with --write)",
+    )
+    b3.add_argument("json", type=Path, help="the canonical test_vectors.json")
+    b3.add_argument(
+        "--write", action="store_true", help="rewrite the header from the JSON"
+    )
 
     cm = sub.add_parser(
         "commit",
@@ -1283,6 +1294,9 @@ def _dispatch(args: argparse.Namespace) -> int:
                 jobs=args.jobs,
             ),
         )
+
+    if args.command == "blake3vectors":
+        return blake3vectors.run(args.repo, args.json, args.write)
 
     if args.command == "configure":
         return configure.run(

@@ -73,19 +73,6 @@ slower than `perf`, and 64-byte raw HMAC takes 386 → 164 ns/op.
 | `-flto` in perf preset                    | +1-4% via cross-TU inlining                        |
 | Prepared-key HMAC API                     | 64-byte HMAC 183 → 96 ns/op (1.91× for small msgs) |
 
-## Where additional wins are possible
-
-Not implemented:
-
-- **AVX2 Compress8 transpose** — x86 only. Expected ~20% over
-  current AVX2 single-block. Requires an x86 test host.
-- **BLAKE3 portable hot-path tuning** — diminishing returns on
-  NEON-capable hosts since SIMD dispatch dominates. Matters on hosts
-  without NEON/SSE4.1/AVX2 (rare in modern fleets).
-- **Single-chunk BLAKE3 SIMD finalize** — for ≤1024-byte inputs
-  the bulk Compress4 path doesn't engage; could batch parents.
-- **Canonical BLAKE3 test-vector hex** — correctness, not perf.
-
 ## Hardware-ceiling notes
 
 - `xxh3_*`: measured ~34 GB/s at 1 MiB, where it is limited by memory

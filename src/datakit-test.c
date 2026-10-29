@@ -5425,11 +5425,13 @@ static int dkTestBlake3DeriveKeyVarInputTest(int, char *[]) {
         for (size_t i = 0; i < tv->input_len; i++) {
             input[i] = (uint8_t)(i % 251);
         }
-        uint8_t expect[32];
-        TEST_HEX(failures, tv->derive_key_hex, expect, 32);
-        uint8_t out[32];
-        blake3DeriveKey(context, ctx_len, input, tv->input_len, out, 32);
-        TEST_BYTES(failures, out, expect, 32,
+        /* The whole extended output, as derived keys of any length are */
+        uint8_t expect[BLAKE3_TEST_OUTPUT_LEN];
+        TEST_HEX(failures, tv->derive_key_hex, expect, sizeof(expect));
+        uint8_t out[BLAKE3_TEST_OUTPUT_LEN];
+        blake3DeriveKey(context, ctx_len, input, tv->input_len, out,
+                        sizeof(out));
+        TEST_BYTES(failures, out, expect, sizeof(out),
                    "dkTestBlake3DK: KAT mismatch len=%zu", tv->input_len);
     }
     if (failures == 0) {
