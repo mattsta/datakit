@@ -667,6 +667,20 @@ type, which the caller hashes by bytes.
 
 Unequal values may share a key: it is a hash input, not an identity.
 
+```c
+/* The span to hash so databoxCompare-equal boxes hash alike: a number's
+ * key (written into *scratch), anything else's own bytes */
+uint64_t scratch;
+const uint8_t *buf;
+size_t len;
+if (databoxHashBytes(&box, &scratch, &buf, &len)) {
+    h = XXH3_64bits(buf, len);
+}
+```
+
+`databoxHashBytes` returns false, with an empty span, for a box with no
+bytes (a deferred 96/128-bit box, or a type with no byte form).
+
 ### Compare classes
 
 - **Bytes vs bytes** — natural sort, not plain `memcmp`. A run of ASCII

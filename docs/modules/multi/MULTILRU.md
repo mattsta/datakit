@@ -364,6 +364,29 @@ invoke the eviction callback. Invalid handles are ignored.
 | Eviction callback | Not fired           | Fired on true eviction     |
 | Statistic         | `deletes`           | `demotions` or `evictions` |
 
+### Logging Before Acting
+
+A writer that logs each change before making it (the persistence wrapper
+does) needs to know what a change will do:
+
+```c
+/* What multilruRemoveMinimum takes next (0: empty): demoted when its
+ * level is above 0, evicted at level 0 */
+multilruPtr multilruPeekMinimum(const multilru *mlru);
+
+/* The handle the next insert returns: the most recently freed slot, else
+ * the next new one */
+multilruPtr multilruPeekNextHandle(const multilru *mlru);
+
+/* One demotion of 'ptr', exactly as RemoveMinimum demotes (no-op at level
+ * 0): for replaying a logged demotion */
+void multilruDecrease(multilru *mlru, multilruPtr ptr);
+
+/* The freed slots in the order inserts reuse them (up to 'n'): a snapshot
+ * that keeps this order restores to the same future handles */
+size_t multilruFreeHandles(const multilru *mlru, multilruPtr out[], size_t n);
+```
+
 ## Query Operations
 
 ```c
@@ -425,6 +448,8 @@ Limits can change after creation.
 ```c
 void multilruSetPolicy(multilru *mlru, multilruPolicy policy);
 void multilruSetEvictStrategy(multilru *mlru, multilruEvictStrategy strategy);
+multilruPolicy multilruGetPolicy(const multilru *mlru);
+multilruEvictStrategy multilruGetEvictStrategy(const multilru *mlru);
 
 void multilruSetMaxCount(multilru *mlru, uint64_t maxCount);
 uint64_t multilruGetMaxCount(const multilru *mlru);

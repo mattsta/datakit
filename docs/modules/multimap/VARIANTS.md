@@ -583,6 +583,13 @@ bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
                                  databox *atomRef);
 
 void multimapAtomRetain(multimapAtom *ma, const databox *key);
+/* Retain 'key' (interning it when new) and replace it with its reference */
+void multimapAtomRetainConvert(multimapAtom *ma, databox *key);
+/* The atom of 'key' in one search: true when it existed, false when this
+ * call created it under 'id' (which must be unbound); 'ref' its reference
+ * either way.  For a table that picks its own ids, as multimapAtomDense. */
+bool multimapAtomFindOrCreateWithId(multimapAtom *ma, const databox *key,
+                                    uint64_t id, databox *ref);
 void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef);
 void multimapAtomRetainById(multimapAtom *ma, uint64_t id);
 

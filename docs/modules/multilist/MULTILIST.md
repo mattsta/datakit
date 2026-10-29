@@ -838,6 +838,18 @@ node. `state` is scratch space for opening compressed Full nodes, and Small and
 Medium ignore it. The dump only reads the list. The persist layer uses it for
 multilist snapshots.
 
+```c
+/* A list of every element of 'elements' in order, built straight into its
+ * tier: a large dump is cut into node-sized pieces in O(n), with no
+ * per-element push.  Takes 'elements'. */
+multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
+                                mflexState *state, flex *elements);
+```
+
+`multilistNewFromDump` is the inverse: a dump and the list's `multilistLimit`
+and `multilistDepth` (its node size limit and compression depth) rebuild the
+list.
+
 ## Performance Characteristics
 
 ### Time Complexity

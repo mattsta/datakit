@@ -1522,6 +1522,56 @@ value. Immediate types render as `{{TRUE}}`, `{{FALSE}}`, `{{NULL}}`, or
 
 It is a debug dump, not a stable format: do not parse it.
 
+## More Calls by Job
+
+The calls the sections above don't show, by what they are for. The header
+comments in `flex.h` carry each one's full contract.
+
+**Exact-path factories and encoders**: `flexNewFromDataboxExact`,
+`flexNewFromDataboxesExact`, `flexNewFromDataboxPtrsExact` and
+`flexNewFromDataboxBigExact` build a flex storing each value exactly as given
+(see "Two Write Paths"). `flexEncodeDataboxPtrsExact(dst, cap, boxes, n)`
+writes that flex into a caller's buffer instead: it returns the bytes needed
+and writes only when they fit `cap`, for a fixed buffer with a heap fallback.
+
+**Half-precision inserts**: `flexInsertFloat16` and `flexInsertFloatB16`
+insert a float as IEEE half or bfloat16 at an entry, as `flexPushFloat16` /
+`flexPushFloatB16` do at an end.
+
+**Reading runs of integers**: `flexReadUnsigned(f, &fe, &value)` reads an
+unsigned entry and steps `fe` to the next one; false (nothing changed) at
+another type or the end. A loop over it decodes a run of ids or counters.
+
+**Indexing from a known position**: `flexIndexFromAnchor(f, i, anchorFE,
+anchorIdx)` walks to element `i` from the nearest of the head, the tail or an
+entry you already hold; `flexIndexWithMiddle` does the same from a sorted map's
+maintained middle entry.
+
+**Sorted maps whose rows hold references** (multimap's reference mode, where
+keys are stored as references into a container and compared by what they
+resolve to):
+
+| Call                                                                                        | Does                                                                                     |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `flexInsertByTypeSortedWithReference`                                                       | sorted insert of a box that may be a reference, placed by its value                      |
+| `flexGetByTypeSortedWithMiddleWithReference`                                                | the row with a key, or the row it would precede                                          |
+| `flexFindByTypeSortedWithMiddleLowest`, `flexFindByTypeSortedWithMiddleLowestWithReference` | the first row with a key when several share it (a set's rows), wherever the search lands |
+| `flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent`                                       | insert a row unless its key is present; one search either way, the found row handed back |
+| `flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent`                | the same with references, where a callback makes the stored key only when the row is new |
+| `flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing`                               | insert or replace a row, reporting the value it replaced                                 |
+| `flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing`         | the same, storing long keys as pointers to their bytes                                   |
+
+These are the building blocks of multimap's tiers; code outside them uses
+multimap.
+
+**Growth slack**: `flexSetGrowthSlack(percent, minBytes, maxBytes)` makes small
+flexes keep a share of spare room when they grow, so a run of small inserts
+reallocates once per slack instead of at every allocator size class;
+`flexGrowthSlack(&percent, &minBytes, &maxBytes)` reads the setting. The
+default is no slack; measure a change with `dktools tune --families
+flexSlack`. It is process-wide and applies only when the allocator reports
+usable sizes.
+
 ## Performance Characteristics
 
 | Operation                 | Complexity | Notes                                          |

@@ -126,6 +126,7 @@ dropped from the CTest list otherwise.
 - [multiheap](modules/utils/MULTIHEAP.md) - Keyed byte-region store (ref -> resizable bytes)
 - [intersectInt](modules/utils/INTERSECT_INT.md) - Set intersection operations
 - [ULID](modules/utils/ULID.md) - Time-ordered identifiers: 128-bit ULIDs and 64/32-bit compact variants, their layouts and ranges
+- [Random numbers](modules/utils/RANDOM.md) - Which source for which job: the OS CSPRNG, per-thread draws, replayable streams
 
 ### Bundled Dependencies
 

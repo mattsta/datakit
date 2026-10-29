@@ -165,6 +165,12 @@ void intsetBigFree(intsetBig *isb);
 
 /* Deep copy: new bucket map, new intsetU32 per bucket */
 intsetBig *intsetBigCopy(const intsetBig *isb);
+
+/* A set holding 'members' (a flex of integers in the order the iterator
+ * walks them, as a snapshot writes them), built a bucket at a time with
+ * no per-member search; NULL when a member can't be held or the order is
+ * wrong */
+intsetBig *intsetBigNewFromMembers(const flex *members);
 ```
 
 ```c
@@ -523,7 +529,8 @@ intsetBigAdd(isb, &v);
 ```
 
 64-bit box types always pass the check, so the guard only costs anything on
-the 128-bit paths.
+the 128-bit paths. The macro is `intsetBigCanHold(&v)`, callable as a function
+too.
 
 ### 2. Keep Values Clustered When You Can
 

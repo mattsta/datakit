@@ -276,6 +276,11 @@ uint32_t multidictGetHashFunctionSeed(multidict *d);
 if (!multidictSetHashFunctionSeed(d, 12345)) {
     /* seed applied anyway, but it exceeded 2^20 */
 }
+
+/* The seed multidictNew takes: a fixed one lays slots out the same every
+ * run; multidictRandomSeed() is the process's own, drawn once */
+multidict *d2 = multidictNew(&multidictTypeExactKey, qdc, multidictRandomSeed());
+const multidictType *how = multidictGetType(d2); /* how its keys hash, match */
 ```
 
 ## Core Operations
@@ -301,6 +306,9 @@ case MULTIDICT_ERR: /* slot class rejected the insert */ break;
 `multidictAdd` is upsert semantics. While a rehash is in flight it first
 removes any copy of the key still living in `ht[0]`, so a key can never be
 duplicated across the two tables and the per-table counts stay exact.
+
+`multidictPut(d, &key, &val)` is the same for a dict whose class never refuses
+an add (the default class): it returns true when the key was new.
 
 ### Conditional Insert
 
@@ -711,6 +719,15 @@ multidictResize(d);  /* Resize once when done */
  * 'shrinkPercent' (at most 255 and a quarter of expandPercent) */
 bool multidictSetLoadFactors(multidict *d, uint32_t expandPercent,
                              uint32_t shrinkPercent);
+void multidictGetLoadFactors(const multidict *d, uint32_t *expandPercent,
+                             uint32_t *shrinkPercent);
+
+/* The process default new dicts take (existing ones keep theirs), and its
+ * reader; false, changing nothing, outside the bounds above */
+bool multidictSetDefaultLoadFactors(uint32_t expandPercent,
+                                    uint32_t shrinkPercent);
+void multidictDefaultLoadFactors(uint32_t *expandPercent,
+                                 uint32_t *shrinkPercent);
 ```
 
 Every resize (growth, the automatic shrink, `multidictResize`) leaves the load
@@ -878,6 +895,11 @@ typedef enum multidictEvictPolicy {
 bool multidictEnableLRU(multidict *d, size_t levels);
 void multidictDisableLRU(multidict *d);
 bool multidictHasLRU(multidict *d);
+size_t multidictLRULevels(const multidict *d); /* 0 when LRU is off */
+
+/* Presence without a use: an inspector for a caller about to name the
+ * key in the operation it decides on */
+bool multidictExistsNoTouch(multidict *d, const databox *keybox);
 
 void multidictSetEvictPolicy(multidict *d, multidictEvictPolicy policy);
 multidictEvictPolicy multidictGetEvictPolicy(multidict *d);
@@ -929,6 +951,10 @@ void multidictEnableByteBasedExpansion(multidict *d, uint64_t targetSlotBytes,
                                        uint64_t maxSlotBytes);
 void multidictDisableByteBasedExpansion(multidict *d);
 bool multidictIsByteBasedExpansion(multidict *d);
+/* Whether it is on, with its target and maximum slot bytes */
+bool multidictGetByteBasedExpansion(const multidict *d,
+                                    uint64_t *targetSlotBytes,
+                                    uint64_t *maxSlotBytes);
 
 /* Passing 0 for either bound selects the default: 2MB target, 8MB max */
 multidictEnableByteBasedExpansion(d, 0, 0);

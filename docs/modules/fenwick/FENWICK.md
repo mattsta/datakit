@@ -127,7 +127,11 @@ int64_t span = fenwickI64RangeQuery(fw, 10, 42);
 int64_t e42 = fenwickI64Get(fw, 42);
 fenwickI64Set(&fw, 42, 7);                  /* e[42] = 7 */
 size_t rank = fenwickI64LowerBound(fw, 100); /* first i with prefix >= 100 */
+size_t n = fenwickI64Count(fw);             /* elements (43 here) */
+size_t held = fenwickI64Bytes(fw);          /* memory */
+fenwickI64Clear(fw);                        /* every element 0, count kept */
 fenwickI64Free(fw);
+void *empty = fenwickI64New();              /* or start from NULL, as above */
 
 /* Databox 1D: same shape, databox values and results */
 multiFenwickFlat *mf = NULL;
@@ -138,14 +142,54 @@ if (multiFenwickFlatQuery(mf, 42, &sum)) { /* sum.type: by value */ }
 multiFenwickFlatFree(mf);
 
 /* 2D */
-fenwick2dI64 *grid = NULL;
+fenwick2dI64 *grid = NULL;                  /* or fenwick2dI64New() */
 fenwick2dI64Update(&grid, row, col, 1);
+fenwick2dI64Set(&grid, row, col, 5);        /* e[row][col] = 5 */
+int64_t cell = fenwick2dI64Get(grid, row, col);
+int64_t corner = fenwick2dI64Query(grid, row, col); /* [0,row] x [0,col] */
 int64_t box = fenwick2dI64RangeQuery(grid, r1, c1, r2, c2);
+size_t rows = fenwick2dI64Rows(grid), cols = fenwick2dI64Cols(grid);
+size_t gridBytes = fenwick2dI64Bytes(grid);
+fenwick2dI64Clear(grid);                    /* every cell 0, extents kept */
 fenwick2dI64Free(grid);
 ```
 
 Every write takes a pointer to the handle and creates the tree when it is
 NULL; a refused write on a NULL tree leaves it NULL.
+
+### multiFenwick and multiFenwick2d calls
+
+`multiFenwick` is the databox tree over a multilist (the densest, and the
+slowest: each cell access walks a flex node); `multiFenwickFlat` has the
+same calls over a flat cell array. Both refuse, changing nothing, a value
+that is not a 64-bit integer or a finite float, and a write that would
+push a stored block sum out of `[INT64_MIN, UINT64_MAX]`.
+
+| Call                                            | Does                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------------- |
+| `multiFenwickNew()` / `multiFenwickFree(t)`     | an empty tree / free it                                               |
+| `multiFenwickNewFromArray(values, n)`           | element i is `values[i]`, built in O(n); NULL if any value is refused |
+| `multiFenwickUpdate(&t, i, &delta)`             | `e[i] += delta` (extends the count to i + 1)                          |
+| `multiFenwickSet(&t, i, &value)`                | `e[i] = value`                                                        |
+| `multiFenwickGet(t, i, &out)`                   | `e[i]`, from the cells covering it alone                              |
+| `multiFenwickQuery(t, i, &out)`                 | `e[0] + ... + e[i]`                                                   |
+| `multiFenwickRangeQuery(t, l, r, &out)`         | `e[l] + ... + e[r]`, exactly                                          |
+| `multiFenwickLowerBound(t, &target)`            | the first i whose prefix sum reaches `target` (SIZE_MAX: none)        |
+| `multiFenwickCount(t)` / `multiFenwickBytes(t)` | elements / bytes held                                                 |
+| `multiFenwickClear(t)`                          | every element to zero, count kept                                     |
+
+`multiFenwickFlat` names the same calls with `Flat`: `multiFenwickFlatNew`,
+`multiFenwickFlatNewFromArray`, `multiFenwickFlatUpdate`, `multiFenwickFlatSet`,
+`multiFenwickFlatGet`, `multiFenwickFlatQuery`, `multiFenwickFlatRangeQuery`,
+`multiFenwickFlatLowerBound`, `multiFenwickFlatCount`, `multiFenwickFlatBytes`,
+`multiFenwickFlatClear` and `multiFenwickFlatFree`.
+
+`multiFenwick2d` is the grid form of `multiFenwickFlat`:
+`multiFenwick2dNew` / `multiFenwick2dFree`, `multiFenwick2dUpdate(&t, row, col, &delta)`,
+`multiFenwick2dSet`, `multiFenwick2dGet`, `multiFenwick2dQuery(t, row, col, &out)`
+(the sum of `[0, row] x [0, col]`), `multiFenwick2dRangeQuery(t, r1, c1, r2, c2, &out)`
+(clamped to the extents), `multiFenwick2dRows` / `multiFenwick2dCols` (the
+extents), `multiFenwick2dBytes` and `multiFenwick2dClear`.
 
 ## Complexity
 

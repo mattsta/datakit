@@ -100,6 +100,54 @@ multiroarFree(online);
 multimapAtomDenseFree(users);
 ```
 
+## atomPool calls
+
+| Call                                                                           | Does                                                                                        |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `atomPoolNew(type)` / `atomPoolNewDefault()` / `atomPoolNewWithIds(type, ids)` | a pool on `ATOM_POOL_HASH` or `ATOM_POOL_TREE` (default HASH), reusing ids or as `ids` says |
+| `atomPoolGetType(pool)` / `atomPoolTypeName(type)` / `atomPoolGetIds(pool)`    | its backend, a backend's name, its id behaviour                                             |
+| `atomPoolIntern(pool, &str)`                                                   | the id, taking a reference (0 on failure)                                                   |
+| `atomPoolGetId(pool, &str)` / `atomPoolExists(pool, &str)`                     | the id without a reference (0: absent) / whether present                                    |
+| `atomPoolLookup(pool, id, &out)`                                               | the string                                                                                  |
+| `atomPoolRetain(pool, id)` / `atomPoolRelease(pool, id)`                       | one more / one fewer reference (Release true when it freed the atom)                        |
+| `atomPoolRefcount(pool, id)`                                                   | the references held (0: no such id)                                                         |
+| `atomPoolCount(pool)` / `atomPoolBytes(pool)`                                  | atoms held / memory                                                                         |
+| `atomPoolReset(pool)` / `atomPoolFree(pool)`                                   | every atom gone, ids start over / free the pool                                             |
+
+## multimapAtomDense calls
+
+The dense table is a `multimapAtom` whose new atoms always take the lowest
+free id. Writes go through it; reads take `multimapAtomDenseBase(d)` and the
+`multimapAtom` lookups.
+
+| Call                                                                        | Does                                                                                                 |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `multimapAtomDenseInsertConvert(d, &box)`                                   | a new atom (the value must be absent); `box` becomes its reference                                   |
+| `multimapAtomDenseInsertIfNewConvert` / `...AndRetain`                      | the existing atom's reference (retained once more by AndRetain) or a new one's; true when it existed |
+| `multimapAtomDenseRetain(d, &key)` / `multimapAtomDenseRetainById(d, id)`   | one more reference (Retain interns a new value)                                                      |
+| `multimapAtomDenseRelease(d, &key)` / `multimapAtomDenseReleaseById(d, id)` | one fewer; the last deletes the atom and frees its id                                                |
+| `multimapAtomDenseDelete(d, &key)` / `multimapAtomDenseDeleteById(d, id)`   | delete whatever the count, freeing the id                                                            |
+| `multimapAtomDenseNextId(d)`                                                | the id the next new atom gets (the lowest free)                                                      |
+| `multimapAtomDenseCount(d)` / `multimapAtomDenseBytes(d)`                   | atoms / bytes of the table and its free set                                                          |
+
+The `...AndRetain` form is `multimapAtomDenseInsertIfNewConvertAndRetain`.
+
+## stringPool calls
+
+`stringPool` is the HASH backend, usable on its own. Its calls match `atomPool`'s:
+
+| Call                                                         | Does                                                                         |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `stringPoolNew()` / `stringPoolNewWithIds(ids)`              | an empty pool (reusing ids, or `STRING_POOL_IDS_PERMANENT` / `_LOWEST`)      |
+| `stringPoolIdsOf(pool)`                                      | the id behaviour it was made with                                            |
+| `stringPoolIntern(pool, &str)`                               | the string's id, taking a reference (new strings start at one); 0 on failure |
+| `stringPoolGetId(pool, &str)` / `stringPoolExists`           | the id without taking a reference (0: absent) / whether it is present        |
+| `stringPoolLookup(pool, id, &out)`                           | the string (it points into the pool: valid until that string is freed)       |
+| `stringPoolRetain(pool, id)` / `stringPoolRelease(pool, id)` | one more / one fewer reference; Release is true when it freed the string     |
+| `stringPoolRefcount(pool, id)`                               | the references held (0: no such id)                                          |
+| `stringPoolCount(pool)` / `stringPoolBytes(pool)`            | strings held / memory                                                        |
+| `stringPoolReset(pool)` / `stringPoolFree(pool)`             | drop every string (ids start over) / free the pool                           |
+
 ## Best practices
 
 - Intern at the boundary (when a value enters the system), and pass ids inside it.

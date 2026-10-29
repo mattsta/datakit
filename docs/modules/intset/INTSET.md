@@ -310,24 +310,21 @@ is the largest of the array tails.
 ### Iteration
 
 ```c
-/* WRONG for anything but a Small intset — O(n^2) total.
- * Each intsetGet re-walks the merge from position 0. */
-for (uint32_t i = 0; i < intsetCount(is); i++) {
-    int64_t val;
-    intsetGet(is, i, &val);
+/* Every value, ascending, O(1) each */
+intsetIterator it;
+intsetIteratorInit(&it, is);
+int64_t val;
+while (intsetIteratorNext(&it, &val)) {
     consume(val);
 }
 ```
 
-The public `intset.h` API deliberately exposes no iterator: the merged
-sorted order is virtual, so there is no cheap way to hand out a cursor
-through the opaque handle. When you need every element:
+The iterator merges the tier's width arrays as it goes. The set must not
+change during the walk; its fields are private.
 
-- If **sorted order matters**, keep the count small enough that the
-  quadratic walk is acceptable, or track the values alongside the set.
-- If **order does not matter**, iterate each width array directly by
-  including the tier header (`intsetSmall.h` / `intsetMedium.h` /
-  `intsetFull.h`), which also declare per-tier iterators.
+Walking by position instead is O(n^2) on Medium and Full sets (each
+`intsetGet` re-walks the merge from position 0), so use the iterator for
+anything but a single lookup.
 
 `intsetRandom(is)` is likewise O(pos) on Medium and Full: it picks a random
 position and calls `intsetGet`. It returns `0` for an empty set, which is

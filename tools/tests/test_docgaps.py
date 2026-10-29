@@ -62,6 +62,17 @@ class DocGaps(unittest.TestCase):
             ("fenwick2dU16Get", "fenwickU32Bytes", "segmentWideFoo"),
         )
 
+    def test_per_structure_calls_document_every_structures_call(self) -> None:
+        (self.repo / "src" / "p.h").write_text(
+            "#pragma once\nvoid listNewP(void);\nvoid mapNewP(void);\n"
+            "void mapSyncP(void);\n"
+        )
+        (self.repo / "docs" / "modules" / "P.md").write_text(
+            "| `<s>NewP(ctx)` | a new structure |\n"
+        )
+        by = {g.header: g for g in self.report()}
+        self.assertEqual(by["src/p.h"].undocumented, ("mapSyncP",))
+
     def test_tier_headers_are_summed_apart_unless_named(self) -> None:
         (self.repo / "src" / "mm.h").write_text("#pragma once\nvoid mmGet(void);\n")
         (self.repo / "src" / "mmSmall.h").write_text(

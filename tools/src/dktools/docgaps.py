@@ -15,6 +15,10 @@ count as documented when the same function of another type is
 (``fenwickU32Query`` by ``fenwickI64Query``).  The types are the integer
 widths (``I8``..``I128``, ``U8``..``U128``), ``Float`` and ``Double``.
 
+A doc's ``<s>Rest`` token (``<s>NewP``: the call every persistence
+wrapper has, named after its structure) documents every name ending in
+``Rest``.
+
 A tier header (``fooSmall.h``, ``fooMedium.h``, ``fooLarge.h`` or
 ``fooFull.h`` beside a public ``foo.h``) is used through its umbrella, so
 it is left out of the list and the totals and summed on a line of its
@@ -44,6 +48,9 @@ _ENTRY_POINT = re.compile(r"(Test|Bench)$")
 #: ``prefix<T>rest`` in a doc: a typed family's name pattern
 _FAMILY = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)<T>([A-Za-z0-9_]*)")
 
+#: ``<s>Rest`` in a doc: a call every structure has, named after it
+_PER_STRUCTURE = re.compile(r"<s>([A-Z][A-Za-z0-9_]*)")
+
 #: The type tags a typed family's names carry after their prefix
 _TYPE_TAG = re.compile(r"(?:[IU](?:8|16|32|64|128)|Float|Double)")
 _TYPE_TAGS = tuple(
@@ -68,17 +75,23 @@ class HeaderGaps:
 
 @dataclass(frozen=True)
 class DocIndex:
-    """What the user-level docs name: whole words, and typed families
-    (``prefix<T>rest`` patterns; a bare ``prefix<T>`` has rest '')."""
+    """What the user-level docs name: whole words, typed families
+    (``prefix<T>rest`` patterns; a bare ``prefix<T>`` has rest '') and
+    per-structure calls (the Rest of ``<s>Rest``)."""
 
     words: frozenset[str]
     families: frozenset[tuple[str, str]] = frozenset()
+    per_structure: frozenset[str] = frozenset()
 
     def names(self, name: str) -> bool:
         """Whether the docs document 'name': as a word, through a
-        ``prefix<T>rest`` pattern, or as a sibling of a documented type
-        of a ``prefix<T>`` family."""
+        ``prefix<T>rest`` pattern, as a sibling of a documented type of a
+        ``prefix<T>`` family, or as a structure's ``<s>Rest`` call."""
         if name in self.words:
+            return True
+        if any(
+            name.endswith(rest) and len(name) > len(rest) for rest in self.per_structure
+        ):
             return True
         for prefix, rest in self.families:
             if not name.startswith(prefix):
@@ -105,11 +118,13 @@ def doc_index(repo: Path) -> DocIndex:
         paths.append(readme)
     words: set[str] = set()
     families: set[tuple[str, str]] = set()
+    per_structure: set[str] = set()
     for path in paths:
         text = path.read_text(encoding="utf-8", errors="replace")
         words.update(_WORD.findall(text))
         families.update(_FAMILY.findall(text))
-    return DocIndex(frozenset(words), frozenset(families))
+        per_structure.update(_PER_STRUCTURE.findall(text))
+    return DocIndex(frozenset(words), frozenset(families), frozenset(per_structure))
 
 
 def is_tier(path: str, headers: dict[str, str]) -> bool:

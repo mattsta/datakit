@@ -23,6 +23,7 @@ segmentI64RangeUpdate(seg, 0, 99, 5);         /* e[0..99] = 5, existing only */
 int64_t lo = segmentI64Query(seg, 10, 20);    /* min of e[10..20] */
 int64_t e7 = segmentI64Get(seg, 7);
 size_t n = segmentI64Count(seg);
+size_t held = segmentI64Bytes(seg);           /* memory */
 segmentI64Free(seg);
 ```
 

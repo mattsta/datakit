@@ -92,16 +92,16 @@ structure (`multimapNewP`, `multimapOpenP`, ...):
 Writers log first and apply only when the log takes the op (see Mutation
 Results); readers go straight to the structure. The writers and readers:
 
-| Wrapper            | Writers (log, then apply)                                                                                                                                                                                                                    | Readers                                                                                                                                                                                                      |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `flexP`            | `flexPushHeadP`, `flexPushTailP`, `flexResetP`                                                                                                                                                                                               | `flexGetP`, `flexIndexP`, `flexGetByTypeP`                                                                                                                                                                   |
-| `intsetP`          | `intsetAddP`, `intsetRemoveP`                                                                                                                                                                                                                | `intsetFindP`, `intsetGetAtP`, `intsetGetRawP`                                                                                                                                                               |
-| `multimapP`        | `multimapInsertP`, `multimapInsertIfNotExistsP`, `multimapDeleteP`, `multimapDeleteFullWidthP`, `multimapFieldIncrP`, `multimapResetP`; `multimapNewConfigureP`                                                                              | `multimapLookupP`, `multimapExistsP`, `multimapFirstP`, `multimapLastP`, `multimapRandomValueP`, `multimapIteratorInitP`, `multimapIteratorInitAtP`, `multimapGetP`                                          |
-| `multilistP`       | `multilistPushHeadP`, `multilistPushTailP`, `multilistPopHeadP`, `multilistPopTailP`, `multilistReplaceAtIndexP`, `multilistDelRangeP`, `multilistResetP`                                                                                    | `multilistIndexP`, `multilistIndexGetP`, `multilistIndexCheckP`, the `multilistIteratorInit*P` family, `multilistGetP`                                                                                       |
-| `multidictP`       | `multidictAddP`, `multidictReplaceP`, `multidictDeleteP`, `multidictEmptyP`                                                                                                                                                                  | `multidictFindP`, `multidictExistsP`, `multidictIteratorInitP`, `multidictGetP`                                                                                                                              |
-| `multiOrderedSetP` | `multiOrderedSetAddP`, `multiOrderedSetRemoveP`, `multiOrderedSetResetP`                                                                                                                                                                     | `multiOrderedSetGetScoreP`, `multiOrderedSetExistsP`, `multiOrderedSetGetByRankP`, `multiOrderedSetCountByScoreP`, `multiOrderedSetFirstP`, `multiOrderedSetLastP`, the `multiOrderedSetIterator*P` calls    |
-| `multilruP`        | `multilruInsertP`, `multilruInsertWeightedP`, `multilruIncreaseP`, `multilruUpdateWeightP`, `multilruDeleteP`, `multilruRemoveMinimumP`, `multilruSetMaxCountP`, `multilruSetMaxWeightP`; `multilruNewWithConfigP`, `multilruNewWithLevelsP` | `multilruGetLevelP`, `multilruGetWeightP`, `multilruTotalWeightP`, `multilruLevelCountP`, `multilruLevelWeightP`, `multilruIsPopulatedP`, `multilruGetMaxCountP`, `multilruGetMaxWeightP`                    |
-| `multiroarP`       | `multiroarBitSetP`, `multiroarBitClearP`, `multiroarBitSetRangeP`, `multiroarBitClearRangeP`, `multiroarValueSetP`, `multiroarValueRemoveP`; `multiroarValueNewP`                                                                            | `multiroarBitGetP`, `multiroarBitCountP`, `multiroarRankP`, `multiroarSelectP`, `multiroarMinP`, `multiroarMaxP`, `multiroarIsEmptyP`, `multiroarValueGetP`, `multiroarValueCountP`, `multiroarMemoryUsageP` |
+| Wrapper            | Writers (log, then apply)                                                                                                                                                                                                                    | Readers                                                                                                                                                                                                                                                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `flexP`            | `flexPushHeadP`, `flexPushTailP`, `flexResetP`                                                                                                                                                                                               | `flexGetP`, `flexIndexP`, `flexGetByTypeP`                                                                                                                                                                                                                                                                   |
+| `intsetP`          | `intsetAddP`, `intsetRemoveP`                                                                                                                                                                                                                | `intsetFindP`, `intsetGetAtP`, `intsetGetRawP`                                                                                                                                                                                                                                                               |
+| `multimapP`        | `multimapInsertP`, `multimapInsertIfNotExistsP`, `multimapDeleteP`, `multimapDeleteFullWidthP`, `multimapFieldIncrP`, `multimapResetP`; `multimapNewConfigureP`                                                                              | `multimapLookupP`, `multimapExistsP`, `multimapFirstP`, `multimapLastP`, `multimapRandomValueP`, `multimapIteratorInitP`, `multimapIteratorInitAtP`, `multimapGetP`                                                                                                                                          |
+| `multilistP`       | `multilistPushHeadP`, `multilistPushTailP`, `multilistPopHeadP`, `multilistPopTailP`, `multilistReplaceAtIndexP`, `multilistDelRangeP`, `multilistResetP`                                                                                    | `multilistIndexP`, `multilistIndexGetP`, `multilistIndexCheckP`, `multilistIteratorInitP`, `multilistIteratorInitForwardP`, `multilistIteratorInitReverseP`, `multilistIteratorInitForwardReadOnlyP`, `multilistIteratorInitReverseReadOnlyP`, `multilistGetP`                                               |
+| `multidictP`       | `multidictAddP`, `multidictReplaceP`, `multidictDeleteP`, `multidictEmptyP`                                                                                                                                                                  | `multidictFindP`, `multidictExistsP`, `multidictIteratorInitP`, `multidictGetP`                                                                                                                                                                                                                              |
+| `multiOrderedSetP` | `multiOrderedSetAddP`, `multiOrderedSetRemoveP`, `multiOrderedSetResetP`                                                                                                                                                                     | `multiOrderedSetGetScoreP`, `multiOrderedSetExistsP`, `multiOrderedSetGetByRankP`, `multiOrderedSetCountByScoreP`, `multiOrderedSetFirstP`, `multiOrderedSetLastP`, `multiOrderedSetIteratorInitP`, `multiOrderedSetIteratorInitAtScoreP`, `multiOrderedSetIteratorNextP`, `multiOrderedSetIteratorReleaseP` |
+| `multilruP`        | `multilruInsertP`, `multilruInsertWeightedP`, `multilruIncreaseP`, `multilruUpdateWeightP`, `multilruDeleteP`, `multilruRemoveMinimumP`, `multilruSetMaxCountP`, `multilruSetMaxWeightP`; `multilruNewWithConfigP`, `multilruNewWithLevelsP` | `multilruGetLevelP`, `multilruGetWeightP`, `multilruTotalWeightP`, `multilruLevelCountP`, `multilruLevelWeightP`, `multilruIsPopulatedP`, `multilruGetMaxCountP`, `multilruGetMaxWeightP`                                                                                                                    |
+| `multiroarP`       | `multiroarBitSetP`, `multiroarBitClearP`, `multiroarBitSetRangeP`, `multiroarBitClearRangeP`, `multiroarValueSetP`, `multiroarValueRemoveP`; `multiroarValueNewP`                                                                            | `multiroarBitGetP`, `multiroarBitCountP`, `multiroarRankP`, `multiroarSelectP`, `multiroarMinP`, `multiroarMaxP`, `multiroarIsEmptyP`, `multiroarValueGetP`, `multiroarValueCountP`, `multiroarMemoryUsageP`                                                                                                 |
 
 A structure changed directly (through `GetRawP` or the structure's own
 calls) is changed only in memory: the files no longer describe it, and the
@@ -414,6 +414,28 @@ for atom tables (`atomPersist.h`; see multimap/VARIANTS.md), and
 `persistOpsIdRows` for rows addressed by id (`idRows.h`; format and ops in
 `persist.h`).
 
+### Applying ops outside recovery
+
+`applyOp` for a multilist needs a working `mflexState` (its nodes may be
+compressed). Recovery sets one up itself; code that calls a descriptor's
+`applyOp` anywhere else (a follower applying a leader's ops, say) sets one
+for the calling thread around the call, and clears it after:
+
+```c
+persistSetReplayState(state);   /* this thread only */
+ops->applyOp(list, op, body, bodyLen); /* an encoded op, as the WAL holds it */
+persistSetReplayState(NULL);
+```
+
+`persistGetReplayState()` returns the calling thread's setting.
+
+A multilist POP in the WAL records the element it took, so a replay pops
+that element rather than whatever is at the end. Two process-wide counters
+report when that mattered: `persistMultilistPopIdentityDeepRemoveTotal()`
+(the element was found away from the popping end, after interleaved
+writes) and `persistMultilistPopIdentityAbsentNoopTotal()` (the element was
+already gone, so the replayed pop changed nothing).
+
 ## Writing a persistOps Descriptor
 
 A descriptor gives a type an id (`persistType`), a format stamp (a
@@ -452,6 +474,16 @@ The contract also checks that its type list and the registry
 (`persistRegistry`, which `persistOpsForType` and the format manifest read)
 name the same descriptors: a new descriptor goes in `persistRegistry.c` and
 in the contract's list.
+
+A new type's entry is a generator that builds the structure while it
+records: `persistContractStart(log, structure)` right after creating it,
+then `persistContractRecord(log, op, args, argc)` after each mutation, with
+the arguments its `encodeOp` takes. `persistContractValue(&rng, &out, buf,
+len)` draws a seeded test value (numbers of every width, true, false, null
+and bytes, some of them digit strings), and `persistContractSameBytes(got,
+want)` compares two bytes boxes by content, for a type whose values come
+back as bytes. Atom descriptors share `atomPersistValueOk(value)`, the
+values an atom may hold (a number, true, false, null or bytes).
 
 Helpers for `encodeOp`: `persistOpNoBody` (an op with no operands, CLEAR or
 an end pop), `persistOpEncodeBoxes` (the operand boxes as an exact flex),
