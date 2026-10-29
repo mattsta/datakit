@@ -12,6 +12,9 @@ integrity-envelope APIs.
 | HMAC              | `hmac.h`             | RFC 2104 HMAC over any hash; ships with SHA-256 and BLAKE3 backends.                                                         |
 | HMAC keyring      | `hmacKeyring.h`      | Caller-owned registry of prepared MAC keys, indexed by 32-bit id. Rotation-friendly.                                         |
 | ChaCha20-Poly1305 | `chacha20poly1305.h` | Portable RFC 8439 AEAD (encrypt + authenticate in one pass).                                                                 |
+| AES-GCM           | `aesGcm.h`           | NIST SP 800-38D AEAD, AES-128 / AES-256; hardware AES when the CPU has it.                                                   |
+| AEAD nonce log    | `aeadNonceLog.h`     | Bounded window that refuses a (key id, nonce) pair seen before.                                                              |
+| X25519            | `x25519.h`           | RFC 7748 Curve25519 key agreement.                                                                                           |
 | flex envelope     | `flexEnvelope.h`     | Integrity wrapper around any byte buffer. Supports checksum, MAC, and AEAD classes; one-shot, streaming, and seal/open APIs. |
 | Cluster mailbox   | `clusterMailbox.h`   | End-to-end verified-frame router with per-origin replay protection and durable watermarks.                                   |
 
@@ -635,6 +638,113 @@ for (each incoming envelope) {
 }
 ```
 
+### Algorithm queries
+
+```c
+size_t flexEnvelopeAlgoDigestLen(flexEnvelopeAlgo algo);   /* 0: unknown */
+const char *flexEnvelopeAlgoName(flexEnvelopeAlgo algo);   /* "unknown" */
+bool flexEnvelopeAlgoIsKeyed(flexEnvelopeAlgo algo);       /* false: unknown */
+bool flexEnvelopeAlgoIsDeprecated(flexEnvelopeAlgo algo);  /* false: unknown */
+```
+
+Each reads the registry entry of `algo`. The digest length of an AEAD
+algorithm is its 16-byte tag. A deprecated algorithm still verifies, but only
+under `FLEX_ENV_VERIFY_ALLOW_DEPRECATED`.
+
+### Peek: framing without the digest
+
+```c
+bool flexEnvelopePeek(const uint8_t *buf, size_t buf_len,
+                      flexEnvelopeHeader *out);
+```
+
+Parses the framing (version, algorithm, flags, key id, payload and digest
+lengths, header size) and computes nothing. Use it to route an envelope or to
+pick its key before verifying. True only for clean framing under a known
+algorithm; on failure `*out` is untouched. A peeked envelope is unverified:
+nothing in it can be trusted until `flexEnvelopeVerify` (or `Open`) succeeds.
+
+### Zero-copy wrap and seal
+
+When the payload is produced in pieces (serialized straight from a
+structure), write it into the envelope itself instead of staging a copy:
+
+```c
+uint8_t *region;
+size_t headerLen;
+if (flexEnvelopeReserveWrap(out, outCap, payloadLen, &wp, &region,
+                            &headerLen)) {
+    produceInto(region, payloadLen);       /* exactly payloadLen bytes */
+    size_t written;
+    flexEnvelopeFinalizeWrap(out, outCap, headerLen, payloadLen, &wp,
+                             &written);    /* digest appended here */
+}
+```
+
+`flexEnvelopeReserveSeal` / `flexEnvelopeFinalizeSeal` are the AEAD form:
+Reserve writes the framing and the nonce and hands back the plaintext
+region (its `header_plus_nonce_len` is the authenticated prefix);
+Finalize encrypts the region in place and appends the tag. Rules for both:
+
+- The output is byte-identical to `flexEnvelopeWrap` / `flexEnvelopeSeal`.
+- Pass the same params and lengths to Finalize as to Reserve; Finalize checks
+  the framing it wrote and refuses on any mismatch.
+- Touch only the payload region between the two calls.
+- A Seal's nonce-reuse check (`nonceLog`) runs in Reserve, before you spend
+  time producing plaintext; a reuse fails Reserve, reported by
+  `flexEnvelopeLastVerifyError()`.
+
+### Streaming wrap and verify (digest and MAC algorithms)
+
+For payloads too large to hold at once. AEAD algorithms are refused here;
+seal those with `flexEnvelopeSeal` or the stream AEAD calls below.
+
+```c
+flexEnvelopeWrapStream ws;
+uint8_t header[FLEX_ENV_MAX_HEADER_LEN];
+size_t headerLen;
+flexEnvelopeWrapStreamInit(&ws, totalLen, &wp, header, sizeof(header),
+                           &headerLen);           /* send header first */
+while (more) {
+    flexEnvelopeWrapStreamUpdate(&ws, chunk, chunkLen);   /* send chunk */
+}
+uint8_t digest[FLEX_ENV_MAX_DIGEST_LEN];
+size_t digestLen;
+flexEnvelopeWrapStreamFinal(&ws, digest, sizeof(digest), &digestLen);
+/* send digest last: header + chunks + digest == one envelope */
+```
+
+```c
+flexEnvelopeVerifyStream vs;
+size_t consumed;
+uint64_t payloadLen;
+flexEnvelopeAlgo algo;
+flexEnvelopeVerifyStreamInit(&vs, &vp, firstBytes, firstLen, &consumed,
+                             &payloadLen, &algo);
+/* feed everything after the framing: the payload, then its digest */
+flexEnvelopeVerifyStreamUpdate(&vs, firstBytes + consumed,
+                               firstLen - consumed);
+while (more) {
+    flexEnvelopeVerifyStreamUpdate(&vs, chunk, chunkLen);
+}
+if (!flexEnvelopeVerifyStreamFinal(&vs)) {
+    /* tampered, truncated or overlong: discard everything received */
+}
+```
+
+- Init zeroes the context and applies the same secure defaults as the
+  one-shot calls (keys, deprecated and `NONE` algorithms, `opts`).
+- Wrap: Updates must add up to exactly the declared `payload_len`; one byte
+  more fails that Update, and a short total fails Final.
+- Verify: Updates must add up to exactly `payload_len` plus the digest
+  length; Final compares a keyed digest in constant time unless
+  `FAST_COMPARE` is set (an unkeyed checksum holds no secret and compares
+  directly).
+- Any failed Update or Final poisons the context: every later call on it
+  fails. Final wipes the key material in the context either way.
+- Verify-side payload bytes arrive before their digest is checked: do not act
+  on them until Final returns true.
+
 ## End-to-end example: integrity-checked replication frame
 
 A producer wraps a flex containing some structured data with an HMAC
@@ -836,3 +946,142 @@ protocol.
    wire `key_id` is rejected by default — pass
    `FLEX_ENV_VERIFY_ACCEPT_WIRE_KEYID` to explicitly opt in to the
    keyring-resolve-from-wire case.
+
+## Call reference by header
+
+Every public call of these headers, one line each; the header beside each
+call states its full contract.
+
+### `chacha20poly1305.h`
+
+| Call                                                              | What it does                                                                                                                 |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `chacha20poly1305Seal`                                            | Encrypt and authenticate one message (32-byte key, 12-byte nonce, optional AAD); false past `CHACHA20_POLY1305_MAX_PAYLOAD`. |
+| `chacha20poly1305Open`                                            | Verify the tag in constant time, then decrypt; on a bad tag the plaintext output is zeroed and the call returns false.       |
+| `chacha20poly1305SealStreamInit`                                  | Start a streaming seal; every key byte now lives in the caller's ctx.                                                        |
+| `chacha20poly1305SealStreamAad`                                   | Add authenticated-only bytes; all of them before the first Update.                                                           |
+| `chacha20poly1305SealStreamUpdate`                                | Encrypt the next chunk (output may alias input).                                                                             |
+| `chacha20poly1305SealStreamFinal`                                 | Write the 16-byte tag and wipe the ctx.                                                                                      |
+| `chacha20poly1305OpenStreamInit`, `chacha20poly1305OpenStreamAad` | Start a streaming open; AAD as for sealing.                                                                                  |
+| `chacha20poly1305OpenStreamUpdate`                                | Decrypt the next chunk: unauthenticated until Final returns true, so release none of it before then.                         |
+| `chacha20poly1305OpenStreamFinal`                                 | Verify the tag in constant time and wipe the ctx.                                                                            |
+| `chacha20ActiveBackend`, `poly1305ActiveBackend`                  | The SIMD backend in use (scalar, NEON, AVX2).                                                                                |
+| `chacha20SetForceBackend` / `chacha20GetForceBackend`             | Pin (or read the pin of) the ChaCha20 backend, for tests; a pin to a backend the CPU lacks acts as AUTO.                     |
+| `poly1305SetForceBackend` / `poly1305GetForceBackend`             | The same for Poly1305.                                                                                                       |
+
+Every failing stream call poisons the ctx (each later call fails) and
+wipes it. A stream abandoned before Final still holds the key: wipe the
+ctx with `dkSecureZero`.
+
+### `aesGcm.h`
+
+| Call                                              | What it does                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `aesGcmInit`                                      | Expand a 16-byte (AES-128) or 32-byte (AES-256) key into an `aesGcmKey`; false for any other length. |
+| `aesGcmSeal`                                      | Encrypt and authenticate (12-byte nonce, 16-byte tag); false past `AES_GCM_MAX_PAYLOAD`.             |
+| `aesGcmOpen`                                      | Verify the tag in constant time, then decrypt; on a bad tag the plaintext output is zeroed.          |
+| `aesGcmActiveBackend`                             | The backend in use: AES-NI + PCLMUL, ARMv8 AES + PMULL, or scalar.                                   |
+| `aesGcmSetForceBackend` / `aesGcmGetForceBackend` | Pin (or read the pin of) the backend, for tests.                                                     |
+
+An `aesGcmKey` holds the round keys: wipe it with `dkSecureZero` when the
+key retires. The scalar backend's table lookups leak timing to a
+co-resident attacker; where that matters and the CPU lacks AES
+instructions, use ChaCha20-Poly1305.
+
+### `aeadNonceLog.h`
+
+| Call                    | What it does                                                                                                            |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `aeadNonceLogCreate`    | A log of at least `min_capacity` slots (rounded to a power of two, at least 64); NULL past `AEAD_NONCE_LOG_MAX_CAP`.    |
+| `aeadNonceLogObserve`   | Record a (key id, nonce) pair: false when it is already in the window (do not seal) or the key id is 0.                 |
+| `aeadNonceLogClearKey`  | Forget every pair of a key id, when the key retires.                                                                    |
+| `aeadNonceLogSize`      | Pairs held now (at most 7/8 of the capacity; past it the oldest pair is forgotten).                                     |
+| `aeadNonceLogCapacity`  | The capacity after rounding.                                                                                            |
+| `aeadNonceLogToBytes`   | Serialize to a flex (out NULL: the size it needs); 0 on failure.                                                        |
+| `aeadNonceLogFromBytes` | Rebuild a log, same capacity, pairs and eviction order, from those bytes; NULL for any malformed or out-of-range input. |
+| `aeadNonceLogFree`      | Wipe and free (NULL is fine).                                                                                           |
+
+### `hmac.h`
+
+| Call                                 | What it does                                                                                                        |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `hmacCompute`                        | One-shot HMAC over `hmacAlgoSHA256` or `hmacAlgoBLAKE3`.                                                            |
+| `hmacCtxSize`                        | Bytes of caller storage an incremental HMAC needs.                                                                  |
+| `hmacInit`                           | Start an incremental HMAC in that storage (a key longer than a block is hashed down, per RFC 2104).                 |
+| `hmacUpdate`                         | Feed message bytes.                                                                                                 |
+| `hmacFinal`                          | Write the tag and wipe every key-bearing byte of the storage; re-initialise before reuse.                           |
+| `hmacPreparedSize`, `hmacPrepareKey` | Absorb a key's pad blocks once, for many messages under one key.                                                    |
+| `hmacComputeWithKey`                 | One-shot HMAC from a prepared key (two compressions fewer than `hmacCompute`).                                      |
+| `hmacInitFromPrepared`               | Start an incremental HMAC from a prepared key.                                                                      |
+| `hmacComputeBatch4`                  | Four HMACs at once (four-lane SHA-256 where the CPU has it, else four serial ones); the lanes may differ in length. |
+
+A context whose Init was refused (storage too small) is zeroed, and
+Update and Final on it do nothing: Final leaves `out` untouched. A
+context abandoned before Final still holds key material: wipe its
+storage.
+
+### `hmacKeyring.h` (beyond the lifecycle calls above)
+
+| Call                                             | What it does                                                                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `hmacKeyringSize`                                | Keys installed and not retired.                                                                                           |
+| `hmacKeyringGetRaw`                              | Borrow a key's bytes and algorithm: valid only until the next mutation of that slot, on any thread.                       |
+| `hmacKeyringGetRawCopy`                          | Copy a key's bytes out under the keyring lock; the copy is yours to wipe.                                                 |
+| `hmacKeyringGetAesGcmKey`                        | Borrow the cached AES-GCM schedule of a 16- or 32-byte key (NULL for other lengths); same lifetime as `GetRaw`.           |
+| `hmacKeyringGetAesGcmKeyCopy`                    | Copy that schedule out under the lock.                                                                                    |
+| `hmacKeyringMinValidKeyId`                       | The revoked-key floor (0: none); `hmacKeyringSetMinValidKeyId` only raises it.                                            |
+| `hmacKeyringPeekAeadCounter`                     | The next AEAD counter a slot will issue, to store before shutdown.                                                        |
+| `hmacKeyringSetAeadReservation`                  | Make nonce issue wait on a durable reservation every `window` nonces (fail-closed when the reservation fails).            |
+| `hmacKeyringReserveThroughPersist`               | The reservation function for a keyring persisted with `persistOpsHmacKeyring`: logs and syncs the limit before returning. |
+| `hmacKeyringSnapshotSize`, `hmacKeyringSnapshot` | Serialize every slot (floor, ids, algorithms, salts, counters, raw keys) to a flex; seal it before it leaves the process. |
+| `hmacKeyringRestore`                             | Load such a snapshot all or nothing: any bad entry leaves the keyring as it was.                                          |
+
+### `blake3.h`, `sha256.h`, `x25519.h`
+
+| Call                                        | What it does                                                                                               |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `blake3HasherInitKeyed`                     | Start an incremental keyed hash (BLAKE3's MAC mode) under a 32-byte key.                                   |
+| `blake3HasherInitDeriveKey`                 | Start a derive-key hash for a NUL-terminated context string; feed it the key material.                     |
+| `blake3HasherInitDeriveKeyRaw`              | The same with a context of explicit length (bytes, not a C string).                                        |
+| `blake3SetForceImpl` / `blake3GetForceImpl` | Pin (or read the pin of) the BLAKE3 backend, for tests.                                                    |
+| `sha256Init`, `sha256Update`, `sha256Final` | Incremental SHA-256; Final wipes the context.                                                              |
+| `x25519Base`                                | A public key from a 32-byte private scalar (clamped internally; the input is not changed).                 |
+| `x25519`                                    | The shared secret with a peer's public key; false for a low-order peer key, which must abort the exchange. |
+
+A keyed or derive-key `blake3Hasher` holds its key (the `key` words) for
+as long as it lives, and `blake3HasherFinalize` leaves the hasher as it
+was, so it can be finalized again for more output: wipe a keyed hasher
+with `dkSecureZero` when done with it.
+
+### `clusterMailbox.h`
+
+| Call                                                                             | What it does                                                                                                                           |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `clusterMailboxCreate`                                                           | A mailbox over a borrowed keyring and a keyed envelope algorithm (HMAC-SHA-256, HMAC-BLAKE3 or keyed BLAKE3), with the apply callback. |
+| `clusterMailboxCreateEx`                                                         | The same with `CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW`: accept reordered frames within the last 64 sequences of an origin.                 |
+| `clusterMailboxCreateOpts`                                                       | Every option in one struct (zeroed: the defaults), including the nonce log: owned at a capacity, borrowed, or turned off.              |
+| `clusterMailboxFree`                                                             | Free the mailbox (and a nonce log it owns); the keyring is the caller's.                                                               |
+| `clusterMailboxAttachKeyring`                                                    | Bind a keyring, algorithm and callback to a mailbox restored through persist, before its first Seal or Ingest.                         |
+| `clusterMailboxNonceLog`                                                         | Borrow the mailbox's nonce log (NULL when off), to clear a retired key's pairs.                                                        |
+| `clusterMailboxOriginCount`                                                      | Origins with at least one applied frame; safe beside a concurrent Ingest.                                                              |
+| `clusterMailboxLastApplied`                                                      | An origin's last applied sequence (0: none; producers start at 1); safe beside a concurrent Ingest.                                    |
+| `clusterMailboxResetStats`                                                       | Zero the counters `clusterMailboxGetStats` reports.                                                                                    |
+| `clusterMailboxSnapshotSize`                                                     | Bytes `clusterMailboxSnapshot` writes for the watermark table.                                                                         |
+| `clusterMailboxSnapshotWrappedSize`                                              | Bytes `clusterMailboxSnapshotWrapped` writes under an algorithm.                                                                       |
+| `clusterMailboxSnapshotWrapped`                                                  | The watermark snapshot inside a keyed envelope, format-stamped: for storage another process can write, or a peer.                      |
+| `clusterMailboxRestoreWrapped`                                                   | Verify and merge such a snapshot (per origin the larger watermark wins); any refusal leaves the mailbox unchanged.                     |
+| `clusterRotationInit`, `clusterRotationPromote`, `clusterRotationRetirePrevious` | The (primary, previous) key pair of a rotation: seal under the primary, accept both until every peer has moved.                        |
+| `clusterRotationAccepts`                                                         | Whether a key id is accepted now (the primary, or the previous one until it is retired).                                               |
+
+### `clusterReplicator.h`
+
+| Call                            | What it does                                                                                                                                        |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clusterReplicatorCreate`       | Ship any persisted structure through a mailbox it owns: a type table of `persistOps` (each with a `free`) and a callback receiving restored copies. |
+| `clusterReplicatorCreateEx`     | The same with a `clusterReplicatorConfig`: the apply-retry budget (default 16, `CLUSTER_REPLICATOR_RETRY_FOREVER` never drops) and the nonce log.   |
+| `clusterReplicatorFree`         | Free it and its mailbox.                                                                                                                            |
+| `clusterReplicatorSnapshotSize` | Bytes a sealed frame of a structure needs.                                                                                                          |
+| `clusterReplicatorSeal`         | Snapshot a structure through its `persistOps` and seal it as a frame (origin, sequence, key id).                                                    |
+| `clusterReplicatorIngest`       | Verify a frame, restore its structure and hand it to the callback; a callback returning false keeps the watermark so the frame can come again.      |
+| `clusterReplicatorDroppedCount` | Frames dropped after the retry budget ran out (their watermark moved past them).                                                                    |
+| `clusterReplicatorMailbox`      | Borrow the owned mailbox (stats, watermark snapshots).                                                                                              |

@@ -223,12 +223,18 @@ void mflexPushSigned(mflex **mm, mflexState *state, const int64_t i,
                      flexEndpoint where);
 void mflexPushUnsigned(mflex **mm, mflexState *state, const uint64_t u,
                        flexEndpoint where);
+void mflexPushFloat16(mflex **mm, mflexState *state, const float fl,
+                      flexEndpoint where);
 void mflexPushFloat(mflex **mm, mflexState *state, const float fl,
                     flexEndpoint where);
 void mflexPushDouble(mflex **mm, mflexState *state, const double d,
                      flexEndpoint where);
 void mflexPushByType(mflex **mm, mflexState *state, const databox *box,
                      flexEndpoint where);
+
+/* Every element of a flex appended at the tail in one open-modify-close
+ * cycle, bytes copied as they are ('elements' is not consumed) */
+void mflexBulkAppendFlex(mflex **mm, mflexState *state, const flex *elements);
 
 /* Example: Build compressed array */
 mflexState *state = mflexStateCreate();
@@ -246,14 +252,9 @@ printf("Count: %zu, Compressed: %zu bytes\n",
 
 Every one of these is a full open-modify-close cycle: on a compressed mflex
 that means decompress, mutate, and attempt recompression **per call**. For
-more than a couple of values, open once and push through the flex API
-directly — see [Pattern 3](#pattern-3-batch-operations).
-
-There is no usable 16-bit float push today: `mflex.h` declares
-`mflexPushHalfFloat`, but `mflex.c` implements the differently-named
-`mflexPushFloat16` and never declares it, so neither name both compiles and
-links from a caller. To store a 16-bit float, open the mflex and use
-`flexPushFloat16` / `flexPushFloatB16`, then close.
+more than a couple of values, collect them in a flex and add them with one
+`mflexBulkAppendFlex`, or open once and push through the flex API directly —
+see [Pattern 3](#pattern-3-batch-operations).
 
 ## Delete Operations
 

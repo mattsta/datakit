@@ -128,11 +128,12 @@
  *   64-bit output as the one-shot function for the same byte sequence.
  *
  * Secret derivation:
- *   rapidhashMakeSecret() derives a domain-separated 8-word secret from a
- *   seed using wyrand + popcount-balanced primes (port of upstream
- *   secret.h).  Callers that need cryptographic-style domain separation
- *   between hash tables should pass the derived secret into the
- *   *WithSecret entry points instead of relying on the default secret.
+ *   rapidhashMakeSecret() derives the first 4 words of a secret from a
+ *   seed using wyrand + popcount-balanced primes (as upstream secret.h
+ *   does) and fills words 4..7 from the default secret.  Hash tables that
+ *   must not share collisions (one per tenant, say) pass their own derived
+ *   secret to the *WithSecret entry points; for words 4..7 to differ too,
+ *   overwrite them after deriving.
  *
  * Output is 64-bit and endian-invariant (the implementation byteswaps on
  * big-endian targets after each load).  All buffers are caller-owned;

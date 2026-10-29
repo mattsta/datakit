@@ -127,6 +127,7 @@ dropped from the CTest list otherwise.
 - [intersectInt](modules/utils/INTERSECT_INT.md) - Set intersection operations
 - [ULID](modules/utils/ULID.md) - Time-ordered identifiers: 128-bit ULIDs and 64/32-bit compact variants, their layouts and ranges
 - [Random numbers](modules/utils/RANDOM.md) - Which source for which job: the OS CSPRNG, per-thread draws, replayable streams
+- [rapidhash](modules/utils/RAPIDHASH.md) - Fast non-cryptographic 64-bit hashing: variants, seeds and secrets, streaming
 
 ### Bundled Dependencies
 

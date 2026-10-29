@@ -167,6 +167,7 @@ auto-discovers CTest targets from it.
 
 - [multiheap](docs/modules/utils/MULTIHEAP.md) - Keyed byte-region store (ref -> resizable bytes)
 - [intersectInt](docs/modules/utils/INTERSECT_INT.md) - Integer set intersection
+- [rapidhash](docs/modules/utils/RAPIDHASH.md) - Fast non-cryptographic 64-bit hashing
 
 ### Advanced Topics
 
