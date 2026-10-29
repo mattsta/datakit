@@ -10655,6 +10655,17 @@ int multidictTest(int, char *[]) {
             ERR("repack moved %zu, index %zu -> %zu", moved, indexBefore,
                 hd->lruPtrToKeySize);
         }
+        /* Again: nothing moves and the index keeps its size; a dict
+         * without LRU tracking has nothing to repack */
+        const size_t indexAfter = hd->lruPtrToKeySize;
+        cleaner(multidictMmClassFree) multidictClass *plainClass =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *plain =
+            multidictNew(&testConstHashType_, plainClass, 17);
+        if (multidictLRURepack(hd) != 0 || hd->lruPtrToKeySize != indexAfter ||
+            !testLruTrackingExact_(hd) || multidictLRURepack(plain) != 0) {
+            ERR("%s", "a second repack or one without LRU changed something");
+        }
 
         /* Evicting all but the promoted key 0 takes keys 4, 8, ..., 36
          * coldest first, each under its own key */

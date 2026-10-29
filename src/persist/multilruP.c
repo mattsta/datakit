@@ -1862,7 +1862,8 @@ static int test_multilruP_refusals(int, char *[]) {
         multilruInsertWeightedP(mlru, 3, &fresh), multilruIncreaseP(mlru, a),
         multilruUpdateWeightP(mlru, a, 50), multilruRemoveMinimumP(mlru, &out),
         multilruDeleteP(mlru, b), multilruSetMaxCountP(mlru, 1),
-        multilruSetMaxWeightP(mlru, 1));
+        multilruSetMaxWeightP(mlru, 1),
+        multilruRepackP(mlru, nullptr, nullptr));
     if (multilruCountP(mlru) != 2 || multilruTotalWeightP(mlru) != 12 ||
         multilruGetWeightP(mlru, a) != 5 || fresh != 0 || out != 0) {
         ERR("refused changes left count %zu, weight %" PRIu64
@@ -1885,6 +1886,7 @@ static int test_multilruP_refusals(int, char *[]) {
     if (multilruInsertP(nullptr, &fresh) || multilruIncreaseP(nullptr, a) ||
         multilruUpdateWeightP(nullptr, a, 1) ||
         multilruRemoveMinimumP(nullptr, &out) || multilruDeleteP(nullptr, a) ||
+        multilruRepackP(nullptr, nullptr, nullptr) ||
         multilruSetMaxCountP(nullptr, 1) || multilruSetMaxWeightP(nullptr, 1) ||
         multilruNewP(nullptr) || multilruOpenP(nullptr) ||
         multilruGetRawP(nullptr) || multilruCountP(nullptr) ||
