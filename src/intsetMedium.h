@@ -5,15 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Medium tier: int16_t and int32_t values in separate arrays
- * Memory layout: [count16][count32][values16...][values32...] */
-
-typedef struct intsetMedium {
-    uint32_t count16;  /* Number of int16_t values */
-    uint32_t count32;  /* Number of int32_t values */
-    int16_t *values16; /* Sorted array of int16_t values */
-    int32_t *values32; /* Sorted array of int32_t values */
-} intsetMedium;
+/* Medium tier: int16_t and int32_t values in separate arrays.
+ * Its layout and count: intsetMediumInternal.h.
+ * @handle: returns: a call that can move it returns the new address */
+typedef struct intsetMedium intsetMedium;
 
 /* Create new medium intset */
 intsetMedium *intsetMediumNew(void);
@@ -23,11 +18,6 @@ intsetMedium *intsetMediumFromSmall(const intsetSmall *small);
 
 /* Free medium intset */
 void intsetMediumFree(intsetMedium *m);
-
-/* Get total count */
-static inline uint64_t intsetMediumCount(const intsetMedium *m) {
-    return m ? (uint64_t)m->count16 + (uint64_t)m->count32 : 0;
-}
 
 /* Get total bytes */
 size_t intsetMediumBytes(const intsetMedium *m);

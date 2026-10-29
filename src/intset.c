@@ -1,9 +1,7 @@
 #include "intset.h"
 #include "datakit.h"
 #include "intsetCommon.h"
-#include "intsetFull.h"
-#include "intsetMedium.h"
-#include "intsetSmall.h"
+#include "intsetFullInternal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

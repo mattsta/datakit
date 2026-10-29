@@ -1,5 +1,5 @@
-#include "intsetSmall.h"
 #include "datakit.h"
+#include "intsetSmallInternal.h"
 #include <stdlib.h>
 #include <string.h>
 

@@ -5,18 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Full tier: int16_t, int32_t, and int64_t values in separate arrays
- * Memory layout:
- * [count16][count32][count64][values16...][values32...][values64...] */
-
-typedef struct intsetFull {
-    uint64_t count16;  /* Number of int16_t values */
-    uint64_t count32;  /* Number of int32_t values */
-    uint64_t count64;  /* Number of int64_t values */
-    int16_t *values16; /* Sorted array of int16_t values */
-    int32_t *values32; /* Sorted array of int32_t values */
-    int64_t *values64; /* Sorted array of int64_t values */
-} intsetFull;
+/* Full tier: int16_t, int32_t, and int64_t values in separate arrays.
+ * Its layout and count: intsetFullInternal.h.
+ * @handle: returns: a call that can move it returns the new address */
+typedef struct intsetFull intsetFull;
 
 /* Create new full intset */
 intsetFull *intsetFullNew(void);
@@ -26,11 +18,6 @@ intsetFull *intsetFullFromMedium(const intsetMedium *medium);
 
 /* Free full intset */
 void intsetFullFree(intsetFull *f);
-
-/* Get total count */
-static inline uint64_t intsetFullCount(const intsetFull *f) {
-    return f ? f->count16 + f->count32 + f->count64 : 0;
-}
 
 /* Get total bytes */
 size_t intsetFullBytes(const intsetFull *f);

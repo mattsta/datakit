@@ -1,5 +1,5 @@
-#include "intsetFull.h"
 #include "datakit.h"
+#include "intsetFullInternal.h"
 #include <stdlib.h>
 #include <string.h>
 

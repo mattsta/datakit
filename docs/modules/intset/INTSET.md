@@ -90,7 +90,9 @@ widths at once.
 
 ### The Three Tiers
 
-Each tier keeps **one sorted, duplicate-free array per width**:
+Each tier keeps **one sorted, duplicate-free array per width**. Callers hold
+each tier as an opaque handle; the layouts live in the family's
+`intset{Small,Medium,Full}Internal.h`:
 
 ```c
 /* Small: a single inline array — the header and values are one allocation */

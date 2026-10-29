@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct intsetU32 {
+    uint32_t count;
+    uint32_t capacity; /* slots allocated in 'contents' (>= count) */
+    uint32_t *contents;
+};
+
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(intsetU32 *, intsetU32Free);
 

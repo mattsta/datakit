@@ -1,5 +1,5 @@
-#include "intsetMedium.h"
 #include "datakit.h"
+#include "intsetMediumInternal.h"
 #include <stdlib.h>
 #include <string.h>
 

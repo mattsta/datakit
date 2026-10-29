@@ -52,10 +52,12 @@
 ## Data Structure
 
 ```c
-typedef struct intsetU32 {
-    uint32_t count;      /* Number of elements */
-    uint32_t *contents;  /* Separately allocated sorted array */
-} intsetU32;
+/* intsetU32.c: callers hold the opaque handle 'intsetU32 *' */
+struct intsetU32 {
+    uint32_t count;     /* Number of elements */
+    uint32_t capacity;  /* Slots allocated in 'contents' (>= count) */
+    uint32_t *contents; /* Separately allocated sorted array */
+};
 ```
 
 The handle is a **fixed-size header**; the element buffer lives in its own

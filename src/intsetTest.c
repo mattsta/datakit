@@ -3,9 +3,7 @@
 #include "ctest.h"
 #include "datakit.h"
 #include "intsetCommon.h"
-#include "intsetFull.h"
-#include "intsetMedium.h"
-#include "intsetSmall.h"
+#include "intsetFullInternal.h"
 #include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>

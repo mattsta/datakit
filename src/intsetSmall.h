@@ -4,13 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Small tier: int16_t values only, single contiguous array
- * Memory layout: [count16][values16...] */
-
-typedef struct intsetSmall {
-    uint32_t count16;   /* Number of int16_t values */
-    int16_t values16[]; /* Sorted array of int16_t values */
-} intsetSmall;
+/* Small tier: int16_t values only, single contiguous array.
+ * Its layout, count and size: intsetSmallInternal.h.
+ * @handle: returns: a call that can move it returns the new address */
+typedef struct intsetSmall intsetSmall;
 
 /* Create new small intset */
 intsetSmall *intsetSmallNew(void);
@@ -20,19 +17,6 @@ intsetSmall *intsetSmallFromArray(const int16_t *values, uint32_t count);
 
 /* Free small intset */
 void intsetSmallFree(intsetSmall *is);
-
-/* Get total count */
-static inline uint32_t intsetSmallCount(const intsetSmall *is) {
-    return is ? is->count16 : 0;
-}
-
-/* Get total bytes */
-static inline size_t intsetSmallBytes(const intsetSmall *is) {
-    if (!is) {
-        return 0;
-    }
-    return sizeof(intsetSmall) + (is->count16 * sizeof(int16_t));
-}
 
 /* Find value - returns position and search result */
 intsetSearchResult intsetSmallFind(const intsetSmall *is, int64_t value,

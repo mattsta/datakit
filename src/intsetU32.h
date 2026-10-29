@@ -6,9 +6,9 @@
 /* STABLE OUTER HANDLE.
  *
  * The handle (`intsetU32 *`) is a fixed-size header; the element buffer
- * lives in a SEPARATELY heap-allocated block reached through `contents`.
+ * lives in a SEPARATELY heap-allocated block the handle points to.
  * Growth and shrink (Add / Remove / Resize / ShrinkToSize / RandomDelete)
- * reallocate `contents` IN PLACE and NEVER relocate the handle itself.
+ * reallocate that block and NEVER relocate the handle itself.
  *
  * INVARIANT: a pointer to an intsetU32 stays valid across any in-place
  * mutation.  A holder of the handle (a value slot in a keyspace, a databox
@@ -19,12 +19,9 @@
  * header never moves while its buckets grow).
  *
  * Because the handle never moves, the mutators take `intsetU32 *` (not
- * `intsetU32 **`): there is no new handle to hand back. */
-typedef struct intsetU32 {
-    uint32_t count;
-    uint32_t capacity; /* slots allocated in 'contents' (>= count) */
-    uint32_t *contents;
-} intsetU32;
+ * `intsetU32 **`): there is no new handle to hand back.
+ * @handle: fixed: its address holds from creation to free */
+typedef struct intsetU32 intsetU32;
 
 [[nodiscard]] intsetU32 *intsetU32New(void);
 [[nodiscard]] intsetU32 *intsetU32NewLen(const uint32_t len);
