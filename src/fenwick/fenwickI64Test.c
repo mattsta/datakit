@@ -1,5 +1,4 @@
 /* Fenwick Tree - I64 Type Comprehensive Tests (2-TIER SYSTEM)
- * Migrated and adapted from original fenwickTest.c
  * Tests for int64_t specialization across Small and Full tiers
  */
 

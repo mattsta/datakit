@@ -2240,6 +2240,34 @@ bool multimapFullLookupWithReference(multimapFull *m, const databox *key,
 /* ====================================================================
  * Delete API
  * ==================================================================== */
+/* After a delete left sub-map 'mapIdx' of 'm' (at '*map') with fewer
+ * rows: once empty it is freed and its slots dropped (reallocDecrCount
+ * frees the range boxes it drops), else it is merged into a neighbour,
+ * the next preferred and the previous as the fallback, so a shrunken
+ * tail sub-map is still reclaimed.  A lone sub-map stays, empty or not,
+ * for the next insert.  'referenceContainer': NULL for plain keys. */
+static void
+multimapFullRepairAfterDelete_(multimapFull *m, const multimapFullIdx mapIdx,
+                               flex **map,
+                               const multimapAtom *referenceContainer) {
+    if (m->count <= 1) {
+        return;
+    }
+    if (flexCount(*map) == 0) {
+        flexFree(*map);
+        reallocDecrCount(m, mapIdx);
+        return;
+    }
+    const bool useReference = referenceContainer != nullptr;
+    bool merged = false;
+    if (nextMapIdxExists(m, mapIdx)) {
+        merged = mergeSimple(m, mapIdx, useReference, referenceContainer);
+    }
+    if (!merged && mapIdx > 0) {
+        mergeSimple(m, mapIdx - 1, useReference, referenceContainer);
+    }
+}
+
 DK_INLINE_ALWAYS bool
 abstractDelete(multimapFull *m, const databox **elements, const bool fullWidth,
                const bool useReference, const multimapAtom *referenceContainer,
@@ -2279,55 +2307,10 @@ abstractDelete(multimapFull *m, const databox **elements, const bool fullWidth,
         }
     }
 
-    /* Step 2a: Clean up after successful delete only if we have more
-     *          than one map.  If we only have one map, we don't delete it
-     *          for ease of adding more data next time. */
-    if (deleted && m->count > 1) {
-        /* Step 2b: if we have more than one map and this map is now empty,
-         *          delete the map and shrink all accounting arrays. */
-        if (flexCount(*map) == 0) {
-            /* Step 2b1: Free empty map, delete all slots for it. */
-            flexFree(*map);
-
-            /* We integrated this check/free into every use of
-             * 'reallocDecrCount' itself, but for efficiency we should really
-             * only be doing databoxFreeData() when we are using reference
-             * actions. (But, the reference actions we had annotated already
-             * were missing a few databoxFreeData() calls somewhere? So, for now
-             * it's easier to have verified-free by running
-             * getRangeBox->databoxFreeData a little more often than required to
-             * not leave leaks anywhere. */
-#if 0
-            if (useReference) {
-                /* When using references in a Full, the range boxes may contain
-                 * allocated data which needs to be free'd when range boxes
-                 * are deleted or updated or changed */
-
-                /* See reallocDecrCount() for why this math is the way it is */
-                if (mapIdx > 0) {
-                    databox *rangeBox = getRangeBox(m, mapIdx - 1);
-                    databoxFreeData(rangeBox);
-                }
-            }
-#endif
-
-            reallocDecrCount(m, mapIdx);
-        } else {
-            /* Step 2b2: map still has contents, so attempt to compact
-             *           it into a neighbor. Prefer merging with the
-             *           next map; if that can't happen (this is the
-             *           last map, or the pair doesn't fit), fall back
-             *           to merging with the previous map so a shrunken
-             *           tail sub-map still gets reclaimed. */
-            bool merged = false;
-            if (nextMapIdxExists(m, mapIdx)) {
-                merged =
-                    mergeSimple(m, mapIdx, useReference, referenceContainer);
-            }
-            if (!merged && mapIdx > 0) {
-                mergeSimple(m, mapIdx - 1, useReference, referenceContainer);
-            }
-        }
+    /* Step 2: the sub-map after the delete */
+    if (deleted) {
+        multimapFullRepairAfterDelete_(
+            m, mapIdx, map, useReference ? referenceContainer : nullptr);
     }
 
     return deleted;
@@ -2353,12 +2336,8 @@ void multimapFullDeleteEntryWithReference(
 
     flexDeleteSortedValueWithMiddle(map, m->elementsPerEntry, foundP, &middle);
 
-    /* This is code copied from:
-     *   - abstractFlexDelete
-     *      - AND FROM -
-     *   - abstractDelete */
-
-    /* Step 3a: Repair multimapFull state from entry delete */
+    /* Step 3a: the counts, middle and range box after the row delete (as
+     * abstractFlexDelete keeps them) */
     m->values--;
     SET_MIDDLE(m, mapIdx, middle, *map);
 
@@ -2368,25 +2347,8 @@ void multimapFullDeleteEntryWithReference(
         updateRangeBoxForIdx(m, mapIdx, *map);
     }
 
-    /* Step 3b: Repair state if map is now empty (from 'abstractDelete') */
-    if (m->count > 1) {
-        if (flexCount(*map) == 0) {
-            flexFree(*map);
-            reallocDecrCount(m, mapIdx);
-        } else {
-            /* Compact into a neighbor: next preferred, previous as a
-             * fallback so a shrunken tail sub-map is still reclaimed. */
-            bool merged = false;
-            const bool useReference = referenceContainer != nullptr;
-            if (nextMapIdxExists(m, mapIdx)) {
-                merged =
-                    mergeSimple(m, mapIdx, useReference, referenceContainer);
-            }
-            if (!merged && mapIdx > 0) {
-                mergeSimple(m, mapIdx - 1, useReference, referenceContainer);
-            }
-        }
-    }
+    /* Step 3b: the sub-map after the delete */
+    multimapFullRepairAfterDelete_(m, mapIdx, map, referenceContainer);
 }
 
 bool multimapFullDelete(multimapFull *m, const databox *key) {
