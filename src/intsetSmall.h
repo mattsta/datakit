@@ -18,7 +18,8 @@ intsetSmall *intsetSmallFromArray(const int16_t *values, uint32_t count);
 /* Free small intset */
 void intsetSmallFree(intsetSmall *is);
 
-/* Find value - returns position and search result */
+/* Find value: INTSET_FOUND or INTSET_NOT_FOUND, and in '*pos' (may be
+ * NULL) the value's index, or where it would go (0 to the count) */
 intsetSearchResult intsetSmallFind(const intsetSmall *is, int64_t value,
                                    uint32_t *pos);
 

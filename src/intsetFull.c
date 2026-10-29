@@ -139,34 +139,40 @@ intsetSearchResult intsetFullFind(const intsetFull *f, int64_t value,
         return INTSET_NOT_FOUND;
     }
 
-    /* Determine which array to search */
+    /* The position in the merged view counts the values below 'value' in
+     * all three arrays.  Each wider array holds only values outside the
+     * narrower widths' range: its negative ones sort before every
+     * narrower value, its positive ones after. */
+    uint64_t below32 = 0; /* int32 values < 0 */
+    uint64_t below64 = 0; /* int64 values < 0 */
+    if (pos) {
+        (void)intsetFullFind32(f, 0, &below32);
+        (void)intsetFullFind64(f, 0, &below64);
+    }
     if (intsetValueFitsInt16(value)) {
-        /* Search int16 array */
         uint64_t pos16;
-        intsetSearchResult result = intsetFullFind16(f, (int16_t)value, &pos16);
+        const intsetSearchResult result =
+            intsetFullFind16(f, (int16_t)value, &pos16);
         if (pos) {
-            *pos = pos16;
-        }
-        return result;
-    } else if (intsetValueFitsInt32(value)) {
-        /* Search int32 array */
-        uint64_t pos32;
-        intsetSearchResult result = intsetFullFind32(f, (int32_t)value, &pos32);
-        /* Position in merged view is after all int16 values */
-        if (pos) {
-            *pos = f->count16 + pos32;
-        }
-        return result;
-    } else {
-        /* Search int64 array */
-        uint64_t pos64;
-        intsetSearchResult result = intsetFullFind64(f, value, &pos64);
-        /* Position in merged view is after all int16 and int32 values */
-        if (pos) {
-            *pos = f->count16 + f->count32 + pos64;
+            *pos = pos16 + below32 + below64;
         }
         return result;
     }
+    if (intsetValueFitsInt32(value)) {
+        uint64_t pos32;
+        const intsetSearchResult result =
+            intsetFullFind32(f, (int32_t)value, &pos32);
+        if (pos) {
+            *pos = pos32 + (value > 0 ? f->count16 : 0) + below64;
+        }
+        return result;
+    }
+    uint64_t pos64;
+    const intsetSearchResult result = intsetFullFind64(f, value, &pos64);
+    if (pos) {
+        *pos = pos64 + (value > 0 ? f->count16 + f->count32 : 0);
+    }
+    return result;
 }
 
 /* Get value at position in merged view (virtual merge of three sorted arrays)

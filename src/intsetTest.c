@@ -2,11 +2,13 @@
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "dkRandom.h" /* dkSplitmix64Next */
 #include "intsetCommon.h"
 #include "intsetFullInternal.h"
 #include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <string.h> /* memmove */
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(int64_t *, zfree, I64);
@@ -47,6 +49,154 @@ defcleaner(intset *, intsetFree);
 DEFINE_BLB_ORACLE(blbOracle16, int16_t)
 DEFINE_BLB_ORACLE(blbOracle32, int32_t)
 DEFINE_BLB_ORACLE(blbOracle64, int64_t)
+
+/* 'n' distinct-ish values for a tier holding 'widths' widths (1: int16; 2:
+ * also int32 beyond int16; 3: also int64 beyond int32), the extremes of
+ * each width among them, drawn small enough that adds collide and removes
+ * hit */
+static void intsetTestPool_(uint64_t *rng, int64_t *pool, size_t n,
+                            int widths) {
+    static const int64_t edges[] = {INT16_MIN,
+                                    INT16_MAX,
+                                    0,
+                                    -1,
+                                    1,
+                                    INT32_MIN,
+                                    INT32_MAX,
+                                    INT64_MIN,
+                                    INT64_MAX,
+                                    (int64_t)INT16_MAX + 1,
+                                    (int64_t)INT32_MAX + 1};
+    static const int edgeWidth[] = {1, 1, 1, 1, 1, 2, 2, 3, 3, 2, 3};
+    size_t k = 0;
+    for (size_t e = 0; e < countof(edges) && k < n; e++) {
+        if (edgeWidth[e] <= widths) {
+            pool[k++] = edges[e];
+        }
+    }
+    while (k < n) {
+        const uint64_t r = dkSplitmix64Next(rng);
+        switch ((int)(r % (uint64_t)widths)) {
+        case 0:
+            pool[k++] = (int16_t)(r >> 16);
+            break;
+        case 1:
+            pool[k++] = (int32_t)(r >> 16);
+            break;
+        default:
+            pool[k++] = (int64_t)dkSplitmix64Next(rng);
+            break;
+        }
+    }
+}
+
+/* The sorted oracle's lower bound of 'v' in want[0, n) */
+static size_t intsetTestLowerBound_(const int64_t *want, size_t n, int64_t v) {
+    size_t lo = 0;
+    size_t hi = n;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (want[mid] < v) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/* A tier's own calls against a sorted-array oracle: 'ops' random adds,
+ * removes and finds of pool values (Add's and Remove's flags, Find's
+ * result and position, Count), the whole contents through Get every 64
+ * ops, then a drain to empty in pool order; and the tier's calls on NULL
+ * and on the empty set.  Returns the mismatches. */
+#define DEFINE_TIER_DIFFERENTIAL(NAME, T, PosT, WIDTHS)                        \
+    static size_t NAME(uint64_t seed, size_t ops) {                            \
+        size_t bad = 0;                                                        \
+        uint64_t rng = seed;                                                   \
+        int64_t pool[256];                                                     \
+        intsetTestPool_(&rng, pool, countof(pool), (WIDTHS));                  \
+        cleanerName(zfree, I64) int64_t *want =                                \
+            zcalloc(countof(pool), sizeof(int64_t));                           \
+        size_t n = 0;                                                          \
+        T *s = T##New();                                                       \
+        for (size_t op = 0; op < ops; op++) {                                  \
+            const uint64_t r = dkSplitmix64Next(&rng);                         \
+            const int64_t v = pool[(r >> 8) % countof(pool)];                  \
+            const size_t at = intsetTestLowerBound_(want, n, v);               \
+            const bool present = at < n && want[at] == v;                      \
+            bool flag = !present;                                              \
+            PosT pos = (PosT) ~(PosT)0;                                        \
+            switch (r % 3) {                                                   \
+            case 0:                                                            \
+                s = T##Add(s, v, &flag);                                       \
+                bad += flag == present;                                        \
+                if (flag) {                                                    \
+                    memmove(&want[at + 1], &want[at],                          \
+                            (n - at) * sizeof(int64_t));                       \
+                    want[at] = v;                                              \
+                    n++;                                                       \
+                }                                                              \
+                break;                                                         \
+            case 1:                                                            \
+                s = T##Remove(s, v, &flag);                                    \
+                bad += flag != present;                                        \
+                if (flag) {                                                    \
+                    memmove(&want[at], &want[at + 1],                          \
+                            (n - at - 1) * sizeof(int64_t));                   \
+                    n--;                                                       \
+                }                                                              \
+                break;                                                         \
+            default:                                                           \
+                bad += (T##Find(s, v, &pos) == INTSET_FOUND) != present ||     \
+                       pos != (PosT)at;                                        \
+                break;                                                         \
+            }                                                                  \
+            bad += T##Count(s) != n;                                           \
+            if (op % 64 == 63) {                                               \
+                for (size_t i = 0; i < n; i++) {                               \
+                    int64_t got = 0;                                           \
+                    bad += !T##Get(s, (PosT)i, &got) || got != want[i];        \
+                }                                                              \
+                int64_t past = 0;                                              \
+                bad += T##Get(s, (PosT)n, &past);                              \
+            }                                                                  \
+        }                                                                      \
+        for (size_t i = 0; i < countof(pool); i++) {                           \
+            bool removed = false;                                              \
+            s = T##Remove(s, pool[i], &removed);                               \
+            const size_t at = intsetTestLowerBound_(want, n, pool[i]);         \
+            const bool present = at < n && want[at] == pool[i];                \
+            bad += removed != present;                                         \
+            if (present) {                                                     \
+                memmove(&want[at], &want[at + 1],                              \
+                        (n - at - 1) * sizeof(int64_t));                       \
+                n--;                                                           \
+            }                                                                  \
+        }                                                                      \
+        PosT pos = 1;                                                          \
+        bool flag = true;                                                      \
+        int64_t none = 0;                                                      \
+        bad += n != 0 || T##Count(s) != 0 ||                                   \
+               T##Find(s, 5, &pos) != INTSET_NOT_FOUND || pos != 0 ||          \
+               T##Get(s, 0, &none);                                            \
+        s = T##Remove(s, 5, &flag);                                            \
+        bad += flag;                                                           \
+        T##Free(s);                                                            \
+        /* On NULL: nothing found, nothing removed, an Add makes a set */      \
+        pos = 1;                                                               \
+        flag = true;                                                           \
+        bad += T##Find(nullptr, 5, &pos) != INTSET_NOT_FOUND || pos != 0 ||    \
+               T##Get(nullptr, 0, &none) || T##Count(nullptr) != 0 ||          \
+               T##Remove(nullptr, 5, &flag) != nullptr || flag;                \
+        T *made = T##Add(nullptr, 5, &flag);                                   \
+        bad += !flag || T##Count(made) != 1;                                   \
+        T##Free(made);                                                         \
+        return bad;                                                            \
+    }
+DEFINE_TIER_DIFFERENTIAL(intsetTestSmallDiff_, intsetSmall, uint32_t, 1)
+DEFINE_TIER_DIFFERENTIAL(intsetTestMediumDiff_, intsetMedium, uint64_t, 2)
+DEFINE_TIER_DIFFERENTIAL(intsetTestFullDiff_, intsetFull, uint64_t, 3)
 
 /* Run tests */
 int intsetTest(int, char *[]) {
@@ -1652,6 +1802,38 @@ int intsetTest(int, char *[]) {
                     tier, (int)INTSET_TYPE(is));
             }
         }
+    }
+
+    TEST("each tier's own calls match a sorted-array oracle") {
+        for (uint64_t seed = 1; seed <= 4; seed++) {
+            const size_t small = intsetTestSmallDiff_(seed, 4000);
+            const size_t medium = intsetTestMediumDiff_(seed, 4000);
+            const size_t full = intsetTestFullDiff_(seed, 4000);
+            if (small || medium || full) {
+                ERR("seed %" PRIu64 ": %zu Small, %zu Medium, %zu Full "
+                    "mismatches",
+                    seed, small, medium, full);
+            }
+        }
+    }
+
+    TEST("a tier refuses values outside its widths and says when to upgrade") {
+        bool added = true;
+        intsetSmall *s = intsetSmallAdd(nullptr, 70000, &added);
+        const bool smallRefused = !added && intsetSmallCount(s) == 0;
+        intsetMedium *m = intsetMediumAdd(nullptr, INT64_C(1) << 40, &added);
+        const bool mediumRefused = !added && intsetMediumCount(m) == 0;
+        if (!smallRefused || !mediumRefused ||
+            !intsetSmallShouldUpgrade(nullptr, 70000) ||
+            intsetSmallShouldUpgrade(nullptr, 7) ||
+            !intsetSmallShouldUpgrade(s, INT16_MAX + 1) ||
+            intsetSmallShouldUpgrade(s, INT16_MAX) ||
+            !intsetMediumShouldUpgrade(m, INT64_C(1) << 40) ||
+            intsetMediumShouldUpgrade(m, INT32_MIN)) {
+            ERR("%s", "tier width refusals or upgrade answers are wrong");
+        }
+        intsetSmallFree(s);
+        intsetMediumFree(m);
     }
 
     TEST_FINAL_RESULT;

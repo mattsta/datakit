@@ -266,23 +266,14 @@ bool intsetFind(const intset *is, int64_t value) {
     void *ptr = INTSET_UNTAG(is);
 
     switch (type) {
-    case INTSET_TYPE_SMALL: {
-        intsetSmall *small = (intsetSmall *)ptr;
-        uint32_t pos;
-        return intsetSmallFind(small, value, &pos) == INTSET_FOUND;
-    }
-
-    case INTSET_TYPE_MEDIUM: {
-        intsetMedium *medium = (intsetMedium *)ptr;
-        uint64_t pos;
-        return intsetMediumFind(medium, value, &pos) == INTSET_FOUND;
-    }
-
-    case INTSET_TYPE_FULL: {
-        intsetFull *full = (intsetFull *)ptr;
-        uint64_t pos;
-        return intsetFullFind(full, value, &pos) == INTSET_FOUND;
-    }
+    /* Membership only: no position (it costs Medium and Full more
+     * searches) */
+    case INTSET_TYPE_SMALL:
+        return intsetSmallFind(ptr, value, nullptr) == INTSET_FOUND;
+    case INTSET_TYPE_MEDIUM:
+        return intsetMediumFind(ptr, value, nullptr) == INTSET_FOUND;
+    case INTSET_TYPE_FULL:
+        return intsetFullFind(ptr, value, nullptr) == INTSET_FOUND;
     }
 
     return false;

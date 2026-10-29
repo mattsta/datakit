@@ -104,33 +104,35 @@ intsetSearchResult intsetMediumFind(const intsetMedium *m, int64_t value,
         return INTSET_NOT_FOUND;
     }
 
-    /* Determine which array to search */
+    /* The position in the merged view counts the values below 'value' in
+     * both arrays.  The int32 array holds only values outside int16's
+     * range: its negative ones sort before every int16 value, its positive
+     * ones after. */
     if (intsetValueFitsInt16(value)) {
-        /* Search int16 array */
         uint32_t pos16;
-        intsetSearchResult result =
+        const intsetSearchResult result =
             intsetMediumFind16(m, (int16_t)value, &pos16);
         if (pos) {
-            *pos = pos16;
+            uint32_t below32; /* int32 values < 0 (0 itself is int16) */
+            (void)intsetMediumFind32(m, 0, &below32);
+            *pos = (uint64_t)pos16 + below32;
         }
         return result;
-    } else if (intsetValueFitsInt32(value)) {
-        /* Search int32 array */
-        uint32_t pos32;
-        intsetSearchResult result =
-            intsetMediumFind32(m, (int32_t)value, &pos32);
-        /* Position in merged view is after all int16 values */
-        if (pos) {
-            *pos = (uint64_t)m->count16 + pos32;
-        }
-        return result;
-    } else {
-        /* Value doesn't fit in int32, not in this tier */
-        if (pos) {
-            *pos = (uint64_t)m->count16 + m->count32;
-        }
-        return INTSET_NOT_FOUND;
     }
+    if (intsetValueFitsInt32(value)) {
+        uint32_t pos32;
+        const intsetSearchResult result =
+            intsetMediumFind32(m, (int32_t)value, &pos32);
+        if (pos) {
+            *pos = (uint64_t)pos32 + (value > 0 ? m->count16 : 0);
+        }
+        return result;
+    }
+    /* Outside int32: not in this tier; before or after every value */
+    if (pos) {
+        *pos = value < 0 ? 0 : (uint64_t)m->count16 + m->count32;
+    }
+    return INTSET_NOT_FOUND;
 }
 
 /* Get value at position in merged view (virtual merge of two sorted arrays)

@@ -22,8 +22,9 @@ void intsetFullFree(intsetFull *f);
 /* Get total bytes */
 size_t intsetFullBytes(const intsetFull *f);
 
-/* Find value - returns position and search result
- * Position is in the merged virtual view (0 to count16+count32+count64-1) */
+/* Find value: INTSET_FOUND or INTSET_NOT_FOUND, and in '*pos' (may be
+ * NULL; computing it costs two more searches) the value's index in sorted
+ * order across all widths, or where it would go (0 to the count) */
 intsetSearchResult intsetFullFind(const intsetFull *f, int64_t value,
                                   uint64_t *pos);
 

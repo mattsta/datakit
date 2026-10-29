@@ -22,8 +22,9 @@ void intsetMediumFree(intsetMedium *m);
 /* Get total bytes */
 size_t intsetMediumBytes(const intsetMedium *m);
 
-/* Find value - returns position and search result
- * Position is in the merged virtual view (0 to count16+count32-1) */
+/* Find value: INTSET_FOUND or INTSET_NOT_FOUND, and in '*pos' (may be
+ * NULL; computing it costs one more search) the value's index in sorted
+ * order across both widths, or where it would go (0 to the count) */
 intsetSearchResult intsetMediumFind(const intsetMedium *m, int64_t value,
                                     uint64_t *pos);
 
