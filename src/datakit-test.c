@@ -66,7 +66,6 @@
 #include "intsetU32.h"
 #include "jebuf.h"
 #include "linearBloom.h"
-#include "list.h"
 #include "mds.h"
 #include "mdsc.h"
 #include "membound.h"
@@ -12327,7 +12326,7 @@ static const TestEntry testRegistry[] = {
     T_A(multimapAtomDense, "atomdense"), T_A_ADJ(stringPool, "sp,strpool"),
     T_A_ADJ(atomPool, "ap,apool"), T_ADJ(multiarray), T_ADJ(multiarraySmall),
     T_ADJ(multiarrayMedium), T_ADJ(multiarrayLarge), T_ADJ(multiroar),
-    T_A_ADJ(multiOrderedSet, "mos"), T_A_ADJ(multilru, "lru,mlru"), T_ADJ(list),
+    T_A_ADJ(multiOrderedSet, "mos"), T_A_ADJ(multilru, "lru,mlru"),
     T_A_ADJ(ptrPrevNext, "ppn"), T_A(tierSim, "sim"),
 
     /* Numeric types */

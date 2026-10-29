@@ -123,7 +123,6 @@ dropped from the CTest list otherwise.
 
 ### Data Structure Utilities
 
-- [list](modules/utils/LIST.md) - Doubly-linked list
 - [multiheap](modules/utils/MULTIHEAP.md) - Keyed byte-region store (ref -> resizable bytes)
 - [intersectInt](modules/utils/INTERSECT_INT.md) - Set intersection operations
 - [ULID](modules/utils/ULID.md) - Time-ordered identifiers: 128-bit ULIDs and 64/32-bit compact variants, their layouts and ranges

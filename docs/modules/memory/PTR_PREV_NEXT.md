@@ -700,7 +700,6 @@ prints as an entry)
 
 ## See Also
 
-- [list](../utils/LIST.md) - Traditional doubly-linked list (for comparison)
 - [offsetArray](OFFSET_ARRAY.md) - Sparse array storage
 - [jebuf](JEBUF.md) - size classes used when the pool grows
 - [Varint Encoding](https://github.com/mattsta/varint) - Variable-length integer encoding

@@ -6424,11 +6424,6 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 #include "ctest.h"
 #include "dkBits.h"
 
-/* Note: including list.c source directly since we don't
- *       want to link it into the whole library. */
-#include "list.c"
-#include "list.h"
-
 /* mds is used by testing as well... */
 #include "mdsc.h"
 
@@ -9617,6 +9612,33 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
     }
 
     return WIFEXITED(status) && WEXITSTATUS(status) == FLEX_TEST_ABORT_STATUS;
+}
+
+/* The reference the random push test checks a flex against: the strings
+ * pushed at either end of a run that starts mid-array, so element j of
+ * the flex is slots[head + j] */
+#define FLEX_TEST_REF_MAX 256
+typedef struct flexTestRef_ {
+    mdsc *slots[2 * FLEX_TEST_REF_MAX];
+    uint32_t head; /* first slot in use */
+    uint32_t tail; /* one past the last slot in use */
+} flexTestRef_;
+
+DK_FN_UNUSED static void flexTestRefFree_cleanup(flexTestRef_ *ref) {
+    for (uint32_t i = ref->head; i < ref->tail; i++) {
+        mdscfree(ref->slots[i]);
+    }
+}
+
+static void flexTestRefPush_(flexTestRef_ *ref, const char *buf, size_t len,
+                             flexEndpoint where) {
+    /* @own: container; free=mdscfree */
+    mdsc *s = mdscnewlen(buf, len);
+    if (where == FLEX_ENDPOINT_HEAD) {
+        ref->slots[--ref->head] = s;
+    } else {
+        ref->slots[ref->tail++] = s;
+    }
 }
 
 /* The decimal spelling of a numeric box read back from a flex: integers in
@@ -12919,7 +12941,7 @@ int32_t flexTest(int32_t argc, char **argv) {
              * always copies */
             const int numloops = preallocate ? 50 : 8;
 #endif
-            const uint32_t maxTestElementCount = 256;
+            const uint32_t maxTestElementCount = FLEX_TEST_REF_MAX;
 
             int32_t seed = rand();
             printf("Seeding rand with... %d\n", seed);
@@ -12935,8 +12957,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                 /* preallocate 16 MB of memory when requested */
                 f = preallocate ? createFlexWithGrowthHint(1 << 24) : flexNew();
 
-                cleaner(listRelease) list *ref = listCreate();
-                listSetFreeMethod(ref, (void (*)(void *))mdscfree);
+                cleaner(flexTestRefFree) flexTestRef_ ref = {
+                    .head = FLEX_TEST_REF_MAX, .tail = FLEX_TEST_REF_MAX};
                 int32_t elements = rand() % maxTestElementCount;
 
                 /* Create lists */
@@ -13022,16 +13044,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                     /* Add to flex */
                     flexPushBytes(&f, buf, buflen, where);
 
-                    /* Add to reference list */
-                    if (where == FLEX_ENDPOINT_HEAD) {
-                        /* @own: container; free=mdscfree */
-                        listAddNodeHead(ref, mdscnewlen(buf, buflen));
-                    } else if (where == FLEX_ENDPOINT_TAIL) {
-                        /* @own: container; free=mdscfree */
-                        listAddNodeTail(ref, mdscnewlen(buf, buflen));
-                    } else {
-                        assert(false);
-                    }
+                    flexTestRefPush_(&ref, buf, buflen, where);
                 }
 
                 D("(%d/%d) value ranges: [%zu, %zu]\n", i, numloops, smallest,
@@ -13039,10 +13052,10 @@ int32_t flexTest(int32_t argc, char **argv) {
 
                 if (!(flexCount(f) < maxTestElementCount &&
                       (size_t)elements == flexCount(f) &&
-                      listLength(ref) == flexCount(f))) {
-                    ERR("loop %d: expected length %d, flex count %zu, list "
-                        "length %zu",
-                        i, elements, flexCount(f), listLength(ref));
+                      ref.tail - ref.head == flexCount(f))) {
+                    ERR("loop %d: expected length %d, flex count %zu, "
+                        "reference length %" PRIu32,
+                        i, elements, flexCount(f), ref.tail - ref.head);
                     flexRepr(f);
                     flexFree(f);
                     f = nullptr;
@@ -13051,7 +13064,6 @@ int32_t flexTest(int32_t argc, char **argv) {
 
                 for (int j = 0; j < elements; j++) {
                     fe = flexIndex(f, j);
-                    listNode *refnode = listIndex(ref, j);
 
                     assert(fe < (f + flexTotalBytes_(f)));
 
@@ -13079,7 +13091,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                         continue;
                     }
 
-                    char *refnodeval = listNodeValue(refnode);
+                    const char *refnodeval = ref.slots[ref.head + j];
 
                     if (memcmp(buf, refnodeval, buflen) != 0) {
                         for (ssize_t joo = 0; joo < buflen; joo++) {
