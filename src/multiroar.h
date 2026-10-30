@@ -136,8 +136,8 @@ typedef struct multiroarIterator {
     databox currentChunk;
     uint64_t chunkId;
     uint64_t positionInChunk;
-    uint16_t countInChunk;
-    uint16_t indexInChunk;
+    uint64_t countInChunk; /* bits of the current row (a run's: all of them) */
+    uint64_t indexInChunk;
     uint16_t
         unsetCursor; /* OVER_FULL: monotonic index into sorted unset list */
     bool valid;
@@ -176,8 +176,9 @@ uint64_t multiroarMemoryUsage(const multiroar *r);
  * returns 0 when the buffer is too small.  Deserialize returns NULL for
  * malformed bytes: it checks the framing, that every byte belongs to the
  * stream, that chunk ids ascend and each position listing holds 1 to 629
- * ascending in-chunk positions, and that values ascend by position, fit
- * the width and stay inside declared dimensions.
+ * ascending in-chunk positions, that each run spans at least two chunks
+ * and overlaps no other row, and that values ascend by position, fit the
+ * width and stay inside declared dimensions.
  *
  * multiroarSerialize writes a standalone artifact: the dkFormat prefix of
  * multiroarFormat, then the stream; multiroarDeserialize refuses a stamp

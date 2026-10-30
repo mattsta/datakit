@@ -470,10 +470,9 @@ persistence contract's structures, runs each for a while over a corpus kept
 between runs, and prints the command that reproduces any finding. A finding is
 fixed at its cause and gets a unit test.
 
-`fuzzPersistApplyOp` skips two kinds of op whose cost grows with a number the
-op names: a bit range wider than 2^24 bits (one row per 8192-bit chunk), and an
-index that would take a fenwick, multiFenwick or segment tree past 2^16 cells
-(those trees are arrays as long as their largest index).
+`fuzzPersistApplyOp` skips one kind of op whose cost grows with a number the
+op names: an index that would take a fenwick, multiFenwick or segment tree
+past 2^16 cells (those trees are arrays as long as their largest index).
 
 ### Manual Testing Patterns
 

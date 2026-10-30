@@ -14,24 +14,6 @@
 
 #include <string.h>
 
-/* The widest bit range a range op may name here.  A range op's work is
- * one row per 8192-bit chunk of the range (multiroar), so a range of
- * 2^40 bits is 2^27 inserts: that measures the input's size, not a
- * defect, and wider ranges are skipped */
-static constexpr uint64_t FUZZ_RANGE_MAX_BITS = UINT64_C(1) << 24;
-
-static bool fuzzRangeTooWide(persistOp op, const uint8_t *body, size_t len) {
-    if ((op != PERSIST_OP_SET_RANGE && op != PERSIST_OP_CLEAR_RANGE &&
-         op != PERSIST_OP_FLIP_RANGE) ||
-        len != 2 * sizeof(uint64_t)) {
-        return false;
-    }
-
-    uint64_t extent;
-    memcpy(&extent, body + sizeof(uint64_t), sizeof(extent));
-    return extent > FUZZ_RANGE_MAX_BITS;
-}
-
 /* The most cells a dense indexed type may span here.  The fenwick,
  * multiFenwick and segment trees are arrays as long as their largest
  * index (a 2d tree as its largest row times its largest column, up to
@@ -111,8 +93,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t len) {
             bodyLen = len;
         }
 
-        if (fuzzRangeTooWide(op, data, bodyLen) ||
-            fuzzIndexTooLarge(ops, data, bodyLen, &span)) {
+        if (fuzzIndexTooLarge(ops, data, bodyLen, &span)) {
             data += bodyLen;
             len -= bodyLen;
             continue;

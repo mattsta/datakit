@@ -94,9 +94,16 @@ typedef enum chunkType {
     CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS,     /* Sparse */
     CHUNK_TYPE_FULL_BITMAP,    /* Dense bitmap */
     CHUNK_TYPE_OVER_FULL_DIRECT_NOT_SET_POSITION_NUMBERS,  /* Inverted */
+    CHUNK_TYPE_RUN_ALL_1,      /* Run: n >= 2 full chunks in one row */
     CHUNK_TYPE_MAX_TYPE = 255
 } chunkType;
 ```
+
+A run is one row for a stretch of full chunks, keyed by its last chunk, its
+value the type byte and the stretch's length in chunks. A range set writes
+one run however many chunks it spans, so a range of 2^40 bits is one row.
+A point change inside a run cuts the run around the chunk it touches (at
+most three rows), and readers see every chunk of a run as ALL_1.
 
 ### Constants (internal, `multiroar.c`)
 
@@ -321,12 +328,13 @@ Both modes serialize. `multiroarSerialize` writes the `multiroarFormat`
 dkFormat prefix (format id, version, features), then the stream: a mode byte
 (a value roar's bit width, 0 for bit mode), then for value mode the cols,
 rows, value count and each value after the gap from the previous position,
-and for bit mode a varint chunk count and the encoded chunks. The `Raw`
+and for bit mode a varint row count and the encoded rows (a run as its last
+chunk and its length in chunks). The `Raw`
 forms (`multiroarSerializeRaw`, `multiroarDeserializeRaw`,
 `multiroarSerializedSizeRaw`) are the stream alone, for a container that
 records the stamp itself, as persist does. Deserialize refuses malformed
-bytes, including trailing bytes and values that break the roar's width or
-dimensions.
+bytes, including trailing bytes, values that break the roar's width or
+dimensions, and runs shorter than two chunks or overlapping the row before.
 
 ## Value Operations
 
@@ -596,6 +604,12 @@ ALL_0 (implicit)
   └──> ... (and reverse direction when clearing bits)
 ```
 
+Range operations add the run form above the ladder: a range set over two
+or more whole chunks writes one run, and full stretches next to each other
+combine into one run when a set operation builds its result. A bit cleared
+inside a run cuts that chunk out as an ALL_1 row, which then walks the
+ladder down.
+
 Clearing bits walks the same ladder downward, with hysteresis so a chunk
 sitting exactly on a boundary does not thrash:
 
@@ -642,28 +656,34 @@ for (uint64_t i = 8100; i < 8192; i++) {
 
 ### Time Complexity
 
-| Operation            | Chunk Lookup                      | Within Chunk                         | Total                      |
-| -------------------- | --------------------------------- | ------------------------------------ | -------------------------- |
-| Set                  | multimap seek                     | O(n) worst                           | seek + O(n)                |
-| Get                  | multimap seek                     | O(1) bitmap, O(log n) packed         | seek + O(log n)            |
-| Remove               | multimap seek                     | O(n) worst                           | seek + O(n)                |
-| AND/OR/XOR           | O(chunks)                         | O(1) bitmap, O(n) packed             | O(chunks x n)              |
-| BitCount             | O(chunks)                         | popcount over 1024 bytes             | O(chunks)                  |
-| Min / Max            | O(chunks) worst                   | O(1) bitmap, O(1) packed             | O(chunks)                  |
-| Rank                 | O(chunks)                         | popcount + partial word              | O(chunks)                  |
-| Select               | O(chunks)                         | popcount scan                        | O(chunks)                  |
-| Iterator Next        | amortized O(1)                    | O(1)                                 | amortized O(1)             |
-| N-way ops            | O(chunks)                         | O(N) per chunk                       | O(chunks x N)              |
-| SetRange / FlipRange | one row per chunk the range spans | O(1) whole chunk, bitmap at the ends | O(chunks spanned)          |
-| ClearRange           | present chunks only               | delete whole, bitmap at the ends     | O(present chunks in range) |
+| Operation     | Chunk Lookup              | Within Chunk                     | Total            |
+| ------------- | ------------------------- | -------------------------------- | ---------------- |
+| Set           | multimap seek             | O(n) worst                       | seek + O(n)      |
+| Get           | multimap seek             | O(1) bitmap, O(log n) packed     | seek + O(log n)  |
+| Remove        | multimap seek             | O(n) worst                       | seek + O(n)      |
+| AND/OR/XOR    | O(rows), both operands    | O(1) bitmap, O(n) packed         | O(rows x n)      |
+| BitCount      | O(rows)                   | popcount over 1024 bytes         | O(rows)          |
+| Min / Max     | O(rows) worst             | O(1) bitmap, O(1) packed         | O(rows)          |
+| Rank          | O(rows)                   | popcount + partial word          | O(rows)          |
+| Select        | O(rows)                   | popcount scan                    | O(rows)          |
+| Iterator Next | amortized O(1)            | O(1)                             | amortized O(1)   |
+| N-way ops     | O(rows), each operand     | O(1) bitmap, O(n) packed         | O(rows x N)      |
+| SetRange      | the rows inside the range | one run for the whole chunks     | O(rows in range) |
+| ClearRange    | the rows inside the range | delete whole, bitmap at the ends | O(rows in range) |
+| FlipRange     | the rows inside the range | gaps become runs, rows flip      | O(rows in range) |
 
 **Notes**:
 
 - n = number of set positions in a chunk (at most 629 for the packed forms)
-- "chunks" = number of non-empty chunks
-- A set or flip writes a row for every 8192-bit chunk the range spans, empty
-  ones included (a range of 2^40 bits is 2^27 rows); a clear visits only the
-  chunks present, so clearing empty space costs nothing
+- "rows" = number of stored rows: one per non-empty chunk, and one per run
+  of full chunks however many chunks it spans
+- A range costs the rows it holds, not the chunks it spans: a set of 2^40
+  bits writes one run, and a clear or flip of empty space costs nothing
+  beyond the rows at its edges
+- The set operations walk both operands' rows together; a run meets the
+  other side's rows a stretch at a time, so ANDing or ORing two runs is one
+  step; an in-place OR or XOR walks the rows of its second operand, plus
+  the first operand's rows under each of its full stretches
 - Chunk lookup cost is whatever the backing multimap charges for a sorted
   key seek at its current size class; it is not a fixed O(log n) tree walk
 - Bitmap operations within a chunk use word-at-a-time popcount / SIMD helpers
