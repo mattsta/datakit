@@ -276,6 +276,12 @@ typedef enum persistOp {
     PERSIST_OP_FLIP_RANGE = 25,  /* Flip all bits in [start, start+extent) */
     PERSIST_OP_SET_RANGE = 33,   /* Set all bits in [start, start+extent) */
 
+    /* A read that moves rows or use history (multitier's Get, operand:
+     * the key): replayed as the read, so a restore repeats its moves */
+    PERSIST_OP_USE = 34,
+    /* Rows waiting for a lower level move there now (no operand) */
+    PERSIST_OP_FLUSH = 35,
+
     /* Numeric scalar deltas (operand: 1-element flex databox).
      * The row carries the INCREMENT, never the absolute result, so
      * concurrent increments from different origins fold correctly on
@@ -1329,20 +1335,29 @@ extern const persistOps persistOpsColdmap;
 
 /* persistOpsMultitier (multitier.c), format 1:
  *   snapshot: flex [hot limit, LRU levels, demotion batch, cold limit,
- *             cold raw limit, stored target, required saving, LZ4 level,
- *             then every live row as [key, value] in key order, stored
- *             exactly]: what the multitier holds, not which level holds it
- *   restore:  refuses a config out of range and rows that are not whole
- *             or whose keys do not strictly ascend; the hot level takes
- *             rows in key order up to its limit, the rest go cold.
+ *             logged uses, cold raw limit, stored target, required saving,
+ *             LZ4 level; the clock's hand (the cold block it sweeps next),
+ *             hot hits, cold hits, misses, demotions, rows sunk, blocks
+ *             swept; then as BYTES the hot level's persistOpsMultidict
+ *             snapshot (its use history included), the batch's and the
+ *             shadowed keys' multimap dumps, and the cold level's
+ *             persistOpsColdmap snapshot (rows [key, value, recent] under
+ *             a cold limit, [key, value] without)]: the whole state
+ *   restore:  refuses a config out of range, a hand past the cold blocks,
+ *             any part its own restore refuses, and levels that disagree
+ *             (a key both hot and in the batch, a shadowed key not in the
+ *             cold level and above it, another cold key above it).
  *   WAL (args: const databox *const *):
  *     INSERT      [key, value]   multitierSet
  *     DELETE      [key]          multitierDelete
  *     BULK_DELETE [keys...]      the rows a sink took, each deleted
- *   Replay keeps the live multitier's rows (not their levels: it starts
- *   from the restore's placement) and
- *   sends none to the sink: only BULK_DELETE removes rows.  The limits
- *   are fixed at creation, so there is no newEmpty. */
+ *     USE         [key]          multitierGet (logged with logUses)
+ *     FLUSH                      multitierFlush (logged with logUses)
+ *   Replay never calls the sink.  With logged uses it repeats every move
+ *   the live multitier made, so a restore is exact; without, rows leave
+ *   for the sink only where BULK_DELETE says, and levels and use history
+ *   are the last snapshot's plus the logged writes.  The limits are fixed
+ *   at creation, so there is no newEmpty. */
 extern const persistOps persistOpsMultitier;
 
 /* Identity-verified POP fold observability (see the apply-arm

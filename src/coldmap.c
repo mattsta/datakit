@@ -504,6 +504,81 @@ bool coldmapDeleteMany(coldmap *cm, const flex *keys, size_t *deleted) {
     return true;
 }
 
+size_t coldmapSweepBlock(coldmap *cm, size_t index, coldmapSweepFn *fn,
+                         void *ctx, flex **removed, size_t *next) {
+    *next = index + 1 < cm->blockCount ? index + 1 : 0;
+    if (index >= cm->blockCount) {
+        *next = 0;
+        return 0;
+    }
+
+    const multimapElements epe = cm->elementsPerEntry;
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(epe, sizeof(databoxBig) + sizeof(databox *));
+    databoxBig *box = storage;
+    const databox **row = (const databox **)(box + epe);
+    for (multimapElements e = 0; e < epe; e++) {
+        row[e] = (const databox *)&box[e];
+    }
+
+    /* The block rebuilt from what is kept and changed, unless every row
+     * is kept as it is */
+    coldmapBlock *b = &cm->blocks[index];
+    const flex *f = mflexOpenReadOnly(b->rows, cm->state);
+    /* @own: container; free=flexFree */
+    flex *kept = flexNew();
+    bool changed = false;
+    size_t gone = 0;
+    flexEntry *fe = flexHead(f);
+    for (uint32_t r = 0; r < b->count; r++) {
+        fe = coldmapDecodeRow_(f, fe, epe, box);
+        databoxBig last;
+        DATABOX_BIG_INIT(&last);
+        const coldmapSweepAction action = fn(ctx, row, (databox *)&last);
+        if (action == COLDMAP_SWEEP_REMOVE) {
+            if (removed) {
+                flexAppendMultipleExact(removed, epe, row);
+            }
+            gone++;
+            changed = true;
+            continue;
+        }
+        if (action == COLDMAP_SWEEP_CHANGE) {
+            row[epe - 1] = (const databox *)&last;
+            changed = true;
+        }
+        flexAppendMultipleExact(&kept, epe, row);
+        row[epe - 1] = (const databox *)&box[epe - 1];
+    }
+
+    if (!changed) {
+        flexFree(kept);
+        return 0;
+    }
+
+    coldmapBlockUncount_(cm, b);
+    if (!flexCount(kept)) {
+        flexFree(kept);
+        coldmapBlockDrop_(cm, index);
+        /* the next block moved into this place (0 past the last) */
+        *next = index < cm->blockCount ? index : 0;
+        return gone;
+    }
+    coldmapBlockRelease_(b);
+    *b = (coldmapBlock){};
+    coldmapBlockStore_(cm, b, kept, true);
+    /* A small block merges into the one before it (already swept), never
+     * the one after: a sweep skips no row and passes none twice */
+    if (index && mflexBytesActual(b->rows) * 2 < cm->storedTarget &&
+        (uint64_t)cm->blocks[index - 1].raw + b->raw <= cm->rawCap) {
+        coldmapMergeNext_(cm, index - 1);
+        *next = index < cm->blockCount ? index : 0;
+        return gone;
+    }
+    *next = index + 1 < cm->blockCount ? index + 1 : 0;
+    return gone;
+}
+
 size_t coldmapRemoveIf(coldmap *cm, coldmapRowFn *remove, void *ctx,
                        flex **removed) {
     const multimapElements epe = cm->elementsPerEntry;
@@ -1300,6 +1375,23 @@ static bool coldmapTestRemoveMod_(void *ctx, const databox *const row[]) {
     return (uint64_t)row[0]->data.i64 / 2 % mod == 0;
 }
 
+/* Row number 0 mod 3 goes, 1 mod 3 gets its value negated, 2 mod 3 stays;
+ * counts the rows seen */
+static coldmapSweepAction
+coldmapTestSweep_(void *ctx, const databox *const row[], databox *last) {
+    uint64_t *seen = ctx;
+    (*seen)++;
+    const uint64_t n = (uint64_t)row[0]->data.i64 / 2;
+    if (n % 3 == 0) {
+        return COLDMAP_SWEEP_REMOVE;
+    }
+    if (n % 3 == 1) {
+        *last = databoxNewSigned(-row[1]->data.i64);
+        return COLDMAP_SWEEP_CHANGE;
+    }
+    return COLDMAP_SWEEP_KEEP;
+}
+
 int coldmapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1726,6 +1818,57 @@ int coldmapTest(int argc, char *argv[]) {
                     ERR("config %zu mod %" PRIu64 ": %zu removed", c, mod,
                         gone);
                 }
+            }
+        }
+    }
+
+    TEST("a sweep from block 0 round to it again passes every row once, "
+         "keeping, removing and changing each as told") {
+        static const coldmapConfig configs[] = {
+            {}, {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128}};
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        for (size_t c = 0; c < countof(configs); c++) {
+            cleaner(multimapFree) multimap *m =
+                coldmapTestRows_(COLDMAP_SHAPE_INTS, 2000);
+            cleaner(coldmapFree) coldmap *cm =
+                coldmapNewFromDump(2, &configs[c], multimapDump(m));
+            cleaner(flexFree) flex *removed = flexNew();
+            uint64_t seen = 0;
+            size_t gone = 0;
+            size_t at = 0;
+            size_t passes = 0;
+            do {
+                size_t next;
+                gone += coldmapSweepBlock(cm, at, coldmapTestSweep_, &seen,
+                                          &removed, &next);
+                at = next;
+                passes++;
+            } while (at != 0 && passes < 10000);
+
+            /* The model, changed the same way */
+            cleaner(flexFree) flex *wantRemoved = flexNew();
+            for (uint64_t i = 0; i < 2000; i++) {
+                const databox k = databoxNewSigned((int64_t)i * 2);
+                databox v = {};
+                databox *vals[1] = {&v};
+                multimapLookup(m, &k, vals);
+                if (i % 3 == 0) {
+                    const databox *row[2] = {&k, &v};
+                    flexAppendMultipleExact(&wantRemoved, 2, row);
+                    multimapDelete(&m, &k);
+                } else if (i % 3 == 1) {
+                    const databox neg = databoxNewSigned(-v.data.i64);
+                    const databox *row[2] = {&k, &neg};
+                    multimapInsert(&m, row);
+                }
+            }
+            cleaner(flexFree) flex *want = multimapDump(m);
+            cleaner(flexFree) flex *got = coldmapDump(cm, state);
+            if (seen != 2000 || gone != flexCount(wantRemoved) / 2 ||
+                !flexEqual(removed, wantRemoved) || !flexEqual(want, got) ||
+                !coldmapVerify_(cm, state)) {
+                ERR("config %zu: %" PRIu64 " rows seen, %zu removed", c, seen,
+                    gone);
             }
         }
     }

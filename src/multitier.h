@@ -16,8 +16,12 @@
  * level moves it back up; a Peek reads it where it is.  Rows the hot
  * level gives up wait in a sorted batch and go into the cold level
  * together (one compression per block they touch); reads and writes see
- * the batch.  When the cold level passes its limit, a block at random
- * leaves whole, its rows to the sink.
+ * the batch.  When the cold level passes its limit, a clock sweeps its
+ * blocks in turn from where it last stopped until the level is an eighth
+ * under the limit: a row it passes once is marked old, and a row still
+ * old when it comes round again leaves (a cold row has not been read
+ * since its demotion: a Get moves it up), its live rows to the sink in
+ * key order.  Each block the clock passes is rewritten once.
  *
  * Values read are valid until the next call on the multitier.  Boxes are
  * filled as multidict's are: zero them (a 96/128-bit value then comes back
@@ -44,6 +48,10 @@ typedef struct multitierConfig {
     /* The cold level's limit of stored bytes (0: no limit, so no row ever
      * reaches the sink) */
     uint64_t coldMaxBytes;
+    /* multitierP logs each Get and Flush as well, so a restore after a
+     * crash repeats every move: the exact levels and use history, for a
+     * WAL record per read (default false: reads log nothing) */
+    bool logUses;
     coldmapConfig cold;
     multitierSinkFn *sink;
     void *sinkCtx;
@@ -60,14 +68,16 @@ void multitierSetSink(multitier *t, multitierSinkFn *sink, void *sinkCtx);
 /* The config in force, defaults resolved */
 void multitierGetConfig(const multitier *t, multitierConfig *config);
 
-/* Persistence (persistOpsMultitier) records what the multitier holds, not
- * where: a snapshot is every live row in key order, and a restore fills
- * the hot level in key order up to its limit with the rest cold, with no
- * use history (each row's first Gets warm it again).  A move between
- * levels changes no row, so it is never logged; a row leaving for the
- * sink is (multitierP logs it as the sink takes it).  A restored cold
- * level is packed afresh and holds what the batch held too, so it can
- * stand over its limit until the first write sheds blocks. */
+/* Persistence (persistOpsMultitier) records the multitier whole: a
+ * snapshot is its config, counters and every level as it is (the hot
+ * level's use history, the batch, the shadowed keys, the cold blocks with
+ * each row's demotion), and a restore is the live multitier again.  The
+ * WAL logs Sets, Deletes and the rows a sink takes (multitierP); with
+ * logUses it also logs each Get and Flush, so replay repeats every move
+ * and a restore after a crash is exact too.  Without logUses a Get logs
+ * nothing: a crash restores every row, with the levels and use history of
+ * the last snapshot plus the logged writes (a clean close writes a
+ * snapshot, so a clean restart is exact either way). */
 
 /* Set 'key' to 'value' in the hot level (a copy at any lower level goes);
  * true when the key was new to the multitier */
@@ -77,6 +87,18 @@ bool multitierGet(multitier *t, const databox *key, databox *value);
 /* 'key's value where it is: no move, no LRU use */
 bool multitierPeek(multitier *t, const databox *key, databox *value);
 bool multitierDelete(multitier *t, const databox *key);
+/* Every live row once, hot level first (in no order), then the batch and
+ * the cold level (each in key order), until 'visit' returns false; moves
+ * nothing, uses nothing.  Rows are borrowed for the call.  Returns the
+ * rows visited. */
+typedef enum multitierLevel {
+    MULTITIER_LEVEL_HOT = 0,
+    MULTITIER_LEVEL_BATCH = 1, /* waiting for the cold level */
+    MULTITIER_LEVEL_COLD = 2,
+} multitierLevel;
+typedef bool multitierVisitFn(void *ctx, const databox *key,
+                              const databox *value, multitierLevel level);
+size_t multitierWalk(multitier *t, multitierVisitFn *visit, void *ctx);
 /* Rows at every level */
 size_t multitierCount(const multitier *t);
 /* Memory held at every level, overhead included */
@@ -97,9 +119,9 @@ typedef struct multitierStats {
     uint64_t hotHits;
     uint64_t coldHits; /* Gets that moved a key up (pending included) */
     uint64_t misses;
-    uint64_t demotions; /* rows the hot level gave up */
-    uint64_t sunkRows;  /* rows the cold level gave up */
-    uint64_t sunkBlocks;
+    uint64_t demotions;   /* rows the hot level gave up */
+    uint64_t sunkRows;    /* rows the cold level gave up */
+    uint64_t sweptBlocks; /* cold blocks the clock passed over */
 } multitierStats;
 void multitierGetStats(const multitier *t, multitierStats *stats);
 

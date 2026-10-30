@@ -8,7 +8,6 @@
 #include "../../multitier.h"
 #include "../../str.h"
 
-defcleanerName(uint8_t *, zfree, PcTierBytes);
 defcleanerName(void *, zfree, Void);
 
 /* Key number 'k' as "key:NNNNNN" into 'buf' */
@@ -44,9 +43,13 @@ static void *pcMultitierBuild(const persistContractBuild *b) {
         .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
         .sink = pcMultitierSink,
         .sinkCtx = b->log,
+        .logUses = true,
     };
     /* @own: caller; free=multitierFree */
-    multitier *t = multitierNew(b->seed % 2 ? &small : nullptr);
+    /* Even seeds: no limits.  Every seed logs its uses, so replay repeats
+     * each move */
+    const multitierConfig open = {.logUses = true};
+    multitier *t = multitierNew(b->seed % 2 ? &small : &open);
     persistContractStart(b->log, t);
 
     uint64_t rng = b->seed;
@@ -64,8 +67,10 @@ static void *pcMultitierBuild(const persistContractBuild *b) {
                 persistContractRecord(b->log, PERSIST_OP_DELETE, args, 1);
             }
         } else if (roll < 5) {
-            /* A read moves rows (logged only when one sinks) */
+            /* A read is logged before it is made, as multitierGetP logs it */
             databox got = {};
+            const databox *use[1] = {&k};
+            persistContractRecord(b->log, PERSIST_OP_USE, use, 1);
             (void)multitierGet(t, &k, &got);
         } else {
             databoxBig value;
@@ -92,25 +97,25 @@ static void *pcMultitierBuild(const persistContractBuild *b) {
 }
 
 /* Values are read from a snapshot: every live row, whatever its level */
+/* A row's value is the bytes the contract asks after */
+typedef struct pcMultitierFind {
+    const databox *bytes;
+    bool found;
+} pcMultitierFind;
+
+static bool pcMultitierVisit(void *ctx, const databox *key,
+                             const databox *value, multitierLevel level) {
+    (void)key;
+    (void)level;
+    pcMultitierFind *find = ctx;
+    find->found = persistContractSameBytes(value, find->bytes);
+    return !find->found;
+}
+
 static bool pcMultitierHoldsBytes(const void *structure, const databox *bytes) {
-    size_t len = 0;
-    cleanerName(zfree, PcTierBytes) uint8_t *snap =
-        persistOpsMultitier.snapshot(structure, &len);
-    const flex *f = (const flex *)snap;
-    flexEntry *fe = flexHead(f);
-    for (size_t i = 0; i < 8 && fe; i++) {
-        fe = flexNext(f, fe); /* past the config */
-    }
-    while (fe) {
-        fe = flexNext(f, fe); /* past the key */
-        databox v = {};
-        flexGetByType(fe, &v);
-        if (persistContractSameBytes(&v, bytes)) {
-            return true;
-        }
-        fe = flexNext(f, fe);
-    }
-    return false;
+    pcMultitierFind find = {.bytes = bytes};
+    multitierWalk((multitier *)structure, pcMultitierVisit, &find);
+    return find.found;
 }
 
 static bool pcMultitierSameSettings(const void *original,
@@ -124,7 +129,7 @@ static bool pcMultitierSameSettings(const void *original,
            a.cold.rawLimit == b.cold.rawLimit &&
            a.cold.storedTarget == b.cold.storedTarget &&
            a.cold.minSavingPercent == b.cold.minSavingPercent &&
-           a.cold.level == b.cold.level;
+           a.cold.level == b.cold.level && a.logUses == b.logUses;
 }
 
 const persistContractType persistContractMultitier = {

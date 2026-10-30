@@ -2471,9 +2471,11 @@ static void benchColdmap(void) {
 defcleaner(multitier *, multitierFree);
 
 /* multitier over the coldmap rows ("user:NNNNNNNN" -> a record), keys set
- * in a scattered order: all in the hot level ("hot"), or with the hot
+ * in a scattered order: all in the hot level ("hot"), with the hot
  * level limited to about a quarter of the rows' bytes ("tiered", the rest
- * compressed in the cold level).  Rows: "set/<kind>" per Set (bytes: the
+ * compressed in the cold level), or also with the cold level held to
+ * about 4 bytes a row ("bounded": no sink, so the rows it gives up go).
+ * Rows: "set/<kind>" per Set (bytes: the
  * multitier's memory once filled), "get/<kind>/skewed" per Get with nine
  * in ten on a tenth of the keys, "get/<kind>/uniform" per Get of any key */
 static void benchMultitier(void) {
@@ -2481,10 +2483,11 @@ static void benchMultitier(void) {
     const uint32_t n = PERF_CONTAINER_N;
     char key[32];
     char value[96];
-    for (int tiered = 0; tiered < 2; tiered++) {
-        const char *kind = tiered ? "tiered" : "hot";
-        const multitierConfig config = {.hotMaxBytes =
-                                            tiered ? n * 64u / 4 : 0};
+    for (int tiered = 0; tiered < 3; tiered++) {
+        const char *kind = tiered == 2 ? "bounded" : tiered ? "tiered" : "hot";
+        const multitierConfig config = {.hotMaxBytes = tiered ? n * 64u / 4 : 0,
+                                        .coldMaxBytes =
+                                            tiered == 2 ? n * 4u : 0};
         cleaner(multitierFree) multitier *t = multitierNew(&config);
         double t0 = timeUtilMonotonicSec();
         for (uint32_t i = 0; i < n; i++) {

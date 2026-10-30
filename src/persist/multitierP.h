@@ -2,16 +2,19 @@
 
 /* multitierP - a multitier whose changes are logged to a persistCtx
  *
- * What the multitier holds is logged, not where: a Set is logged before it
- * is made (a refused log changes nothing), a Delete of a present key
- * likewise, and rows a sink takes are logged as they leave (by any call:
- * a Get or a Set can push rows out of the cold level).  The caller's sink
- * receives those rows before their log record is written: a crash between
- * the two, or a refused record (multitierSinkLogRefusedP counts them),
- * leaves the rows in the files too, so they come back on the next open -
- * held twice, never lost.  Moves between levels log nothing.  Open
- * replays the WAL over the last snapshot, with no use history: the first
- * Gets warm rows again. */
+ * A Set is logged before it is made (a refused log changes nothing), a
+ * Delete of a present key likewise, and rows a sink takes are logged as
+ * they leave (by any call: a Get or a Set can push rows out of the cold
+ * level).  With the config's logUses, each Get and Flush is logged before
+ * it is made too, so a replay repeats every move between levels and an
+ * open after a crash restores the exact state; without, moves log
+ * nothing, and an open after a crash has every row on the last snapshot's
+ * levels and use history plus the logged writes.  Close writes a
+ * snapshot of the whole state (use history included), so an open after a
+ * close is exact either way.  The caller's sink receives rows before their
+ * log record is written: a crash between the two, or a refused record
+ * (multitierSinkLogRefusedP counts them), leaves the rows in the files
+ * too, so they come back on the next open - held twice, never lost. */
 
 #include "../multitier.h"
 #include "persistCtx.h"
@@ -40,7 +43,8 @@ persistLogResult multitierSetP(multitierP *t, const databox *key,
 /* As multitierDelete: a key with no row logs nothing */
 persistLogResult multitierDeleteP(multitierP *t, const databox *key);
 /* Reads: as multitierGet / multitierPeek (a Get logs the rows it pushes
- * out to the sink) */
+ * out to the sink, and itself first with logUses: a refused record leaves
+ * it a Peek) */
 bool multitierGetP(multitierP *t, const databox *key, databox *value);
 bool multitierPeekP(multitierP *t, const databox *key, databox *value);
 void multitierFlushP(multitierP *t);

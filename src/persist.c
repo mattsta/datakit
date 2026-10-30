@@ -2625,6 +2625,10 @@ const char *persistOpName(persistOp op) {
         return "BULK_INSERT";
     case PERSIST_OP_BULK_DELETE:
         return "BULK_DELETE";
+    case PERSIST_OP_USE:
+        return "USE";
+    case PERSIST_OP_FLUSH:
+        return "FLUSH";
     case PERSIST_OP_MERGE:
         return "MERGE";
     case PERSIST_OP_CUSTOM:

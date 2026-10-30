@@ -92,7 +92,10 @@ void multitierCloseP(multitierP *p) {
         return;
     }
 
-    /* Sync before closing; the context is free for another wrapper */
+    /* A last snapshot holds the whole state (use history included), so a
+     * clean restart is exact; then sync, and the context is free for
+     * another wrapper */
+    persistCtxCompact(p->ctx, p->t, &persistOpsMultitier);
     persistCtxFinish(p->ctx);
     multitierFree(p->t);
     zfree(p);
@@ -158,12 +161,26 @@ persistLogResult multitierDeleteP(multitierP *p, const databox *key) {
 }
 
 bool multitierGetP(multitierP *p, const databox *key, databox *value) {
-    if (!p || !p->t || !multitierGet(p->t, key, value)) {
+    if (!p || !p->t || !key) {
         return false;
     }
+
+    /* With logged uses a Get is logged first: a refused record reads the
+     * value where it is (a Peek), moving nothing the log does not hold */
+    multitierConfig config;
+    multitierGetConfig(p->t, &config);
+    if (config.logUses) {
+        const databox *args[1] = {key};
+        if (persistCtxLogOp(p->ctx, PERSIST_OP_USE, args, 1) ==
+            PERSIST_LOG_REFUSED) {
+            return multitierPeek(p->t, key, value);
+        }
+    }
+
+    const bool found = multitierGet(p->t, key, value);
     /* A Get can push rows to the sink, which logs them */
     persistCtxMaybeCompact(p->ctx, p->t, &persistOpsMultitier);
-    return multitierPeek(p->t, key, value); /* the value after compaction */
+    return found && multitierPeek(p->t, key, value); /* after compaction */
 }
 
 void multitierSetSinkP(multitierP *p, multitierSinkFn *sink, void *sinkCtx) {
@@ -183,6 +200,12 @@ bool multitierPeekP(multitierP *p, const databox *key, databox *value) {
 
 void multitierFlushP(multitierP *p) {
     if (p && p->t) {
+        multitierConfig config;
+        multitierGetConfig(p->t, &config);
+        if (config.logUses && persistCtxLogOp(p->ctx, PERSIST_OP_FLUSH, nullptr,
+                                              0) == PERSIST_LOG_REFUSED) {
+            return; /* a refused record moves nothing */
+        }
         multitierFlush(p->t);
         persistCtxMaybeCompact(p->ctx, p->t, &persistOpsMultitier);
     }
@@ -219,6 +242,7 @@ void multitierGetStatsP(const multitierP *p, persistCtxStats *stats) {
 #include "persistTestCommon.h"
 
 defcleaner(multimap *, multimapFree);
+defcleanerName(uint8_t *, zfree, TierSnap);
 
 /* The model of the live rows: a sink takes its rows out of it */
 static void multitierPTestSink(void *ctx, const flex *rows) {
@@ -351,6 +375,73 @@ int multitierPTest(int argc, char *argv[]) {
         }
         multitierCloseP(p);
         persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("with logged uses a crash restores the exact state; without, a "
+         "clean close does") {
+        for (int logUses = 1; logUses >= 0; logUses--) {
+            ptestCleanupFiles(basePath);
+            cleaner(multimapFree) multimap *model = multimapNew(2);
+            const multitierConfig config = {
+                .hotMaxBytes = 2048,
+                .coldMaxBytes = 4096,
+                .demoteBatch = 8,
+                .logUses = logUses,
+                .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
+                .sink = multitierPTestSink,
+                .sinkCtx = &model,
+            };
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
+            multitierP *p = multitierNewP(ctx, &config);
+            char key[32];
+            char value[48];
+            uint64_t rng = 0xE8AC7 + (uint64_t)logUses;
+            for (size_t step = 0; step < 3000 && p; step++) {
+                const uint64_t r = splitmix64(&rng);
+                const databox k = multitierPTestKey(key, sizeof(key), r % 600);
+                if (r % 10 < 5) {
+                    const int vn =
+                        snprintf(value, sizeof(value), "{\"v\":%zu}", step);
+                    const databox v = databoxNewBytes(value, (size_t)vn);
+                    PTEST_LOGGED(multitierSetP(p, &k, &v, nullptr));
+                } else if (r % 10 < 9) {
+                    databox got = {};
+                    (void)multitierGetP(p, &k, &got);
+                } else {
+                    (void)multitierDeleteP(p, &k);
+                }
+                if (step == 1500) {
+                    multitierFlushP(p);
+                }
+            }
+
+            size_t wantLen = 0;
+            cleanerName(zfree, TierSnap) uint8_t *want =
+                persistOpsMultitier.snapshot(p->t, &wantLen);
+            if (logUses) {
+                /* A crash: the context goes without a close */
+                persistCtxFree(ctx);
+                multitierFree(p->t);
+                zfree(p);
+            } else {
+                multitierCloseP(p);
+                persistCtxFree(ctx);
+            }
+
+            ctx = persistCtxNew(basePath, nullptr);
+            p = multitierOpenP(ctx, multitierPTestSink, &model);
+            size_t gotLen = 0;
+            cleanerName(zfree, TierSnap) uint8_t *got =
+                p ? persistOpsMultitier.snapshot(p->t, &gotLen) : nullptr;
+            if (!got || gotLen != wantLen || memcmp(got, want, wantLen) != 0) {
+                ERR("logUses %d: the restored state differs (%zu bytes, live "
+                    "%zu)",
+                    logUses, gotLen, wantLen);
+            }
+            multitierCloseP(p);
+            persistCtxFree(ctx);
+        }
         ptestCleanupFiles(basePath);
     }
 

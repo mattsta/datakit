@@ -23,6 +23,8 @@ cache's cold level (see [MULTITIER.md](MULTITIER.md)), an archive, a reference t
 | `coldmapInsertMany(cm, rows, &replaced)`                                 | a sorted batch: one recompression per block it touches                     |
 | `coldmapDelete(cm, key)` / `coldmapDeleteMany(cm, keys, &n)`             | one key / a sorted batch of keys                                           |
 | `coldmapDeleteRange(cm, lo, hi)`                                         | every row with key in `[lo, hi]` (NULL: open); whole blocks undecompressed |
+| `coldmapRemoveIf(cm, remove, ctx, &removed)`                             | every row the test names, each block rewritten once                        |
+| `coldmapSweepBlock(cm, i, fn, ctx, &removed, &next)`                     | one block's rows kept, removed or given a new last element; the next block |
 | `coldmapRemoveBlock(cm, i)` / `coldmapBlockCount(cm)`                    | take one block out whole, its rows returned as a dump                      |
 | `coldmapDump(cm, state)`                                                 | every row, as one flex                                                     |
 | `coldmapCount` / `coldmapBytes` / `coldmapGetStats` / `coldmapGetConfig` | rows, memory held, per-block totals, the config in force                   |

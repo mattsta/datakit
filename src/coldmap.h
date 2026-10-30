@@ -112,6 +112,22 @@ bool coldmapDeleteMany(coldmap *cm, const flex *keys, size_t *deleted);
 typedef bool coldmapRowFn(void *ctx, const databox *const row[]);
 size_t coldmapRemoveIf(coldmap *cm, coldmapRowFn *remove, void *ctx,
                        flex **removed);
+/* One block's rows, each kept, removed, or kept with its last element
+ * changed ('fn' fills '*last', set up for any value, and answers CHANGE):
+ * the block is rewritten once when any row is removed or changed (an
+ * emptied block goes, a shrunken one may merge into the block before it),
+ * and left as it is otherwise.  Removed rows are appended to '*removed' (NULL:
+ * not kept) in key order.  '*next' is the block to sweep after it (0 past
+ * the last: a sweep goes round).  Returns the rows removed. */
+typedef enum coldmapSweepAction {
+    COLDMAP_SWEEP_KEEP = 0,
+    COLDMAP_SWEEP_REMOVE = 1,
+    COLDMAP_SWEEP_CHANGE = 2,
+} coldmapSweepAction;
+typedef coldmapSweepAction coldmapSweepFn(void *ctx, const databox *const row[],
+                                          databox *last);
+size_t coldmapSweepBlock(coldmap *cm, size_t index, coldmapSweepFn *fn,
+                         void *ctx, flex **removed, size_t *next);
 /* Remove block 'index' (0 .. coldmapBlockCount - 1) whole: its rows, in
  * key order as a dump-form flex the caller frees; NULL past the end */
 [[nodiscard]] flex *coldmapRemoveBlock(coldmap *cm, size_t index);
