@@ -5,7 +5,10 @@
 #include "dkFormat.h"
 
 #include "cleaner.h"
+#include "dkEndian.h"
 #include "flex.h"
+
+#include "../deps/xxHash/xxhash.h"
 
 #include <string.h>
 
@@ -52,6 +55,8 @@ const char *dkFormatResultName(dkFormatResult result) {
         return "VERSION_TOO_OLD";
     case DK_FORMAT_FEATURE_UNKNOWN:
         return "FEATURE_UNKNOWN";
+    case DK_FORMAT_DIGEST_MISMATCH:
+        return "DIGEST_MISMATCH";
     }
 
     return "UNKNOWN";
@@ -138,6 +143,52 @@ dkFormatResult dkFormatPrefixRead(const dkFormatSpec *spec, const uint8_t *buf,
     return result;
 }
 
+size_t dkFormatSealedSize(const dkFormatStamp *stamp, size_t payloadLen) {
+    return dkFormatPrefixSize(stamp) + payloadLen + DK_FORMAT_SEAL_DIGEST_LEN;
+}
+
+uint8_t *dkFormatSealBegin(const dkFormatStamp *stamp, uint8_t *out, size_t cap,
+                           size_t payloadLen) {
+    if (!out || cap < dkFormatSealedSize(stamp, payloadLen)) {
+        return nullptr;
+    }
+
+    return out + dkFormatPrefixWrite(stamp, out, cap);
+}
+
+/* The digest of the `len` bytes a seal covers */
+static uint64_t dkFormatSealDigest(const uint8_t *buf, size_t len) {
+    return (uint64_t)XXH3_64bits(buf, len);
+}
+
+size_t dkFormatSealEnd(uint8_t *out, size_t sealedLen) {
+    const size_t covered = sealedLen - DK_FORMAT_SEAL_DIGEST_LEN;
+    dkStoreLe64(out + covered, dkFormatSealDigest(out, covered));
+    return sealedLen;
+}
+
+dkFormatResult dkFormatOpen(const dkFormatSpec *spec, const uint8_t *buf,
+                            size_t len, dkFormatStamp *stamp,
+                            const uint8_t **payload, size_t *payloadLen) {
+    if (!buf || len < DK_FORMAT_SEAL_DIGEST_LEN) {
+        return DK_FORMAT_MALFORMED;
+    }
+
+    const size_t covered = len - DK_FORMAT_SEAL_DIGEST_LEN;
+    if (dkLoadLe64(buf + covered) != dkFormatSealDigest(buf, covered)) {
+        return DK_FORMAT_DIGEST_MISMATCH;
+    }
+
+    size_t prefix = 0;
+    const dkFormatResult result =
+        dkFormatPrefixRead(spec, buf, covered, stamp, &prefix);
+    if (result == DK_FORMAT_OK) {
+        *payload = buf + prefix;
+        *payloadLen = covered - prefix;
+    }
+    return result;
+}
+
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 #include "datakit.h" /* zmalloc / zfree */
@@ -165,7 +216,8 @@ int dkFormatTest(int, char *[]) {
                                           DK_FORMAT_WRONG_ID,
                                           DK_FORMAT_VERSION_TOO_NEW,
                                           DK_FORMAT_VERSION_TOO_OLD,
-                                          DK_FORMAT_FEATURE_UNKNOWN};
+                                          DK_FORMAT_FEATURE_UNKNOWN,
+                                          DK_FORMAT_DIGEST_MISMATCH};
         const size_t n = countof(results);
         for (size_t i = 0; i < n; i++) {
             const char *name = dkFormatResultName(results[i]);
@@ -300,6 +352,50 @@ int dkFormatTest(int, char *[]) {
         if (dkFormatPrefixRead(&spec, nullptr, 10, nullptr, nullptr) !=
             DK_FORMAT_MALFORMED) {
             ERR("a NULL buffer was read");
+        }
+    }
+
+    TEST("sealed: round trip, and any one byte changed reads as a digest "
+         "mismatch") {
+        const dkFormatStamp stamp = dkFormatStampFor(&spec, 0);
+        static constexpr uint8_t body[] = "sealed payload bytes";
+        const size_t sealed = dkFormatSealedSize(&stamp, sizeof(body));
+        uint8_t buf[128];
+        uint8_t *at = dkFormatSealBegin(&stamp, buf, sealed, sizeof(body));
+        if (!at || dkFormatSealBegin(&stamp, buf, sealed - 1, sizeof(body))) {
+            ERR("SealBegin: room for the sealed size, and no less");
+        }
+        memcpy(at, body, sizeof(body));
+        if (dkFormatSealEnd(buf, sealed) != sealed) {
+            ERR("SealEnd did not return the sealed size");
+        }
+
+        dkFormatStamp got = {};
+        const uint8_t *payload = nullptr;
+        size_t payloadLen = 0;
+        if (dkFormatOpen(&spec, buf, sealed, &got, &payload, &payloadLen) !=
+                DK_FORMAT_OK ||
+            payloadLen != sizeof(body) || memcmp(payload, body, payloadLen) ||
+            got.id != stamp.id) {
+            ERR("a sealed payload did not open as written");
+        }
+
+        for (size_t i = 0; i < sealed; i++) {
+            buf[i] ^= 0x10;
+            if (dkFormatOpen(&spec, buf, sealed, &got, &payload, &payloadLen) !=
+                DK_FORMAT_DIGEST_MISMATCH) {
+                ERR("byte %zu changed did not read as a digest mismatch", i);
+            }
+            buf[i] ^= 0x10;
+        }
+
+        if (dkFormatOpen(&spec, buf, sealed - 1, &got, &payload, &payloadLen) !=
+                DK_FORMAT_DIGEST_MISMATCH ||
+            dkFormatOpen(&spec, buf, 7, &got, &payload, &payloadLen) !=
+                DK_FORMAT_MALFORMED ||
+            dkFormatOpen(&spec, nullptr, 64, &got, &payload, &payloadLen) !=
+                DK_FORMAT_MALFORMED) {
+            ERR("a cut, short or NULL seal was not refused");
         }
     }
 

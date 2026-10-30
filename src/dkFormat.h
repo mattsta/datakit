@@ -60,6 +60,7 @@ typedef enum [[nodiscard]] dkFormatResult {
     DK_FORMAT_VERSION_TOO_NEW, /* written by a newer build */
     DK_FORMAT_VERSION_TOO_OLD, /* older than this build reads */
     DK_FORMAT_FEATURE_UNKNOWN, /* a must-understand feature this build lacks */
+    DK_FORMAT_DIGEST_MISMATCH, /* sealed bytes changed since they were sealed */
 } dkFormatResult;
 
 /* The stamp this build writes for `spec` with `features` set */
@@ -94,6 +95,35 @@ size_t dkFormatPrefixWrite(const dkFormatStamp *stamp, uint8_t *out,
 dkFormatResult dkFormatPrefixRead(const dkFormatSpec *spec, const uint8_t *buf,
                                   size_t len, dkFormatStamp *stamp,
                                   size_t *prefixLen);
+
+/* ---- Sealed standalone serializations ---------------------------------
+ *
+ * Bytes a caller keeps on their own (no persist file, no envelope around
+ * them) are sealed: the prefix, the payload, then an 8-byte little-endian
+ * XXH3-64 over everything before it, so any change to them reads as
+ * DK_FORMAT_DIGEST_MISMATCH rather than as other bytes.  Write with
+ * SealBegin (the prefix; returns where the payload goes) and SealEnd (the
+ * digest); read with Open. */
+#define DK_FORMAT_SEAL_DIGEST_LEN ((size_t)8)
+
+/* Bytes a sealed serialization of `payloadLen` payload bytes takes */
+size_t dkFormatSealedSize(const dkFormatStamp *stamp, size_t payloadLen);
+
+/* Write the prefix into `out` and return where the `payloadLen` payload
+ * bytes go; NULL when `cap` is short of the sealed size */
+uint8_t *dkFormatSealBegin(const dkFormatStamp *stamp, uint8_t *out, size_t cap,
+                           size_t payloadLen);
+
+/* Write the digest closing the `sealedLen` bytes at `out` (prefix and
+ * payload written); returns sealedLen */
+size_t dkFormatSealEnd(uint8_t *out, size_t sealedLen);
+
+/* Check the sealed bytes [buf, buf + len): the digest, then the stamp
+ * against `spec`.  On DK_FORMAT_OK, *payload and *payloadLen are the
+ * payload.  *stamp is set whenever the prefix is readable. */
+dkFormatResult dkFormatOpen(const dkFormatSpec *spec, const uint8_t *buf,
+                            size_t len, dkFormatStamp *stamp,
+                            const uint8_t **payload, size_t *payloadLen);
 
 /* ---- Manifest ------------------------------------------------------------
  *

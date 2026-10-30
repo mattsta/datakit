@@ -180,11 +180,12 @@ uint64_t multiroarMemoryUsage(const multiroar *r);
  * and overlaps no other row, and that values ascend by position, fit the
  * width and stay inside declared dimensions.
  *
- * multiroarSerialize writes a standalone artifact: the dkFormat prefix of
- * multiroarFormat, then the stream; multiroarDeserialize refuses a stamp
- * this build does not read.  The Raw forms are the stream alone, for a
- * container that stamps it (persist files record the stamp in their
- * header). */
+ * multiroarSerialize writes a sealed standalone artifact (dkFormat.h): the
+ * dkFormat prefix of multiroarFormat, the stream, then an XXH3-64 digest
+ * of both; multiroarDeserialize refuses bytes whose digest does not match
+ * and a stamp this build does not read.  The Raw forms are the stream
+ * alone, for a container that stamps and checks it (persist files record
+ * the stamp in their header and wrap the stream in a digested envelope). */
 #define MULTIROAR_FORMAT_ID ((uint32_t)70) /* PERSIST_TYPE_MULTIROAR */
 #define MULTIROAR_FORMAT_VERSION ((uint32_t)1)
 extern const dkFormatSpec multiroarFormat;

@@ -3229,33 +3229,31 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
         return 0;
     }
     const dkFormatStamp stamp = multiroarStamp();
-    return dkFormatPrefixSize(&stamp) + raw;
+    return dkFormatSealedSize(&stamp, (size_t)raw);
 }
 
+/* Sealed: the stamp, the stream and its digest (dkFormat.h) */
 uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
-    if (!buf) {
-        return 0;
-    }
+    const uint64_t raw = multiroarSerializedSizeRaw(r);
     const dkFormatStamp stamp = multiroarStamp();
-    const size_t prefix = dkFormatPrefixWrite(&stamp, buf, (size_t)bufSize);
-    if (prefix == 0) {
+    uint8_t *payload =
+        dkFormatSealBegin(&stamp, buf, (size_t)bufSize, (size_t)raw);
+    if (!payload || multiroarSerializeRaw(r, payload, raw) != raw) {
         return 0;
     }
-    const uint64_t raw =
-        multiroarSerializeRaw(r, (uint8_t *)buf + prefix, bufSize - prefix);
-    return raw == 0 ? 0 : prefix + raw;
+    return dkFormatSealEnd(buf, dkFormatSealedSize(&stamp, (size_t)raw));
 }
 
 multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
     dkFormatStamp stamp;
-    size_t prefix = 0;
-    if (!buf || dkFormatPrefixRead(&multiroarFormat, buf, (size_t)bufSize,
-                                   &stamp, &prefix) != DK_FORMAT_OK) {
+    const uint8_t *payload = nullptr;
+    size_t payloadLen = 0;
+    if (dkFormatOpen(&multiroarFormat, buf, (size_t)bufSize, &stamp, &payload,
+                     &payloadLen) != DK_FORMAT_OK) {
         return nullptr;
     }
     /* @own: caller; free=multiroarFree */
-    return multiroarDeserializeRaw((const uint8_t *)buf + prefix,
-                                   bufSize - prefix);
+    return multiroarDeserializeRaw(payload, payloadLen);
 }
 
 /* Read a value-mode body of width `width` filling exactly [p, end): the
@@ -10384,8 +10382,10 @@ int multiroarTest(int, char *[]) {
             ERR("round trip failed");
         }
 
-        /* The same chunk stream under other stamps */
+        /* The same chunk stream sealed under other stamps (it sits before
+         * the digest) */
         const uint64_t raw = multiroarSerializedSizeRaw(r);
+        const uint8_t *stream = buf + (size - DK_FORMAT_SEAL_DIGEST_LEN - raw);
         const dkFormatStamp stamps[] = {
             {MULTIROAR_FORMAT_ID, MULTIROAR_FORMAT_VERSION + 1, 0},
             {MULTIROAR_FORMAT_ID, MULTIROAR_FORMAT_VERSION, 1},
@@ -10393,13 +10393,28 @@ int multiroarTest(int, char *[]) {
             {MULTIROAR_FORMAT_ID, MULTIROAR_FORMAT_VERSION, UINT64_C(1) << 40},
         };
         for (size_t s = 0; s < 4; s++) {
-            cleanerName(zfree, Bytes) uint8_t *stamped = zmalloc(32 + raw);
-            const size_t prefix = dkFormatPrefixWrite(&stamps[s], stamped, 32);
-            memcpy(stamped + prefix, buf + (size - raw), raw);
+            const size_t sealed = dkFormatSealedSize(&stamps[s], raw);
+            cleanerName(zfree, Bytes) uint8_t *stamped = zmalloc(sealed);
+            uint8_t *payload =
+                dkFormatSealBegin(&stamps[s], stamped, sealed, raw);
+            memcpy(payload, stream, raw);
+            dkFormatSealEnd(stamped, sealed);
             cleaner(multiroarFree) multiroar *got =
-                multiroarDeserialize(stamped, prefix + raw);
+                multiroarDeserialize(stamped, sealed);
             if ((got != nullptr) != (s == 3)) {
                 ERR("stamp %zu: restored %d", s, got != nullptr);
+            }
+        }
+
+        /* Any one byte changed, anywhere, is refused */
+        for (uint64_t at = 0; at < size; at++) {
+            buf[at] ^= 0x01;
+            cleaner(multiroarFree) multiroar *damaged =
+                multiroarDeserialize(buf, size);
+            buf[at] ^= 0x01;
+            if (damaged) {
+                ERR("a flipped byte at %" PRIu64 " restored", at);
+                break;
             }
         }
     }

@@ -329,11 +329,13 @@ dkFormat prefix (format id, version, features), then the stream: a mode byte
 (a value roar's bit width, 0 for bit mode), then for value mode the cols,
 rows, value count and each value after the gap from the previous position,
 and for bit mode a varint row count and the encoded rows (a run as its last
-chunk and its length in chunks). The `Raw`
+chunk and its length in chunks), then an 8-byte XXH3-64 digest of everything
+before it (a sealed dkFormat artifact). The `Raw`
 forms (`multiroarSerializeRaw`, `multiroarDeserializeRaw`,
 `multiroarSerializedSizeRaw`) are the stream alone, for a container that
-records the stamp itself, as persist does. Deserialize refuses malformed
-bytes, including trailing bytes, values that break the roar's width or
+records the stamp and checks the bytes itself, as persist does. Deserialize
+refuses bytes whose digest does not match, then malformed streams,
+including trailing bytes, values that break the roar's width or
 dimensions, and runs shorter than two chunks or overlapping the row before.
 
 ## Value Operations
