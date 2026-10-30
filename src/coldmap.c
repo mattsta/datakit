@@ -424,6 +424,19 @@ bool coldmapInsertMany(coldmap *cm, const flex *rows, size_t *replaced) {
     return true;
 }
 
+flex *coldmapRemoveBlock(coldmap *cm, size_t index) {
+    if (index >= cm->blockCount) {
+        return nullptr;
+    }
+
+    coldmapBlock *b = &cm->blocks[index];
+    /* @own: caller; free=flexFree */
+    flex *rows = flexDuplicate(mflexOpenReadOnly(b->rows, cm->state));
+    coldmapBlockUncount_(cm, b);
+    coldmapBlockDrop_(cm, index);
+    return rows;
+}
+
 bool coldmapDelete(coldmap *cm, const databox *key) {
     size_t at;
     if (!coldmapRoute_(cm, key, &at)) {
@@ -508,6 +521,10 @@ size_t coldmapDeleteRange(coldmap *cm, const databox *lo, const databox *hi) {
 /* ====================================================================
  * Reading
  * ==================================================================== */
+size_t coldmapBlockCount(const coldmap *cm) {
+    return cm->blockCount;
+}
+
 size_t coldmapCount(const coldmap *cm) {
     return cm->rows;
 }

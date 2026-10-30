@@ -95,6 +95,7 @@
 #include "multimapMedium.h"
 #include "multimapSmall.h"
 #include "multiroar.h"
+#include "multitier.h"
 #include "offsetArray.h"
 #include "ownedState.h"
 #include "perfRegression.h"
@@ -12374,7 +12375,7 @@ static const TestEntry testRegistry[] = {
     T_ADJ(multiarraySmall), T_ADJ(multiarrayMedium), T_ADJ(multiarrayLarge),
     T_ADJ(multiroar), T_A_ADJ(multiOrderedSet, "mos"),
     T_A_ADJ(multilru, "lru,mlru"), T_A_ADJ(ptrPrevNext, "ppn"),
-    T_A(tierSim, "sim"), T_A(coldmap, "cold"),
+    T_A(tierSim, "sim"), T_A(coldmap, "cold"), T_A(multitier, "tier"),
 
     /* Numeric types */
     T_A(float16, "f16"), T_A_ADJ(floatExtended, "float128,fe"), T(intset),

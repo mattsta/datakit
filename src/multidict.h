@@ -575,6 +575,8 @@ int multidictGetLRULevel(multidict *d, const databox *keybox);
 /* Whether 'keybox' is present, as an inspector: no LRU use (for a caller
  * that names the key in the operation it decides on) */
 bool multidictExistsNoTouch(multidict *d, const databox *keybox);
+/* multidictFind as an inspector: the value, with no LRU use */
+bool multidictFindNoTouch(multidict *d, const databox *keybox, databox *valbox);
 
 /* Hashes */
 uint32_t multidictIntHashFunction(uint32_t key);

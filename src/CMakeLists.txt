@@ -531,6 +531,7 @@ add_library(${PROJECT_NAME} OBJECT
     multiOrderedSetFull.c
 
     coldmap.c
+    multitier.c
 
     multilru.c
 
