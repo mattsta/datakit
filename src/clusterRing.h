@@ -171,7 +171,8 @@ typedef struct clusterQuorum {
     uint8_t readQuorum;     /* Required responses (R) */
     bool readRepairEnabled; /* Auto-heal inconsistencies */
 
-    /* Consistency level (alternative to explicit W/R) */
+    /* Consistency level: decides W and R where they are 0 (see the
+     * quorum rules above clusterRingPlanWrite) */
     clusterConsistencyLevel consistency;
 } clusterQuorum;
 
@@ -522,10 +523,37 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
  * Routing Decisions
  * ==================================================================== */
 
+/* Quorums.  A quorum's writeQuorum / readQuorum, when not 0, is the count
+ * of replicas that must answer.  At 0 the consistency level decides: ONE,
+ * a QUORUM (majority) or ALL of the replicaCount configured; LOCAL_ONE or
+ * LOCAL_QUORUM of the key's replicas placed in the local datacenter (set
+ * with clusterRingSetLocalDatacenter; a LOCAL_* plan without one is
+ * refused, CLUSTER_ERR_INVALID_CONFIG); EACH_QUORUM a majority of those
+ * placed in every datacenter that holds one.  A placement holds UP nodes
+ * only (others stand in for down ones), so the datacenter levels count
+ * the replicas as placed.  writeSync, when 0, is the count the write
+ * quorum needs.  Plans fail with CLUSTER_ERR_QUORUM_FAILED when too few
+ * replicas are UP to meet the quorum. */
+
+/* The datacenter this coordinator is in (location.dcId), for the LOCAL_*
+ * levels.  Runtime state: copies keep it, snapshots do not carry it. */
+void clusterRingSetLocalDatacenter(clusterRing *ring, uint32_t dcId);
+/* False when none is set */
+bool clusterRingGetLocalDatacenter(const clusterRing *ring, uint32_t *dcId);
+
+/* Whether the replicas named in respondedIds (node ids; repeats and
+ * non-replicas ignored) meet the quorum for the key, in *met: for an
+ * EACH_QUORUM or LOCAL_* level a bare count cannot say, so a coordinator
+ * asks here once answers arrive */
+clusterResult clusterRingQuorumMet(const clusterRing *ring, const void *key,
+                                   uint32_t keyLen, const clusterQuorum *quorum,
+                                   bool write, const uint64_t *respondedIds,
+                                   size_t respondedCount, bool *met);
+
 /* Plan a write operation.  `quorum` (the ring default when NULL) gives
  * the replica count (the ring default when its replicaCount is 0) and
- * the sync/ack requirements; replicas meet the ring's affinity rules as
- * in clusterRingLocate. */
+ * the sync/ack requirements (above); replicas meet the ring's affinity
+ * rules as in clusterRingLocate. */
 clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
                                    uint32_t keyLen, const clusterQuorum *quorum,
                                    clusterWriteSet *out);

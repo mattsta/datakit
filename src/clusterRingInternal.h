@@ -205,6 +205,11 @@ struct clusterRing {
     /* Rebalancing: the plan clusterRingPlanRebalance made, if any */
     clusterRebalancePlan *rebalancePlan;
 
+    /* The coordinator's datacenter, for the LOCAL_* consistency levels
+     * (runtime state: snapshots do not carry it) */
+    uint32_t localDcId;
+    bool hasLocalDc;
+
     /* Health provider (a copy; installed while hasHealthProvider) */
     clusterHealthProvider healthProvider;
     bool hasHealthProvider;

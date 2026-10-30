@@ -104,6 +104,13 @@ drops it.
   read repair), `READ_HEAVY`, `WRITE_HEAVY`, or a `clusterQuorum` of your own (W and R at most N).
 - `clusterRingPlanWrite` / `clusterRingPlanRead` give the nodes and acknowledgements a write or read needs;
   `clusterRingSelectReadNode` picks the least-loaded healthy replica that reported load.
+- A quorum's W or R left at 0 comes from its `consistency` level: `ONE`, `QUORUM` (majority) or `ALL` of
+  the configured replica count; `LOCAL_ONE` / `LOCAL_QUORUM` of the key's replicas placed in the
+  coordinator's datacenter (`clusterRingSetLocalDatacenter`; refused with `CLUSTER_ERR_INVALID_CONFIG`
+  until set); `EACH_QUORUM` a majority of those placed in every datacenter. A placement holds UP nodes
+  only, so the datacenter levels count replicas as placed. A plan fails with `CLUSTER_ERR_QUORUM_FAILED`
+  when too few replicas are UP. Once answers arrive, `clusterRingQuorumMet(ring, key, keyLen, quorum,
+write, respondedIds, n, &met)` says whether they satisfy the quorum, per datacenter where the level asks.
 - Affinity rules spread replicas across a topology level: `CLUSTER_AFFINITY_RACK_SPREAD` and
   `CLUSTER_AFFINITY_AZ_SPREAD` (required: placement fails with `CLUSTER_ERR_AFFINITY` when too few distinct
   locations exist), `CLUSTER_AFFINITY_REGION_SPREAD` (soft: `spreadMet` reports it). Give each node its

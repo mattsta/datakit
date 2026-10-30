@@ -2311,6 +2311,125 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
  * Routing Decision APIs
  * ==================================================================== */
 
+void clusterRingSetLocalDatacenter(clusterRing *ring, uint32_t dcId) {
+    if (ring) {
+        ring->localDcId = dcId;
+        ring->hasLocalDc = true;
+    }
+}
+
+bool clusterRingGetLocalDatacenter(const clusterRing *ring, uint32_t *dcId) {
+    if (!ring || !ring->hasLocalDc) {
+        return false;
+    }
+    *dcId = ring->localDcId;
+    return true;
+}
+
+/* The replica count a quorum configures (the ring default when 0) */
+static uint32_t clusterQuorumReplicas_(const clusterRing *ring,
+                                       const clusterQuorum *q) {
+    return q->replicaCount ? q->replicaCount : ring->defaultQuorum.replicaCount;
+}
+
+/* What a quorum requires of a placement's replicas (placement holds UP
+ * nodes only, standing in for down ones): an explicit count (writeQuorum
+ * or readQuorum, when not 0), else the consistency level's: ONE, QUORUM
+ * (a majority) or ALL of the 'rf' replicas configured; LOCAL_ONE or
+ * LOCAL_QUORUM of the replicas placed in the local datacenter;
+ * EACH_QUORUM a majority of those placed in every datacenter holding one.
+ * Each replica that 'counts' (NULL: an UP replica; else whether replica i
+ * responded) adds to its datacenter.  *required: the responses needed in
+ * all; *met: whether the counted replicas meet it.
+ * CLUSTER_ERR_INVALID_CONFIG for a LOCAL_* level with no local datacenter
+ * set. */
+static clusterResult clusterQuorumNeed_(const clusterRing *ring,
+                                        const clusterQuorum *q, uint32_t rf,
+                                        const clusterPlacement *pl, bool write,
+                                        const bool *counts, uint32_t *required,
+                                        bool *met) {
+    const size_t n = clusterPlacementReplicaCount(pl);
+    uint32_t counted = 0;
+    for (size_t i = 0; i < n; i++) {
+        const clusterNode *node = clusterPlacementGetReplica(pl, i);
+        counted += counts ? counts[i] : node->state == CLUSTER_NODE_UP;
+    }
+
+    const uint8_t explicitCount = write ? q->writeQuorum : q->readQuorum;
+    if (explicitCount) {
+        *required = explicitCount;
+        *met = counted >= explicitCount;
+        return CLUSTER_OK;
+    }
+
+    switch (q->consistency) {
+    case CLUSTER_CONSISTENCY_ONE:
+        *required = 1;
+        break;
+    case CLUSTER_CONSISTENCY_QUORUM:
+        *required = rf / 2 + 1;
+        break;
+    case CLUSTER_CONSISTENCY_ALL:
+        *required = rf;
+        break;
+    case CLUSTER_CONSISTENCY_LOCAL_ONE:
+    case CLUSTER_CONSISTENCY_LOCAL_QUORUM: {
+        if (!ring->hasLocalDc) {
+            return CLUSTER_ERR_INVALID_CONFIG;
+        }
+
+        uint32_t local = 0;
+        uint32_t localCounted = 0;
+        for (size_t i = 0; i < n; i++) {
+            const clusterNode *node = clusterPlacementGetReplica(pl, i);
+            if (node->location.dcId == ring->localDcId) {
+                local++;
+                localCounted +=
+                    counts ? counts[i] : node->state == CLUSTER_NODE_UP;
+            }
+        }
+        *required =
+            q->consistency == CLUSTER_CONSISTENCY_LOCAL_ONE ? 1 : local / 2 + 1;
+        *met = local > 0 && localCounted >= *required;
+        return CLUSTER_OK;
+    }
+    case CLUSTER_CONSISTENCY_EACH_QUORUM: {
+        /* A majority in each datacenter: replicas grouped by dcId (at
+         * most 255 of them) */
+        uint32_t dc[UINT8_MAX];
+        uint32_t inDc[UINT8_MAX] = {};
+        uint32_t countedInDc[UINT8_MAX] = {};
+        size_t dcs = 0;
+        for (size_t i = 0; i < n && i < UINT8_MAX; i++) {
+            const clusterNode *node = clusterPlacementGetReplica(pl, i);
+            size_t d = 0;
+            while (d < dcs && dc[d] != node->location.dcId) {
+                d++;
+            }
+            if (d == dcs) {
+                dc[dcs++] = node->location.dcId;
+            }
+            inDc[d]++;
+            countedInDc[d] +=
+                counts ? counts[i] : node->state == CLUSTER_NODE_UP;
+        }
+
+        *required = 0;
+        *met = dcs > 0;
+        for (size_t d = 0; d < dcs; d++) {
+            *required += inDc[d] / 2 + 1;
+            *met = *met && countedInDc[d] >= inDc[d] / 2 + 1;
+        }
+        return CLUSTER_OK;
+    }
+    default:
+        return CLUSTER_ERR_INVALID_CONFIG;
+    }
+
+    *met = n > 0 && counted >= *required;
+    return CLUSTER_OK;
+}
+
 clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
                                    uint32_t keyLen, const clusterQuorum *quorum,
                                    clusterWriteSet *out) {
@@ -2339,12 +2458,23 @@ clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
                                  clusterPlacementGetReplica(&placement, i));
     }
 
-    /* Calculate sync/async requirements */
-    size_t targetCount = clusterWriteSetTargetCount(out);
-    out->syncRequired = q->writeSync;
-    if (out->syncRequired > targetCount) {
-        out->syncRequired = (uint8_t)targetCount;
+    /* What the quorum needs: the explicit counts, else the level's */
+    uint32_t required = 0;
+    bool achievable = false;
+    result =
+        clusterQuorumNeed_(ring, q, clusterQuorumReplicas_(ring, q), &placement,
+                           true, nullptr, &required, &achievable);
+    if (result != CLUSTER_OK) {
+        clusterPlacementFree(&placement);
+        clusterWriteSetFree(out);
+        return result;
     }
+
+    /* Calculate sync/async requirements: writeSync when set, else every
+     * ack the quorum needs */
+    size_t targetCount = clusterWriteSetTargetCount(out);
+    const uint32_t sync = q->writeSync ? q->writeSync : required;
+    out->syncRequired = (uint8_t)(sync > targetCount ? targetCount : sync);
     out->asyncAllowed = (uint8_t)(targetCount - out->syncRequired);
 
     /* Suggest timeout based on replica count */
@@ -2356,7 +2486,7 @@ clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
                               memory_order_relaxed);
 
     /* Check if quorum is achievable */
-    if (placement.healthyCount < q->writeQuorum) {
+    if (!achievable) {
         clusterPlacementFree(&placement);
         return CLUSTER_ERR_QUORUM_FAILED;
     }
@@ -2393,11 +2523,21 @@ clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
                                    clusterPlacementGetReplica(&placement, i));
     }
 
-    size_t candidateCount = clusterReadSetCandidateCount(out);
-    out->requiredResponses = q->readQuorum;
-    if (out->requiredResponses > candidateCount) {
-        out->requiredResponses = (uint8_t)candidateCount;
+    /* What the quorum needs: the explicit count, else the level's */
+    uint32_t required = 0;
+    bool achievable = false;
+    result =
+        clusterQuorumNeed_(ring, q, clusterQuorumReplicas_(ring, q), &placement,
+                           false, nullptr, &required, &achievable);
+    if (result != CLUSTER_OK) {
+        clusterPlacementFree(&placement);
+        clusterReadSetFree(out);
+        return result;
     }
+
+    size_t candidateCount = clusterReadSetCandidateCount(out);
+    out->requiredResponses =
+        (uint8_t)(required > candidateCount ? candidateCount : required);
     out->readRepair = q->readRepairEnabled;
 
     /* Update stats */
@@ -2406,13 +2546,49 @@ clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
                               memory_order_relaxed);
 
     /* Check if quorum is achievable */
-    if (placement.healthyCount < q->readQuorum) {
+    if (!achievable) {
         clusterPlacementFree(&placement);
         return CLUSTER_ERR_QUORUM_FAILED;
     }
 
     clusterPlacementFree(&placement);
     return CLUSTER_OK;
+}
+
+clusterResult clusterRingQuorumMet(const clusterRing *ring, const void *key,
+                                   uint32_t keyLen, const clusterQuorum *quorum,
+                                   bool write, const uint64_t *respondedIds,
+                                   size_t respondedCount, bool *met) {
+    *met = false;
+    if (!ring || !key || (respondedCount && !respondedIds)) {
+        return CLUSTER_ERR;
+    }
+
+    const clusterQuorum *q = quorum ? quorum : &ring->defaultQuorum;
+    clusterPlacement placement;
+    clusterResult result = clusterRingLocateWith(
+        ring, ring->strategyType, key, keyLen,
+        q->replicaCount ? q->replicaCount : ring->defaultQuorum.replicaCount,
+        ring->affinityRules, ring->affinityRuleCount, &placement);
+    if (result != CLUSTER_OK) {
+        return result;
+    }
+
+    /* Which replicas responded (a node answering twice counts once) */
+    const size_t n = clusterPlacementReplicaCount(&placement);
+    bool responded[UINT8_MAX] = {};
+    for (size_t i = 0; i < n && i < UINT8_MAX; i++) {
+        const uint64_t id = clusterPlacementGetReplica(&placement, i)->id;
+        for (size_t r = 0; r < respondedCount && !responded[i]; r++) {
+            responded[i] = respondedIds[r] == id;
+        }
+    }
+
+    uint32_t required = 0;
+    result = clusterQuorumNeed_(ring, q, clusterQuorumReplicas_(ring, q),
+                                &placement, write, responded, &required, met);
+    clusterPlacementFree(&placement);
+    return result;
 }
 
 clusterResult clusterRingSelectReadNode(const clusterRing *ring,
@@ -2948,6 +3124,12 @@ clusterRing *clusterRingCopy(const clusterRing *ring) {
     if (copy && ring->strategyType == CLUSTER_STRATEGY_CUSTOM) {
         copy->customStrategy = ring->customStrategy;
         copy->sharesCustomStrategy = true;
+    }
+
+    /* The copy plans for the same coordinator */
+    if (copy) {
+        copy->localDcId = ring->localDcId;
+        copy->hasLocalDc = ring->hasLocalDc;
     }
     return copy;
 }
@@ -5890,6 +6072,134 @@ static int testFuzzSerializationRoundtrip(void) {
         }
         clusterWriteSetFree(&ws);
         clusterReadSetFree(&rs);
+    }
+
+    TEST("consistency levels decide the counts W and R leave at 0") {
+        /* Six nodes, three in datacenter 1 and three in 2, every one a
+         * replica: each level's count, the LOCAL levels refused until a
+         * local datacenter is set, achievability with two of dc 1 down,
+         * and QuorumMet judging sets of responders */
+        clusterRingConfig config = {.name = "levels",
+                                    .strategyType = CLUSTER_STRATEGY_KETAMA};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
+        for (uint32_t n = 1; n <= 6; n++) {
+            clusterNodeConfig nc = {
+                .id = n,
+                .weight = 100,
+                .location = {.nodeId = n, .dcId = n <= 3 ? 1 : 2},
+                .initialState = CLUSTER_NODE_UP};
+            CR_OK(clusterRingAddNode(ring, &nc));
+        }
+
+        static const struct {
+            clusterConsistencyLevel level;
+            uint8_t want;
+        } levels[] = {{CLUSTER_CONSISTENCY_ONE, 1},
+                      {CLUSTER_CONSISTENCY_QUORUM, 4},
+                      {CLUSTER_CONSISTENCY_ALL, 6},
+                      {CLUSTER_CONSISTENCY_LOCAL_ONE, 1},
+                      {CLUSTER_CONSISTENCY_LOCAL_QUORUM, 2},
+                      {CLUSTER_CONSISTENCY_EACH_QUORUM, 4}};
+        for (int localSet = 0; localSet < 2; localSet++) {
+            if (localSet) {
+                clusterRingSetLocalDatacenter(ring, 1);
+            }
+            for (size_t i = 0; i < countof(levels); i++) {
+                const clusterQuorum q = {.replicaCount = 6,
+                                         .consistency = levels[i].level};
+                const bool local =
+                    levels[i].level == CLUSTER_CONSISTENCY_LOCAL_ONE ||
+                    levels[i].level == CLUSTER_CONSISTENCY_LOCAL_QUORUM;
+                clusterWriteSet ws;
+                clusterReadSet rs;
+                const clusterResult w =
+                    clusterRingPlanWrite(ring, "k", 1, &q, &ws);
+                const clusterResult r =
+                    clusterRingPlanRead(ring, "k", 1, &q, &rs);
+                const bool refused = local && !localSet;
+                if (refused ? (w != CLUSTER_ERR_INVALID_CONFIG ||
+                               r != CLUSTER_ERR_INVALID_CONFIG)
+                            : (w != CLUSTER_OK || r != CLUSTER_OK ||
+                               ws.syncRequired != levels[i].want ||
+                               rs.requiredResponses != levels[i].want)) {
+                    ERR("level %d (local set %d): write %d read %d, sync %u "
+                        "need %u",
+                        (int)levels[i].level, localSet, (int)w, (int)r,
+                        ws.syncRequired, rs.requiredResponses);
+                }
+                clusterWriteSetFree(&ws);
+                clusterReadSetFree(&rs);
+            }
+        }
+
+        /* Responders: an EACH_QUORUM needs two in each datacenter; a
+         * LOCAL_QUORUM two in dc 1; an explicit 2 any two replicas (a
+         * repeat and a non-replica do not count) */
+        static const struct {
+            clusterQuorum q;
+            uint64_t ids[4];
+            size_t n;
+            bool met;
+        } answers[] = {
+            {{.replicaCount = 6,
+              .consistency = CLUSTER_CONSISTENCY_EACH_QUORUM},
+             {1, 2, 4},
+             3,
+             false},
+            {{.replicaCount = 6,
+              .consistency = CLUSTER_CONSISTENCY_EACH_QUORUM},
+             {1, 2, 4, 5},
+             4,
+             true},
+            {{.replicaCount = 6,
+              .consistency = CLUSTER_CONSISTENCY_LOCAL_QUORUM},
+             {4, 5, 6},
+             3,
+             false},
+            {{.replicaCount = 6,
+              .consistency = CLUSTER_CONSISTENCY_LOCAL_QUORUM},
+             {1, 2},
+             2,
+             true},
+            {{.replicaCount = 6, .writeQuorum = 2}, {9, 1, 1}, 3, false},
+            {{.replicaCount = 6, .writeQuorum = 2}, {1, 4}, 2, true},
+        };
+        for (size_t i = 0; i < countof(answers); i++) {
+            bool met = !answers[i].met;
+            if (clusterRingQuorumMet(ring, "k", 1, &answers[i].q, true,
+                                     answers[i].ids, answers[i].n,
+                                     &met) != CLUSTER_OK ||
+                met != answers[i].met) {
+                ERR("responders %zu: met %d, want %d", i, met, answers[i].met);
+            }
+        }
+
+        /* All of dc 1 down (placement stands dc 2 in): 3 UP misses a
+         * majority of 6 and the local (dc 1) levels have no replica
+         * there; ONE plans, and so does EACH_QUORUM over the one
+         * datacenter still holding replicas */
+        for (uint64_t n = 1; n <= 3; n++) {
+            CR_OK(clusterRingSetNodeState(ring, n, CLUSTER_NODE_DOWN));
+        }
+        static const struct {
+            clusterConsistencyLevel level;
+            clusterResult want;
+        } down[] = {
+            {CLUSTER_CONSISTENCY_ONE, CLUSTER_OK},
+            {CLUSTER_CONSISTENCY_QUORUM, CLUSTER_ERR_QUORUM_FAILED},
+            {CLUSTER_CONSISTENCY_LOCAL_ONE, CLUSTER_ERR_QUORUM_FAILED},
+            {CLUSTER_CONSISTENCY_LOCAL_QUORUM, CLUSTER_ERR_QUORUM_FAILED},
+            {CLUSTER_CONSISTENCY_EACH_QUORUM, CLUSTER_OK}};
+        for (size_t i = 0; i < countof(down); i++) {
+            const clusterQuorum q = {.replicaCount = 6,
+                                     .consistency = down[i].level};
+            clusterWriteSet ws;
+            if (clusterRingPlanWrite(ring, "k", 1, &q, &ws) != down[i].want) {
+                ERR("level %d with dc 1 down planned wrong",
+                    (int)down[i].level);
+            }
+            clusterWriteSetFree(&ws);
+        }
     }
 
     TEST("FUZZ: Serialization with random data") {
