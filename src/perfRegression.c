@@ -2342,6 +2342,67 @@ static void benchMultilist(void) {
 defcleanerName(multilist **, zfree, PerfLists);
 defcleanerName(multimap **, zfree, PerfMaps);
 
+/* Snapshot compression in the persist layer: one multimap of
+ * PERF_CONTAINER_N {integer key, short string value} rows (values drawn
+ * from 64 phrases, as real tables repeat), snapshotted and restored
+ * through persist with compression off, LZ4 and LZ4HC 9.  ns per row;
+ * bytes: the snapshot file's size, so the rows show the size each buys */
+static void benchPersistSnapshot(void) {
+    static const char *const phrases[8] = {"pending", "active",    "archived",
+                                           "deleted", "suspended", "review",
+                                           "shipped", "returned"};
+    cleaner(multimapFree) multimap *m = multimapNew(2);
+    char value[32];
+    for (uint32_t i = 0; i < PERF_CONTAINER_N; i++) {
+        const int len = snprintf(value, sizeof(value), "%s-%u", phrases[i % 8],
+                                 (i * 7919u) % 64u);
+        const databox key = databoxNewSigned((int64_t)perfScatter(i));
+        const databox val = databoxNewBytes(value, (size_t)len);
+        const databox *row[2] = {&key, &val};
+        multimapInsert(&m, row);
+    }
+
+    static const struct {
+        const char *snapshot;
+        const char *restore;
+        persistCompression compression;
+        int level;
+    } modes[] = {
+        {"snapshotPlain", "restorePlain", PERSIST_COMPRESS_NONE, 0},
+        {"snapshotLZ4", "restoreLZ4", PERSIST_COMPRESS_LZ4, 0},
+        {"snapshotLZ4HC9", "restoreLZ4HC9", PERSIST_COMPRESS_LZ4, 9},
+    };
+    constexpr uint32_t rounds = 3;
+    for (size_t k = 0; k < countof(modes); k++) {
+        persistConfig config = persistDefaultConfig();
+        config.compression = modes[k].compression;
+        config.compressionLevel = modes[k].level;
+        persist *p = persistCreate(&persistOpsMultimap, &config);
+        persistStore *store = persistStoreMemory(0);
+        persistAttachSnapshot(p, store);
+
+        double t0 = timeUtilMonotonicSec();
+        for (uint32_t r = 0; r < rounds; r++) {
+            (void)persistSnapshot(p, m);
+        }
+        const double snapSecs = timeUtilMonotonicSec() - t0;
+        size_t fileLen = 0;
+        (void)persistStoreMemoryBuffer(store, &fileLen);
+        emitRow("persistSnapshot", modes[k].snapshot, fileLen,
+                rounds * PERF_CONTAINER_N, snapSecs);
+
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t r = 0; r < rounds; r++) {
+            multimap *back = persistRestore(p);
+            perfContainerSink += back ? multimapCount(back) : 0;
+            multimapFree(back);
+        }
+        emitRow("persistSnapshot", modes[k].restore, fileLen,
+                rounds * PERF_CONTAINER_N, timeUtilMonotonicSec() - t0);
+        persistClose(p);
+    }
+}
+
 /* Many small maps, as a store of one map per key holds them: 25000 maps
  * of 4 {integer key, integer value} rows each made (bytes: their metered
  * heap), every key looked up with the maps visited in scattered order,
@@ -3281,6 +3342,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("multimap")) {
             benchMultimapMany();
+        }
+
+        if (perfWanted("persistSnapshot")) {
+            benchPersistSnapshot();
         }
 
         if (perfWanted("multilru")) {
