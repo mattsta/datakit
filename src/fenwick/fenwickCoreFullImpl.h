@@ -40,6 +40,7 @@
 #define FENWICK_IMPL_SCOPE
 #endif
 
+#include "../dkDenseGrowth.h"
 #include "fenwickCoreAlgo.h"
 
 #define FENWICK_FULL_T_ FENWICK_FULL_TYPENAME(FENWICK_SUFFIX)
@@ -126,6 +127,9 @@ static bool FENWICK_FULL_FN_(FullApply_)(FENWICK_FULL_T_ *fw,
         const uint64_t oldCapacity = fw->capacity;
         const uint64_t newCapacity =
             FENWICK_FULL_FN_(AlgoCapacityFor_)(oldCapacity, idx);
+        if (!dkDenseGrowthAllowed(oldCapacity, newCapacity)) {
+            return false;
+        }
         /* @own: container */
         fw->tree = zrealloc(fw->tree, newCapacity * sizeof(FENWICK_VALUE_TYPE));
         memset(&fw->tree[oldCapacity], 0,

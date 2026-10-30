@@ -1,6 +1,7 @@
 #include "multiFenwick.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "dkDenseGrowth.h"
 #include "flexCapacityManagement.h"
 #include "mflexInternal.h"
 #include "multiFenwickCommon.h"
@@ -291,6 +292,10 @@ static bool multiFenwickApply_(multiFenwick **mfw, uint64_t idx,
     const uint64_t newCapacity =
         idx < oldCapacity ? oldCapacity
                           : multiFenwickCapacityFor_(oldCapacity, idx);
+    if (!dkDenseGrowthAllowed(oldCapacity, newCapacity)) {
+        return false;
+    }
+
     multiFenwickNum total = {};
     databox totalBox = DATABOX_UNSIGNED(0);
     if (newCapacity > oldCapacity && oldCapacity > 0) {

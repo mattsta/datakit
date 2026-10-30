@@ -312,5 +312,25 @@ int fenwick2dTest(int, char *[]) {
         }
     }
 
+    TEST("growth: a write far past the tree's size is refused") {
+        /* 2048 x 2048 is 2^22 cells, taken from anywhere; 4096 x 2048 from
+         * a 4 x 4 tree is more than one doubling of the rows */
+        fenwick2dI64 *t = nullptr;
+        if (!fenwick2dI64Update(&t, 3, 3, 1)) {
+            ERR("a first write was refused");
+        }
+        const size_t bytes = fenwick2dI64Bytes(t);
+        if (fenwick2dI64Update(&t, 4096, 2047, 1) ||
+            fenwick2dI64Update(&t, (size_t)1 << 30, 0, 1) ||
+            fenwick2dI64Bytes(t) != bytes || fenwick2dI64Rows(t) != 4) {
+            ERR("a far write was taken or changed the tree");
+        }
+        if (!fenwick2dI64Update(&t, 2047, 2047, 2) ||
+            fenwick2dI64Query(t, 2047, 2047) != 3) {
+            ERR("a write at 2047 x 2047 was refused or lost a value");
+        }
+        fenwick2dI64Free(t);
+    }
+
     TEST_FINAL_RESULT;
 }

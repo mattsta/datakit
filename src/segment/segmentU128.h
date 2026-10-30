@@ -39,7 +39,7 @@ typedef enum segmentU128Type {
  * elements only.  Query and Get outside the tree return the identity. */
 void *segmentU128New(segmentOp op);
 void segmentU128Free(void *seg);
-void segmentU128Update(void **seg, size_t idx, __uint128_t value);
+bool segmentU128Update(void **seg, size_t idx, __uint128_t value);
 __uint128_t segmentU128Query(const void *seg, size_t left, size_t right);
 __uint128_t segmentU128Get(const void *seg, size_t idx);
 size_t segmentU128Count(const void *seg);

@@ -29,9 +29,12 @@ segmentI64Free(seg);
 
 ## Contract
 
-- **Update** assigns one element. An index past the end extends the tree;
-  the elements in between hold the operation's **identity**: 0 for SUM, the
-  type's maximum for MIN, its minimum for MAX.
+- **Update** assigns one element and returns whether it did. An index past
+  the end extends the tree; the elements in between hold the operation's
+  **identity**: 0 for SUM, the type's maximum for MIN, its minimum for MAX.
+  One Update may grow the tree by one doubling, or to 2^22 leaves; an index
+  past that is refused (false, nothing changed), so a far index never
+  allocates everything below it.
 - **Update on a NULL tree creates a SUM tree**: it cannot know which
   operation you meant. Create MIN and MAX trees with `New(op)` first.
 - **RangeUpdate** assigns every _existing_ element in `[left, right]` in

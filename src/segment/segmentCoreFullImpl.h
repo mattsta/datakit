@@ -39,6 +39,7 @@
 #define SEGMENT_IMPL_SCOPE
 #endif
 
+#include "../dkDenseGrowth.h"
 #include "segmentCoreAlgo.h"
 
 #define SEGMENT_FULL_T_ SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX)
@@ -134,7 +135,9 @@ SEGMENT_FULL_FN_(FullUpdate)(SEGMENT_FULL_T_ *seg, SEGMENT_INDEX_TYPE_FULL idx,
 
     uint64_t leaves = SEGMENT_FULL_LEAVES_(seg);
     if (idx >= leaves) {
-        if (idx > seg->maxCapacity / 4) {
+        if (idx > seg->maxCapacity / 4 ||
+            !dkDenseGrowthAllowed(leaves,
+                                  SEGMENT_FULL_FN_(LeavesFor_)(leaves, idx))) {
             if (success) {
                 *success = false;
             }

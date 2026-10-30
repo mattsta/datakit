@@ -20,7 +20,10 @@
  * ------
  * - Elements are stored values and never wrap: Update refuses (returns
  *   false, changing nothing; a NULL tree stays NULL) a delta whose new
- *   element would not fit the type.  Set always fits.  Float trees also
+ *   element would not fit the type.  Set always fits.
+ * - Growth: one Update or Set may grow the tree by one doubling, or to
+ *   2^22 cells (dkDenseGrowth.h); an index past that is refused the same
+ *   way, so a far index never allocates everything up to it.  Float trees also
  *   refuse a non-finite delta, value or element (and a Set whose change
  *   from the current element is not finite).
  * - Integer trees: Get returns the element exactly.  Query and

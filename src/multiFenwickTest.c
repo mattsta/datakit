@@ -2522,5 +2522,22 @@ int multiFenwickTest(int, char *[]) {
         multiFenwickFree(mfw);
     }
 
+    TEST("growth: a write far past the tree's size is refused") {
+        multiFenwick *mfw = nullptr;
+        const databox one = DATABOX_SIGNED(1);
+        if (multiFenwickUpdate(&mfw, (size_t)1 << 22, &one) || mfw) {
+            ERR("a write at 2^22 on an empty tree was taken");
+        }
+        for (size_t i = 0; i < 100; i++) {
+            (void)multiFenwickUpdate(&mfw, i, &one);
+        }
+        const size_t bytes = multiFenwickBytes(mfw);
+        if (multiFenwickSet(&mfw, (size_t)1 << 40, &one) ||
+            multiFenwickCount(mfw) != 100 || multiFenwickBytes(mfw) != bytes) {
+            ERR("a write at 2^40 was taken or changed the tree");
+        }
+        multiFenwickFree(mfw);
+    }
+
     TEST_FINAL_RESULT;
 }

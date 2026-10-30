@@ -20,6 +20,8 @@
 #define SEGMENT_D_FN_(name) SEGMENT_NAME(SEGMENT_SUFFIX, name)
 #define SEGMENT_D_STR2_(x) #x
 #define SEGMENT_D_STR_(x) SEGMENT_D_STR2_(x)
+#include "../dkDenseGrowth.h"
+
 #define SEGMENT_D_SMALL_ SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX)
 #define SEGMENT_D_FULL_ SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX)
 
@@ -64,13 +66,27 @@ size_t SEGMENT_D_FN_(Count)(const void *seg) {
 }
 
 /* Assign element idx; moves a Small tree to the Full tier first when the
- * Small tier's limits would be passed or idx jumps far past the end */
-void SEGMENT_D_FN_(Update)(void **seg, size_t idx, SEGMENT_VALUE_TYPE value) {
+ * Small tier's limits would be passed or idx jumps far past the end.
+ * False, changing nothing, for a refused write (a tree created here for it
+ * is freed again). */
+bool SEGMENT_D_FN_(Update)(void **seg, size_t idx, SEGMENT_VALUE_TYPE value) {
     if (!seg) {
-        return;
+        return false;
     }
 
-    if (!*seg) {
+    /* A far index is refused before any tree is made or moved for it (the
+     * capacity counts nodes: twice the leaves) */
+    const uint64_t leaves =
+        !*seg ? 0
+        : SEGMENT_D_IS_SMALL_(*seg)
+            ? ((const SEGMENT_D_SMALL_ *)SEGMENT_D_UNTAG_(*seg))->capacity / 2
+            : ((const SEGMENT_D_FULL_ *)SEGMENT_D_UNTAG_(*seg))->capacity / 2;
+    if (!dkDenseIndexAllowed(leaves, idx)) {
+        return false;
+    }
+
+    const bool created = !*seg;
+    if (created) {
         *seg = SEGMENT_D_FN_(New)(SEGMENT_OP_SUM);
     }
 
@@ -95,6 +111,13 @@ void SEGMENT_D_FN_(Update)(void **seg, size_t idx, SEGMENT_VALUE_TYPE value) {
         SEGMENT_D_FN_(FullUpdate)
         (SEGMENT_D_UNTAG_(*seg), (uint64_t)idx, value, &success);
     }
+
+    if (!success && created) {
+        SEGMENT_D_FN_(Free)(*seg);
+        *seg = nullptr;
+    }
+
+    return success;
 }
 
 /* Fold [left, right] with the tree's operation */
@@ -345,7 +368,7 @@ static bool SEGMENT_D_FN_(PersistApplyOp_)(void *structure, persistOp op,
     }
 
     if (argc == 2) {
-        SEGMENT_D_FN_(Update)(seg, (size_t)args[0].data.u64, v);
+        return SEGMENT_D_FN_(Update)(seg, (size_t)args[0].data.u64, v);
     } else {
         SEGMENT_D_FN_(RangeUpdate)
         (*seg, (size_t)args[0].data.u64, (size_t)args[1].data.u64, v);

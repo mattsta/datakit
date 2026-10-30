@@ -37,7 +37,7 @@ typedef enum segmentI16Type {
  * elements only.  Query and Get outside the tree return the identity. */
 void *segmentI16New(segmentOp op);
 void segmentI16Free(void *seg);
-void segmentI16Update(void **seg, size_t idx, int16_t value);
+bool segmentI16Update(void **seg, size_t idx, int16_t value);
 int16_t segmentI16Query(const void *seg, size_t left, size_t right);
 int16_t segmentI16Get(const void *seg, size_t idx);
 size_t segmentI16Count(const void *seg);

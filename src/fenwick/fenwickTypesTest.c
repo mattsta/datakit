@@ -515,6 +515,28 @@ int fenwickTypesTest(int, char *[]) {
     TEST("Small and Full tiers at their edges: fenwick" #T) {                  \
         err += fwtTierEdges##T();                                              \
     }                                                                          \
+    TEST("growth: fenwick" #T " refuses a write far past its size") {          \
+        /* Up to 2^22 cells is taken from anywhere; past that, one doubling */ \
+        void *fw = nullptr;                                                    \
+        if (fenwick##T##Update(&fw, (size_t)1 << 22, 1) || fw) {               \
+            ERR(#T ": a write at 2^22 on an empty tree was taken");            \
+        }                                                                      \
+        for (size_t i = 0; i < 100; i++) {                                     \
+            (void)fenwick##T##Update(&fw, i, 1);                               \
+        }                                                                      \
+        const size_t bytes = fenwick##T##Bytes(fw);                            \
+        if (fenwick##T##Set(&fw, (size_t)1 << 40, 1) ||                        \
+            fenwick##T##Count(fw) != 100 || fenwick##T##Bytes(fw) != bytes) {  \
+            ERR(#T ": a write at 2^40 was taken or changed the tree");         \
+        }                                                                      \
+        const size_t last = ((size_t)1 << 22) - 1;                             \
+        if (!fenwick##T##Update(&fw, last, 1) ||                               \
+            fenwick##T##Count(fw) != last + 1 ||                               \
+            fenwick##T##Query(fw, last) != 101) {                              \
+            ERR(#T ": a write at 2^22 - 1 was refused or lost a value");       \
+        }                                                                      \
+        fenwick##T##Free(fw);                                                  \
+    }                                                                          \
     TEST("Repr: fenwick" #T " nil, Small and Full") {                          \
         fenwick##T##Repr(nullptr);                                             \
         void *fw = nullptr;                                                    \
@@ -538,6 +560,19 @@ int fenwickTypesTest(int, char *[]) {
     FWT_RUN(Float)
     FWT_RUN(Double)
 #undef FWT_RUN
+
+    TEST("growth: past 2^22 cells a write may double a tree, no more") {
+        void *fw = nullptr;
+        const size_t floor = (size_t)1 << 22;
+        if (!fenwickI64Update(&fw, floor - 1, 1) ||
+            !fenwickI64Update(&fw, 2 * floor - 1, 2) ||
+            fenwickI64Update(&fw, 4 * floor, 3) ||
+            fenwickI64Count(fw) != 2 * floor ||
+            fenwickI64Query(fw, 2 * floor - 1) != 3) {
+            ERR("a doubling was refused, or a quadrupling taken");
+        }
+        fenwickI64Free(fw);
+    }
 
     TEST_FINAL_RESULT;
 }

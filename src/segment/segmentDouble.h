@@ -37,7 +37,7 @@ typedef enum segmentDoubleType {
  * elements only.  Query and Get outside the tree return the identity. */
 void *segmentDoubleNew(segmentOp op);
 void segmentDoubleFree(void *seg);
-void segmentDoubleUpdate(void **seg, size_t idx, double value);
+bool segmentDoubleUpdate(void **seg, size_t idx, double value);
 double segmentDoubleQuery(const void *seg, size_t left, size_t right);
 double segmentDoubleGet(const void *seg, size_t idx);
 size_t segmentDoubleCount(const void *seg);

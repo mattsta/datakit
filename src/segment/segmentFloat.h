@@ -37,7 +37,7 @@ typedef enum segmentFloatType {
  * elements only.  Query and Get outside the tree return the identity. */
 void *segmentFloatNew(segmentOp op);
 void segmentFloatFree(void *seg);
-void segmentFloatUpdate(void **seg, size_t idx, float value);
+bool segmentFloatUpdate(void **seg, size_t idx, float value);
 float segmentFloatQuery(const void *seg, size_t left, size_t right);
 float segmentFloatGet(const void *seg, size_t idx);
 size_t segmentFloatCount(const void *seg);

@@ -21,7 +21,10 @@
  * - Update assigns one element in O(log n); an index past the end extends
  *   the tree (amortized O(1) growth), the elements between holding the
  *   operation's identity (0 for SUM, the type's max for MIN, its min for
- *   MAX).  Update on a NULL tree creates a SUM tree.
+ *   MAX).  Update on a NULL tree creates a SUM tree.  One Update may grow
+ *   the tree by one doubling, or to 2^22 leaves (dkDenseGrowth.h); an
+ *   index past that is refused: Update returns false and changes nothing
+ *   (a NULL tree stays NULL).
  * - RangeUpdate assigns every existing element in [left, right] in
  *   O(k + log n) and never extends or moves the tree.
  * - Query folds [left, right] in O(log n).  An integer SUM adds with

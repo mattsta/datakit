@@ -740,6 +740,28 @@ int segmentI64Test(int, char *[]) {
         printf("\n");
     }
 
+    TEST("growth: a write far past the tree's size is refused") {
+        void *seg = nullptr;
+        if (segmentI64Update(&seg, (size_t)1 << 22, 5) || seg) {
+            ERR("a write at 2^22 on an empty tree was taken");
+        }
+        for (size_t i = 0; i < 100; i++) {
+            (void)segmentI64Update(&seg, i, 1);
+        }
+        const size_t bytes = segmentI64Bytes(seg);
+        if (segmentI64Update(&seg, (size_t)1 << 40, 5) ||
+            segmentI64Count(seg) != 100 || segmentI64Bytes(seg) != bytes) {
+            ERR("a write at 2^40 was taken or changed the tree");
+        }
+        const size_t last = ((size_t)1 << 22) - 1;
+        if (!segmentI64Update(&seg, last, 7) ||
+            segmentI64Count(seg) != last + 1 ||
+            segmentI64Query(seg, 0, last) != 107) {
+            ERR("a write at 2^22 - 1 was refused or lost a value");
+        }
+        segmentI64Free(seg);
+    }
+
     TEST_FINAL_RESULT;
 }
 

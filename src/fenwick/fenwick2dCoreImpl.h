@@ -56,6 +56,7 @@
  *                       rows, cols; };
  * rows and cols are the extents: highest written index + 1. */
 
+#include "../dkDenseGrowth.h"
 #include "fenwickCommon.h"
 
 /* Largest cell count a tree may reach (rowCap * colCap); a write that
@@ -124,7 +125,11 @@ static inline bool F2D_FN(CapsFor_)(const struct F2D_STRUCT *t, uint64_t row,
 
     *rowCap = F2D_FN(CapFor_)(t->rowCap, row);
     *colCap = F2D_FN(CapFor_)(t->colCap, col);
-    return *rowCap <= F2D_MAX_CELLS / *colCap;
+    /* Within the dense growth bound: small, or each side doubling at most */
+    return *rowCap <= F2D_MAX_CELLS / *colCap &&
+           (*rowCap * *colCap <= DK_DENSE_JUMP_CELLS ||
+            (dkDenseDoubling(t->rowCap, *rowCap) &&
+             dkDenseDoubling(t->colCap, *colCap)));
 }
 
 /* Grow to rowCap x colCap (each at least the current one).  OOM is

@@ -304,5 +304,20 @@ int multiFenwick2dTest(int, char *[]) {
         }
     }
 
+    TEST("growth: a write far past the tree's size is refused") {
+        multiFenwick2d *t = nullptr;
+        const databox one = DATABOX_SIGNED(1);
+        if (!multiFenwick2dUpdate(&t, 3, 3, &one)) {
+            ERR("a first write was refused");
+        }
+        const size_t bytes = multiFenwick2dBytes(t);
+        if (multiFenwick2dUpdate(&t, 4096, 2047, &one) ||
+            multiFenwick2dUpdate(&t, (size_t)1 << 30, 0, &one) ||
+            multiFenwick2dBytes(t) != bytes || multiFenwick2dRows(t) != 4) {
+            ERR("a far write was taken or changed the tree");
+        }
+        multiFenwick2dFree(t);
+    }
+
     TEST_FINAL_RESULT;
 }

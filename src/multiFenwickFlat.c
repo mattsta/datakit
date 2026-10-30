@@ -1,6 +1,7 @@
 #include "multiFenwickFlat.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "dkDenseGrowth.h"
 #include "flex.h"
 #include "multiFenwickCells.h"
 #include "multiFenwickCommon.h"
@@ -242,6 +243,10 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
     const uint64_t newCapacity =
         idx < oldCapacity ? oldCapacity
                           : multiFenwickCapacityFor_(oldCapacity, idx);
+    if (!dkDenseGrowthAllowed(oldCapacity, newCapacity)) {
+        return false;
+    }
+
     const multiFenwickNum total =
         newCapacity > oldCapacity && oldCapacity > 0
             ? multiFenwickFlatCellGet_(cur, oldCapacity - 1)

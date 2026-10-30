@@ -560,5 +560,31 @@ int multiFenwickFlatTest(int, char *[]) {
         multiFenwickFlatFree(mfw);
     }
 
+    TEST("growth: a write far past the tree's size is refused") {
+        multiFenwickFlat *mfw = nullptr;
+        const databox one = DATABOX_SIGNED(1);
+        if (multiFenwickFlatUpdate(&mfw, (size_t)1 << 22, &one) || mfw) {
+            ERR("a write at 2^22 on an empty tree was taken");
+        }
+        for (size_t i = 0; i < 100; i++) {
+            (void)multiFenwickFlatUpdate(&mfw, i, &one);
+        }
+        const size_t bytes = multiFenwickFlatBytes(mfw);
+        if (multiFenwickFlatSet(&mfw, (size_t)1 << 40, &one) ||
+            multiFenwickFlatCount(mfw) != 100 ||
+            multiFenwickFlatBytes(mfw) != bytes) {
+            ERR("a write at 2^40 was taken or changed the tree");
+        }
+        const size_t last = ((size_t)1 << 22) - 1;
+        databox sum = {};
+        if (!multiFenwickFlatUpdate(&mfw, last, &one) ||
+            multiFenwickFlatCount(mfw) != last + 1 ||
+            !multiFenwickFlatQuery(mfw, last, &sum) ||
+            sum.type != DATABOX_UNSIGNED_64 || sum.data.u != 101) {
+            ERR("a write at 2^22 - 1 was refused or lost a value");
+        }
+        multiFenwickFlatFree(mfw);
+    }
+
     TEST_FINAL_RESULT;
 }

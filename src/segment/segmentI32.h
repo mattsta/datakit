@@ -37,7 +37,7 @@ typedef enum segmentI32Type {
  * elements only.  Query and Get outside the tree return the identity. */
 void *segmentI32New(segmentOp op);
 void segmentI32Free(void *seg);
-void segmentI32Update(void **seg, size_t idx, int32_t value);
+bool segmentI32Update(void **seg, size_t idx, int32_t value);
 int32_t segmentI32Query(const void *seg, size_t left, size_t right);
 int32_t segmentI32Get(const void *seg, size_t idx);
 size_t segmentI32Count(const void *seg);

@@ -19,6 +19,8 @@
 
 #include <math.h>
 
+#include "../dkDenseGrowth.h"
+
 #define FENWICK_D_FN_(name) FENWICK_NAME(FENWICK_SUFFIX, name)
 #define FENWICK_D_STR2_(x) #x
 #define FENWICK_D_STR_(x) FENWICK_D_STR2_(x)
@@ -68,6 +70,16 @@ static bool FENWICK_D_FN_(Write_)(void **fw, size_t idx, FENWICK_VALUE_TYPE v,
         return false;
     }
 #endif
+
+    /* A far index is refused before any tree is made or moved for it */
+    const uint64_t cells =
+        !*fw ? 0
+        : FENWICK_D_IS_SMALL_(*fw)
+            ? ((const FENWICK_D_SMALL_ *)FENWICK_D_UNTAG_(*fw))->capacity
+            : ((const FENWICK_D_FULL_ *)FENWICK_D_UNTAG_(*fw))->capacity;
+    if (!dkDenseIndexAllowed(cells, idx)) {
+        return false;
+    }
 
     const bool created = !*fw;
     if (created) {

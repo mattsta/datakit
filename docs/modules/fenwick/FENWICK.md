@@ -41,7 +41,10 @@ holds their shared contract); `multiFenwickFlat.h`, `multiFenwick.h`,
 
 Cell `i` (1-based) holds the sum of elements `(i - LSB(i), i]`, where
 `LSB(i) = i & -i`. Every tree stores `capacity` cells, the smallest power of
-two above the highest index written, and grows by doubling. On growth only the
+two above the highest index written, and grows by doubling. One write may grow
+a tree by one doubling, or to 2^22 cells (in 2D: each side by one doubling, or
+to 2^22 cells in all); a write at an index past that is refused, changing
+nothing, so a far index never allocates everything below it. On growth only the
 new power-of-two cells are touched: a new cell `j` covers existing elements
 only when `j` is a power of two, and then holds the old total. The same
 reasoning gives every tree:
