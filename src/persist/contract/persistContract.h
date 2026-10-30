@@ -134,6 +134,7 @@ extern const persistContractType persistContractSegmentFloat;
 extern const persistContractType persistContractSegmentDouble;
 extern const persistContractType persistContractMultimapAtom;
 extern const persistContractType persistContractIdRows;
+extern const persistContractType persistContractColdmap;
 
 /* A seeded value of any databox kind a container stores: small and full
  * range signed/unsigned, 128-bit signed/unsigned, double, float, true,

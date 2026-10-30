@@ -2397,7 +2397,7 @@ static void perfColdmapRun(const flex *rows, flexCapSizeLimit limit,
     const coldmapConfig config = {.rawLimit = limit};
     cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
     char key[32];
-    databox value;
+    databox value = {};
     databox *values[1] = {&value};
 
     double t0 = timeUtilMonotonicSec();
@@ -2420,7 +2420,7 @@ static void perfColdmapRun(const flex *rows, flexCapSizeLimit limit,
 
     t0 = timeUtilMonotonicSec();
     coldmapIterator it;
-    databox k;
+    databox k = {};
     databox *row[2] = {&k, &value};
     coldmapIteratorInit(cm, state, &it, true);
     while (coldmapIteratorNext(&it, row)) {

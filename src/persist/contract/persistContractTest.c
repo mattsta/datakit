@@ -77,6 +77,7 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractSegmentDouble,
     &persistContractMultimapAtom,
     &persistContractIdRows,
+    &persistContractColdmap,
 };
 
 /* ====================================================================

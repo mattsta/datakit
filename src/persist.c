@@ -2586,6 +2586,8 @@ const char *persistTypeName(persistType type) {
         return "multimapAtom";
     case PERSIST_TYPE_ID_ROWS:
         return "idRows";
+    case PERSIST_TYPE_COLDMAP:
+        return "coldmap";
     default:
         return "unknown";
     }

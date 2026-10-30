@@ -221,6 +221,9 @@ typedef enum persistType {
     /* Rows addressed by id */
     PERSIST_TYPE_ID_ROWS = 150,
 
+    /* A sorted map in compressed blocks */
+    PERSIST_TYPE_COLDMAP = 160,
+
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255
 } persistType;
@@ -1292,6 +1295,25 @@ extern const persistOps persistOpsMultiLRU;
  *     CLEAR                       idRowsClear
  *   The width is fixed at creation, so there is no newEmpty. */
 extern const persistOps persistOpsIdRows;
+
+/* persistOpsColdmap (coldmap.c), format 1:
+ *   snapshot: flex [elementsPerEntry, raw limit (a flexCapSizeLimit),
+ *             stored target, required saving, LZ4 level, then every row
+ *             in key order, stored exactly]
+ *   restore:  refuses a config out of range and rows that are not whole
+ *             or whose keys do not strictly ascend; blocks are packed
+ *             and compressed again, as coldmapNewFromDump does.
+ *   WAL:
+ *     INSERT      [row elements...]       coldmapInsert (args: const
+ *                                         databox *const *)
+ *     DELETE      [key]                   coldmapDelete
+ *     BULK_INSERT the rows flex itself    coldmapInsertMany (args: the
+ *                                         const flex *, argc 1)
+ *     BULK_DELETE [bounds given (1 lo, 2 hi), lo?, hi?]
+ *                                         coldmapDeleteRange (args: const
+ *                                         databox *[2], NULL for open)
+ *   The row width is fixed at creation, so there is no newEmpty. */
+extern const persistOps persistOpsColdmap;
 
 /* Identity-verified POP fold observability (see the apply-arm
  * comment in persist.c): deep-remove = the stamped element was

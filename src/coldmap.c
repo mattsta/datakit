@@ -2,6 +2,9 @@
 
 #include "cleaner.h"
 #include "dkTierLimit.h"
+#include "persist.h"
+
+defcleaner(mflexState *, mflexStateFree);
 
 defcleaner(flex *, flexFree);
 defcleanerName(void *, zfree, Void);
@@ -26,6 +29,7 @@ struct coldmap {
     uint64_t storedBytes;
     uint64_t keyBytes; /* heap bytes the routing keys own */
     uint64_t compressedBlocks;
+    coldmapConfig config;  /* as made, defaults resolved */
     uint32_t rawCap;       /* bytes */
     uint32_t storedTarget; /* bytes */
     multimapElements elementsPerEntry;
@@ -203,11 +207,13 @@ coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
     /* @own: caller; free=coldmapFree */
     coldmap *cm = zcalloc(1, sizeof(*cm));
     cm->elementsPerEntry = elementsPerEntry;
-    cm->rawCap =
-        flexOptimizationSizeLimit[c->rawLimit
-                                      ? c->rawLimit
-                                      : dkTierDefaultLimit(DK_TIER_COLDMAP)];
-    cm->storedTarget = c->storedTarget ? c->storedTarget : cm->rawCap / 4;
+    cm->config = *c;
+    cm->config.rawLimit =
+        c->rawLimit ? c->rawLimit : dkTierDefaultLimit(DK_TIER_COLDMAP);
+    cm->rawCap = flexOptimizationSizeLimit[cm->config.rawLimit];
+    cm->config.storedTarget =
+        c->storedTarget ? c->storedTarget : cm->rawCap / 4;
+    cm->storedTarget = cm->config.storedTarget;
     /* @own: container; free=mflexStateFree */
     cm->state = mflexStateCreate();
     (void)mflexStateSetPolicy(cm->state, c->minSavingPercent, c->level);
@@ -661,6 +667,239 @@ void coldmapGetStats(const coldmap *cm, coldmapStats *stats) {
     };
 }
 
+coldmap *coldmapNew(multimapElements elementsPerEntry,
+                    const coldmapConfig *config) {
+    /* @own: container; free=coldmapFree */
+    flex *rows = flexNew();
+    /* @own: caller; free=coldmapFree */
+    return coldmapNewFromDump(elementsPerEntry, config, rows);
+}
+
+void coldmapGetConfig(const coldmap *cm, coldmapConfig *config) {
+    *config = cm->config;
+}
+
+bool coldmapRowsAscend(const flex *rows, multimapElements elementsPerEntry) {
+    return coldmapRowsAscend_(rows, elementsPerEntry);
+}
+
+/* ====================================================================
+ * Persistence (persistOpsColdmap; the format is described in persist.h)
+ * ==================================================================== */
+/* Elements before the rows: elementsPerEntry, raw limit, stored target,
+ * required saving, LZ4 level */
+static constexpr uint32_t COLDMAP_PERSIST_CONFIG = 5;
+
+static uint8_t *coldmapPersistSnapshot_(const void *structure, size_t *len) {
+    const coldmap *cm = structure;
+    const coldmapConfig *c = &cm->config;
+    const databox fields[COLDMAP_PERSIST_CONFIG] = {
+        DATABOX_UNSIGNED(cm->elementsPerEntry),
+        DATABOX_UNSIGNED(c->rawLimit),
+        DATABOX_UNSIGNED(c->storedTarget),
+        DATABOX_UNSIGNED(c->minSavingPercent),
+        DATABOX_UNSIGNED(c->level),
+    };
+    const databox *header[COLDMAP_PERSIST_CONFIG];
+    for (uint32_t i = 0; i < COLDMAP_PERSIST_CONFIG; i++) {
+        header[i] = &fields[i];
+    }
+
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+    flexAppendMultipleExact(&f, COLDMAP_PERSIST_CONFIG, header);
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+    cleaner(flexFree) flex *rows = coldmapDump(cm, state);
+    flexBulkAppendFlex(&f, rows);
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+static void *coldmapPersistRestore_(const uint8_t *data, size_t len) {
+    if (!data || !flexValidateBufferDeep(data, len)) {
+        return nullptr;
+    }
+
+    const flex *f = (const flex *)data;
+    flexEntry *fe = flexHead(f);
+    uint64_t v[COLDMAP_PERSIST_CONFIG];
+    if (flexCount(f) < COLDMAP_PERSIST_CONFIG) {
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < COLDMAP_PERSIST_CONFIG; i++) {
+        if (!flexReadUnsigned(f, &fe, &v[i])) {
+            return nullptr;
+        }
+    }
+
+    /* The rows are checked as any dump is (whole, ascending keys) */
+    if (v[0] == 0 || v[0] > UINT16_MAX || v[1] < FLEX_CAP_LEVEL_64 ||
+        v[1] > FLEX_CAP_LEVEL_65536 || v[2] == 0 || v[2] > UINT32_MAX ||
+        v[3] > 99 || v[4] > 12) {
+        return nullptr;
+    }
+
+    const coldmapConfig config = {.rawLimit = (flexCapSizeLimit)v[1],
+                                  .storedTarget = (uint32_t)v[2],
+                                  .minSavingPercent = (uint8_t)v[3],
+                                  .level = (uint8_t)v[4]};
+    /* @own: container; free=coldmapFree */
+    flex *rows = flexDuplicate(f);
+    flexDeleteRange(&rows, 0, COLDMAP_PERSIST_CONFIG);
+    /* @own: caller; free=coldmapFree */
+    return coldmapNewFromDump((multimapElements)v[0], &config, rows);
+}
+
+/* BULK_DELETE's body: [which bounds are given (1 lo, 2 hi), lo?, hi?] */
+static constexpr uint64_t COLDMAP_PERSIST_LO = 1;
+static constexpr uint64_t COLDMAP_PERSIST_HI = 2;
+
+static uint8_t *coldmapPersistEncodeOp_(persistOp op, const void *args,
+                                        size_t argc, size_t *len) {
+    *len = 0;
+    switch (op) {
+    case PERSIST_OP_INSERT:
+        return argc >= 1 ? persistOpEncodeBoxes(args, argc, len) : nullptr;
+    case PERSIST_OP_DELETE:
+        return argc == 1 ? persistOpEncodeBoxes(args, argc, len) : nullptr;
+    case PERSIST_OP_BULK_INSERT: {
+        /* args: the rows flex itself */
+        const flex *rows = args;
+        if (argc != 1 || !rows) {
+            return nullptr;
+        }
+        /* @own: caller; free=zfree */
+        uint8_t *body = zmalloc(flexBytes(rows));
+        memcpy(body, rows, flexBytes(rows));
+        *len = flexBytes(rows);
+        return body;
+    }
+    case PERSIST_OP_BULK_DELETE: {
+        /* args: const databox *bounds[2], either may be NULL */
+        const databox *const *bounds = args;
+        if (argc != 2 || !bounds) {
+            return nullptr;
+        }
+        const databox which =
+            DATABOX_UNSIGNED((bounds[0] ? COLDMAP_PERSIST_LO : 0) |
+                             (bounds[1] ? COLDMAP_PERSIST_HI : 0));
+        const databox *body[3] = {&which};
+        size_t n = 1;
+        for (size_t i = 0; i < 2; i++) {
+            if (bounds[i]) {
+                body[n++] = bounds[i];
+            }
+        }
+        return persistOpEncodeBoxes(body, n, len);
+    }
+    default:
+        return nullptr;
+    }
+}
+
+/* A WAL body's elements (from untrusted bytes) decoded into 'box' */
+static bool coldmapPersistDecode_(const uint8_t *data, size_t len,
+                                  databoxBig *box, const databox **ptrs,
+                                  size_t want) {
+    if (!flexValidateBufferDeep(data, len) ||
+        flexCount((const flex *)data) != want) {
+        return false;
+    }
+
+    coldmapDecodeRow_((const flex *)data, flexHead((const flex *)data),
+                      (multimapElements)want, box);
+    for (size_t i = 0; i < want; i++) {
+        ptrs[i] = (const databox *)&box[i];
+    }
+    return true;
+}
+
+static bool coldmapPersistApplyOp_(void *structure, persistOp op,
+                                   const uint8_t *data, size_t len) {
+    coldmap *cm = *(coldmap **)structure;
+    const multimapElements epe = cm->elementsPerEntry;
+    switch (op) {
+    case PERSIST_OP_INSERT:
+    case PERSIST_OP_DELETE: {
+        const size_t want = op == PERSIST_OP_INSERT ? epe : 1;
+        cleanerName(zfree, Void) void *storage =
+            zcalloc(want, sizeof(databoxBig) + sizeof(databox *));
+        databoxBig *box = storage;
+        const databox **ptrs = (const databox **)(box + want);
+        if (!coldmapPersistDecode_(data, len, box, ptrs, want)) {
+            return false;
+        }
+        /* A delete of an absent key was refused where it was logged too:
+         * replaying it changes nothing */
+        if (op == PERSIST_OP_INSERT) {
+            coldmapInsert(cm, ptrs);
+        } else {
+            coldmapDelete(cm, ptrs[0]);
+        }
+        return true;
+    }
+    case PERSIST_OP_BULK_INSERT:
+        return flexValidateBufferDeep(data, len) &&
+               coldmapInsertMany(cm, (const flex *)data, nullptr);
+    case PERSIST_OP_BULK_DELETE: {
+        if (!flexValidateBufferDeep(data, len)) {
+            return false;
+        }
+        const flex *f = (const flex *)data;
+        flexEntry *fe = flexHead(f);
+        uint64_t which;
+        if (!flexCount(f) || !flexReadUnsigned(f, &fe, &which) ||
+            which > (COLDMAP_PERSIST_LO | COLDMAP_PERSIST_HI) ||
+            flexCount(f) != 1 + (size_t)stdc_count_ones(which)) {
+            return false;
+        }
+        databoxBig bound[2] = {};
+        const databox *lo = nullptr;
+        const databox *hi = nullptr;
+        if (which & COLDMAP_PERSIST_LO) {
+            flexGetByTypeBig(fe, &bound[0]);
+            lo = (const databox *)&bound[0];
+            fe = flexNext(f, fe);
+        }
+        if (which & COLDMAP_PERSIST_HI) {
+            flexGetByTypeBig(fe, &bound[1]);
+            hi = (const databox *)&bound[1];
+        }
+        coldmapDeleteRange(cm, lo, hi);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static size_t coldmapPersistCount_(const void *structure) {
+    return coldmapCount(structure);
+}
+
+static size_t coldmapPersistBytes_(const void *structure) {
+    return coldmapBytes(structure);
+}
+
+static void coldmapPersistFree_(void *structure) {
+    coldmapFree(structure);
+}
+
+/* The row width is fixed at creation, so there is no newEmpty */
+const persistOps persistOpsColdmap = {
+    .type = PERSIST_TYPE_COLDMAP,
+    .name = "coldmap",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = coldmapPersistSnapshot_,
+    .restore = coldmapPersistRestore_,
+    .count = coldmapPersistCount_,
+    .estimateSize = coldmapPersistBytes_,
+    .encodeOp = coldmapPersistEncodeOp_,
+    .applyOp = coldmapPersistApplyOp_,
+    .free = coldmapPersistFree_,
+};
+
 /* ====================================================================
  * Tests
  * ==================================================================== */
@@ -669,7 +908,6 @@ void coldmapGetStats(const coldmap *cm, coldmapStats *stats) {
 #include "multimap.h"
 
 defcleaner(coldmap *, coldmapFree);
-defcleaner(mflexState *, mflexStateFree);
 defcleaner(multimap *, multimapFree);
 defcleanerName(databox *, zfree, Boxes);
 
@@ -688,8 +926,8 @@ static multimap *coldmapTestRows_(coldmapShape_ shape, size_t rows) {
     char key[32];
     char value[96];
     for (size_t i = 0; i < rows; i++) {
-        databox k;
-        databox v;
+        databox k = {};
+        databox v = {};
         if (shape == COLDMAP_SHAPE_RECORDS) {
             const int klen = snprintf(key, sizeof(key), "user:%08zu", i * 2);
             const int vlen = snprintf(value, sizeof(value),
@@ -826,8 +1064,8 @@ int coldmapTest(int argc, char *argv[]) {
             for (size_t c = 0; c < countof(configs); c++) {
                 cleaner(coldmapFree) coldmap *cm =
                     coldmapNewFromDump(2, &configs[c], multimapDump(m));
-                databox k;
-                databox v;
+                databox k = {};
+                databox v = {};
                 databox *row[2] = {&k, &v};
                 for (int forward = 0; forward < 2; forward++) {
                     coldmapIterator it;
@@ -897,8 +1135,8 @@ int coldmapTest(int argc, char *argv[]) {
             coldmapNewFromDump(2, nullptr, noRows);
         const databox below = databoxNewSigned(-1);
         coldmapIterator it;
-        databox k;
-        databox v;
+        databox k = {};
+        databox v = {};
         databox *row[2] = {&k, &v};
         const bool fromBelow =
             coldmapIteratorInitAt(cm, state, &it, true, &below) &&

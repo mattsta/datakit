@@ -25,7 +25,12 @@
  * that state, so readers with their own states may share one coldmap.
  * A value read as bytes points into the state (or into the coldmap for a
  * plain block): it stays valid until the next read through that state or
- * the next change to the coldmap.  Writers exclude readers. */
+ * the next change to the coldmap.  Writers exclude readers.
+ *
+ * Elements decode into the caller's boxes as multimap's lookups do: a
+ * box's 'big' flag must be set up (zero the box, or DATABOX_BIG_INIT a
+ * databoxBig); a zeroed box reports a 96/128-bit value by type alone, a
+ * databoxBig gets it whole. */
 
 /* @handle: fixed: its address holds from creation to free */
 typedef struct coldmap coldmap;
@@ -51,7 +56,16 @@ typedef struct coldmapConfig {
 [[nodiscard]] coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
                                           const coldmapConfig *config,
                                           flex *rows);
+/* An empty coldmap (coldmapNewFromDump of no rows) */
+[[nodiscard]] coldmap *coldmapNew(multimapElements elementsPerEntry,
+                                  const coldmapConfig *config);
 void coldmapFree(coldmap *cm);
+/* The config it was made with, defaults resolved (the raw limit and
+ * stored target in force) */
+void coldmapGetConfig(const coldmap *cm, coldmapConfig *config);
+/* Whether 'rows' holds whole rows of 'elementsPerEntry' with strictly
+ * ascending keys: the form coldmapNewFromDump and coldmapInsertMany take */
+bool coldmapRowsAscend(const flex *rows, multimapElements elementsPerEntry);
 
 size_t coldmapCount(const coldmap *cm);
 /* Memory held: stored blocks, routing keys and the coldmap itself */
