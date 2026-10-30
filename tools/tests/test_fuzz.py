@@ -79,6 +79,8 @@ class Command(unittest.TestCase):
             self.assertEqual(cmd[0], str(d / "fuzzX"))
             self.assertIn("-max_total_time=30", cmd)
             self.assertIn(f"-timeout={fuzz.INPUT_TIMEOUT_SECONDS}", cmd)
+            self.assertIn(f"-rss_limit_mb={fuzz.RSS_LIMIT_MB}", cmd)
+            self.assertIn(f"-malloc_limit_mb={fuzz.MALLOC_LIMIT_MB}", cmd)
             self.assertIn(f"-artifact_prefix={d / 'art'}/", cmd)
             self.assertEqual(cmd[-2:], [str(d / "corpus"), str(seeds)])
 

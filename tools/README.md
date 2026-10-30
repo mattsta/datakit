@@ -547,7 +547,9 @@ uv run --project tools dktools fuzz NAME [TARGET ...] [--seconds N] [--root DIR]
   named) for N seconds (default 60), one after another, over its corpus
   `ROOT/fuzz/NAME/corpus/TARGET` (kept, so a later run with the same
   NAME starts from what earlier runs found) and its seeds. One input
-  running over 10 seconds is a finding.
+  running over 10 seconds, one allocation over 2 GB, or the process past
+  4 GB resident (ASan keeps freed memory in a 256 MB quarantine) is a
+  finding.
 - A finding (crash, sanitizer report, leak, timeout, out of memory, or a
   contract the target asserts) stops that target and is written under
   `ROOT/fuzz/NAME/artifacts/TARGET`; the result line prints the command

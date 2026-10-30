@@ -44,6 +44,15 @@ SEEDED = ("fuzzPersistRestore", "fuzzPersistApplyOp", "fuzzPersistRecover")
 #: One input running longer than this is a finding (libFuzzer -timeout)
 INPUT_TIMEOUT_SECONDS = 10
 
+#: The process's resident memory past this is a finding (libFuzzer
+#: -rss_limit_mb).  ASan holds freed memory in a quarantine (256 MB) and
+#: one input may peak near 500 MB, so libFuzzer's 2048 default trips on a
+#: long run's allocator caching rather than on any one input.
+RSS_LIMIT_MB = 4096
+
+#: One allocation past this is a finding (libFuzzer -malloc_limit_mb)
+MALLOC_LIMIT_MB = 2048
+
 #: The program's run may take this much past its -max_total_time
 #: (start-up reading the corpus, the final merge of its statistics)
 SLACK_SECONDS = 300.0
@@ -114,6 +123,8 @@ def fuzz_command(
         str(program),
         f"-max_total_time={seconds}",
         f"-timeout={INPUT_TIMEOUT_SECONDS}",
+        f"-rss_limit_mb={RSS_LIMIT_MB}",
+        f"-malloc_limit_mb={MALLOC_LIMIT_MB}",
         f"-artifact_prefix={artifacts}/",
         "-print_final_stats=1",
         str(corpus),
