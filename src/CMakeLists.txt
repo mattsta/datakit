@@ -530,6 +530,8 @@ add_library(${PROJECT_NAME} OBJECT
     multiOrderedSetMedium.c
     multiOrderedSetFull.c
 
+    coldmap.c
+
     multilru.c
 
     multidict.c

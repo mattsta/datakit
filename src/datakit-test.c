@@ -18,6 +18,7 @@
 #include "clusterMailboxInternal.h"
 #include "clusterReplicator.h"
 #include "clusterRing.h"
+#include "coldmap.h"
 #include "compressionBench.h"
 #include "containerMatrix.h"
 #include "ctest.h"
@@ -12372,7 +12373,7 @@ static const TestEntry testRegistry[] = {
     T_ADJ(multiarraySmall), T_ADJ(multiarrayMedium), T_ADJ(multiarrayLarge),
     T_ADJ(multiroar), T_A_ADJ(multiOrderedSet, "mos"),
     T_A_ADJ(multilru, "lru,mlru"), T_A_ADJ(ptrPrevNext, "ppn"),
-    T_A(tierSim, "sim"),
+    T_A(tierSim, "sim"), T_A(coldmap, "cold"),
 
     /* Numeric types */
     T_A(float16, "f16"), T_A_ADJ(floatExtended, "float128,fe"), T(intset),
