@@ -3884,7 +3884,9 @@ int multiOrderedSetFullTest(int, char *[]) {
          * stored inline (lengths up to the threshold, which a plain set
          * keeps inline) and interned (a pool set interns every length).
          * Inline cost grows two bytes per member byte, interned one: at
-         * the threshold the two are within an eighth of each other, and
+         * the threshold interning costs from an eighth less to a third
+         * more (the atom table's fixed cost per member varies by build:
+         * about 30 bytes more in a gcc release build), and
          * at four times it interning saves a quarter or more (inline cost
          * there extrapolated from the measured slope). */
         const size_t lens[] = {MOS_FULL_INTERN_MIN_LEN / 2,
@@ -3909,7 +3911,7 @@ int multiOrderedSetFullTest(int, char *[]) {
                inlineCost[0], inlineCost[1], lens[0], lens[1], internedCost[0],
                internedCost[1], internedCost[2], lens[0], lens[1], lens[2],
                inlineAtFour);
-        if (internedCost[1] > inlineCost[1] * 9 / 8 ||
+        if (internedCost[1] > inlineCost[1] * 4 / 3 ||
             internedCost[1] < inlineCost[1] * 7 / 8 ||
             internedCost[2] > inlineAtFour * 3 / 4) {
             ERR("the interning length %u is not where interning pays",

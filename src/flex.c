@@ -6137,7 +6137,12 @@ DK_INLINE_ALWAYS bool flexTrailerMatches_(const flexEntry *const fe,
     varintWidth width;
     size_t len;
     varintSplitFullNoZeroGet_(fe, width, len);
+    /* The trailer must use the header's encoding class too: a variable
+     * trailer naming a width the header does not have (0, say) can match
+     * the header's length and is not readable */
     if (!FLEX_IS_STR(last[0]) ||
+        varintSplitFullNoZeroEncoding2_(last) !=
+            varintSplitFullNoZeroEncoding2_(fe) ||
         (varintWidth)varintSplitFullNoZeroGetLenQuick_(last) != width) {
         return false;
     }

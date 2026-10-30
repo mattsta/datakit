@@ -2462,8 +2462,9 @@ int ulidTest(int, char *[]) {
         /* The watermark set to a ms boundary a second ahead: 70,000 ids
          * land in one ms (1 ns apart).  Every random or counted variant
          * gives strictly increasing ids; MSCOUNT's counter is the id's
-         * position; EPOCH2024's 16 random bits run out after 65,536 and
-         * the ids go on into the next ms */
+         * position; EPOCH2024's 16 random bits run out within 65,536 ids
+         * and the ids go on into the next ms (each ms's field starts at a
+         * random value, so the burst may spend more than one) */
         static const ulidVariantType burst[] = {
             ULID_VARIANT_EPOCH2024, ULID_VARIANT_NS,      ULID_VARIANT_US,
             ULID_VARIANT_MS,        ULID_VARIANT_MSCOUNT, ULID_VARIANT_HYBRID};
@@ -2488,10 +2489,12 @@ int ulidTest(int, char *[]) {
                 }
                 prev = id;
             }
+            const uint64_t borrowed =
+                ulid64GetTimestampNs(&prev, ULID_VARIANT_EPOCH2024) -
+                ulid64GetTimestampNs(&first, ULID_VARIANT_EPOCH2024);
             if (burst[v] == ULID_VARIANT_EPOCH2024 &&
-                ulid64GetTimestampNs(&prev, ULID_VARIANT_EPOCH2024) !=
-                    ulid64GetTimestampNs(&first, ULID_VARIANT_EPOCH2024) +
-                        1'000'000) {
+                (borrowed < 1'000'000 || borrowed % 1'000'000 != 0 ||
+                 borrowed >= 1'000'000'000)) {
                 ERR("EPOCH2024 did not borrow the next ms once its low "
                     "field was spent");
             }
