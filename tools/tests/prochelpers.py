@@ -127,11 +127,17 @@ def _noisy(count: str) -> None:
     sys.stderr.flush()
 
 
+def _write_fd(fd: str) -> None:
+    """Write one byte to the inherited descriptor `fd`."""
+    os.write(int(fd), b"x")
+
+
 COMMANDS = {
     "spawn-grandchild": _spawn_grandchild,
     "orphan-holding-stdout": _orphan_holding_stdout,
     "pool-parent": _pool_parent,
     "noisy": _noisy,
+    "write-fd": _write_fd,
 }
 
 

@@ -15,7 +15,9 @@ time), is built with the compiler's perf preset under
 sampling profiler:
 
 - macOS: ``sample PID`` (part of the base system), attached once the run
-  starts and stopped once it ends; its report is read back;
+  starts and stopped once its work is done, while the process holds at
+  exit (``DK_PROFILE_HOLD_FDS``: sample writes its report from a live
+  process); its report is read back;
 - Linux: ``perf record -g``, read back with ``perf script``.
 
 The recording stays in the work directory.  Printed (and written to
@@ -181,11 +183,20 @@ def _record_sample(
     report = work / "sample.txt"
     run_log = work / "profile-run.log"
     sample_log = work / "profile-sample.log"
+    # sample writes its report from a live process: the run holds at exit
+    # (DK_PROFILE_HOLD_FDS, datakit-test.c) until the sampler has finished
+    done_r, done_w = os.pipe()
+    release_r, release_w = os.pipe()
+    env = {**env, "DK_PROFILE_HOLD_FDS": f"{done_w},{release_r}"}
     with (
         run_log.open("wb") as run_out,
         sample_log.open("wb") as sample_out,
-        procs.started(command, run_out, cwd=cwd, env=env) as target,
+        procs.started(
+            command, run_out, cwd=cwd, env=env, pass_fds=(done_w, release_r)
+        ) as target,
     ):
+        os.close(done_w)
+        os.close(release_r)
         sampler_cmd = [
             "sample",
             str(target.pid),
@@ -196,13 +207,19 @@ def _record_sample(
             str(report),
         ]
         with procs.started(sampler_cmd, sample_out) as sampler:
-            target.wait()
+            # The run's done byte (or EOF, if it died): the sampler is
+            # stopped while the process still lives, and writes its report
+            os.read(done_r, 1)
+            os.close(done_r)
+            if sampler.poll() is None:
+                os.kill(sampler.pid, signal.SIGINT)
             try:
                 sampler.wait(timeout=SAMPLE_GRACE)
             except subprocess.TimeoutExpired:
-                # Interrupted, sample stops and writes its report
-                os.kill(sampler.pid, signal.SIGINT)
-                sampler.wait(timeout=SAMPLE_GRACE)
+                os.kill(sampler.pid, signal.SIGKILL)
+                sampler.wait()
+            os.close(release_w)
+            target.wait()
     if target.returncode != 0:
         return _fail(name, f"run exit {target.returncode}", run_log), report
     if not report.exists():
@@ -297,8 +314,8 @@ def run(repo: Path, opts: ProfileOptions) -> int:
     lines = header + render(samples, opts.top)
     if not samples.total:
         lines.append(
-            "  no samples: the run may have ended before the profiler "
-            "attached (rows need about a second or more)"
+            "  no samples: the run ended before the profiler "
+            "attached (rows need a few milliseconds or more)"
         )
     out = "\n".join(lines) + "\n"
     (work / "result.txt").write_text(out)

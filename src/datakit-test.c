@@ -12698,9 +12698,38 @@ static int runAllTests(int argc, char *argv[]) {
     return result;
 }
 
+/* `dktools profile` (macOS): a sampler writes its report from a live
+ * process, so a profiled run holds at exit.  DK_PROFILE_HOLD_FDS is "W,R":
+ * one byte is written to W when the run is done, then the process waits
+ * for R to close (the sampler has finished). */
+static int profileHoldDone_ = -1;
+static int profileHoldRelease_ = -1;
+
+static void profileHoldAtExit_(void) {
+    fflush(stdout);
+    const char done = 'x';
+    if (write(profileHoldDone_, &done, 1) == 1) {
+        char unused;
+        while (read(profileHoldRelease_, &unused, 1) > 0) {
+        }
+    }
+}
+
+static void profileHoldSetup_(void) {
+    const char *fds = getenv("DK_PROFILE_HOLD_FDS");
+    int w = -1;
+    int r = -1;
+    if (fds && sscanf(fds, "%d,%d", &w, &r) == 2 && w >= 0 && r >= 0) {
+        profileHoldDone_ = w;
+        profileHoldRelease_ = r;
+        atexit(profileHoldAtExit_);
+    }
+}
+
 int main(int argc, char *argv[]) {
     /* Don't break the databox size contract! */
     assert(sizeof(databox) == 16);
+    profileHoldSetup_();
 
     /* Line-buffer stdout even through a pipe, so every test's output (its
      * section headers included, whether printed by ctest.h or by the

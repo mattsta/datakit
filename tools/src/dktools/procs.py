@@ -285,6 +285,7 @@ def _popen(
     stdin: Any,
     stdout: Any,
     stderr: Any,
+    pass_fds: Sequence[int] = (),
 ) -> subprocess.Popen:
     """Start `cmd` in a new session; ToolError when the program or
     `cwd` does not exist."""
@@ -297,6 +298,7 @@ def _popen(
             stdout=stdout,
             stderr=stderr,
             start_new_session=True,
+            pass_fds=tuple(pass_fds),
         )
     except FileNotFoundError as exc:
         if cwd is not None and str(exc.filename) == str(cwd):
@@ -373,15 +375,23 @@ def started(
     *,
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
+    pass_fds: Sequence[int] = (),
 ) -> Iterator[subprocess.Popen]:
     """Start `cmd` with stdout and stderr written to `out` (an open file)
     and hand it to the block while it runs, for another program to watch
-    (a profiler attaching by pid).  On leaving the block the program is
+    (a profiler attaching by pid); `pass_fds` stay open in it.  On leaving
+    the block the program is
     waited for; on an exception its process group is stopped and reaped
     first.  The caller checks ``returncode``."""
     out.flush()
     proc = _popen(
-        cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=out,
+        stderr=out,
+        pass_fds=pass_fds,
     )
     try:
         yield proc

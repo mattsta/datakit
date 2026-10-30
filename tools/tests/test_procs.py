@@ -157,6 +157,24 @@ class Run(Scratch):
         self.assertEqual(proc.returncode, 3)
         self.assertEqual(out.read_text().strip(), str(proc.pid))
 
+    def test_started_passes_descriptors_through(self) -> None:
+        r, w = os.pipe()
+        try:
+            with (
+                tempfile.TemporaryFile() as out,
+                procs.started(
+                    command("write-fd", str(w)), out, cwd=HERE, pass_fds=(w,)
+                ) as proc,
+            ):
+                os.close(w)
+                w = -1
+                self.assertEqual(os.read(r, 1), b"x")
+            self.assertEqual(proc.returncode, 0)
+        finally:
+            os.close(r)
+            if w >= 0:
+                os.close(w)
+
     def test_started_kills_on_an_exception(self) -> None:
         with (
             tempfile.TemporaryFile() as out,
