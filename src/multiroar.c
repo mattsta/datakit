@@ -136,9 +136,6 @@ mrWrongMode_(const char *function, int line, const char *what) {
 #define MAX_ENTRIES_PER_DIRECT_LISTING                                         \
     ((BITMAP_SIZE_IN_BITS / DIRECT_STORAGE_BITS) - 1)
 
-/* Unused but kept for potential future use */
-/* #define BYTES_FOR_PACKED_ARRAY_COUNT(count) dkDivCeil(count, 8) */
-
 #define MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING                             \
     (BITMAP_SIZE_IN_BITS - MAX_ENTRIES_PER_DIRECT_LISTING)
 
@@ -163,10 +160,6 @@ mrWrongMode_(const char *function, int line, const char *what) {
 #define _metaOffsetToColValue(r) ((r)->meta + 1)
 #define _metaOffsetToRowValue(r)                                               \
     ((r)->meta + 1 + varintSplitFullGetLenQuick_(_metaOffsetToColValue(r)))
-
-/* Unused but kept for potential future use */
-/* #define _metaCols(r) varintSplitFullGet(_metaOffsetToColValue_(r)) */
-/* #define _metaRows(r) varintSplitFullGet(_metaOffsetToRowValue_(r)) */
 
 /* 2 elements per entry because our layout is:
  *   - chunk number (unsigned integer)

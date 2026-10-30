@@ -1751,7 +1751,6 @@ int djTest(int, char *[]) {
             {.type = DATABOX_BYTES_VOID, .len = 4},
             {.type = DATABOX_BYTES_OFFSET, .data.bytes.offset = 3, .len = 2},
             {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = 9},
-            {.type = DATABOX_ARRAY_START},
         };
         for (size_t i = 0; i < countof(written); i++) {
             if (!djBox(&st, &written[i])) {

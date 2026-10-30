@@ -31,12 +31,7 @@ typedef enum databoxType : uint8_t {
     DATABOX_DOUBLE_64 = 7,
     /* ================================================================= */
 
-    /* Linear data structure markers */
-    DATABOX_ARRAY_START = 8,
-    DATABOX_ARRAY_END = 9,
-    DATABOX_MAP_START = 10, /* implicit end because Key-Value */
-    DATABOX_LIST_START = 11,
-    DATABOX_LIST_END = 12,
+    /* 8-12: unassigned */
 
     /* Immediate type-only values, no data */
     DATABOX_TRUE = 13,

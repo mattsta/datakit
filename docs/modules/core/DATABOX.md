@@ -122,13 +122,6 @@ typedef enum databoxType {
     DATABOX_SIGNED_128 = 4,   /* __int128_t */
     DATABOX_UNSIGNED_128 = 5, /* __uint128_t */
 
-    /* Linear data structure markers */
-    DATABOX_ARRAY_START = 8,
-    DATABOX_ARRAY_END = 9,
-    DATABOX_MAP_START = 10,   /* implicit end because Key-Value */
-    DATABOX_LIST_START = 11,
-    DATABOX_LIST_END = 12,
-
     /* Pointer type */
     DATABOX_PTR = 16,         /* void * */
 
