@@ -36,8 +36,8 @@ static inline double mosDataboxToDouble(const databox *box) {
 #include "ptrlibBare.h"
 
 /* A set's pointer: the tier in bits 0-1, and in bits 48-63 the size limit
- * (4 bits), the compress flag (1 bit) and, for a Small set, its middle
- * row's byte offset (11 bits).
+ * (4 bits), a spare bit and, for a Small set, its middle row's byte
+ * offset (11 bits).
  * A Small set has no header: its pointer is its flex.  A middle the 11
  * bits cannot hold is stored as MOS_MIDDLE_UNKNOWN and found again by
  * the next call; a Small set whose middle passes them moves up to
@@ -46,9 +46,9 @@ static inline double mosDataboxToDouble(const databox *box) {
 #define mosType_(mos) ((multiOrderedSetType)ptrlibBareTag(mos))
 #define MOS_USE_(mos) ptrlibBareBody(mos)
 
-/* The pointer's 16-bit field (ptrlibBare.h): the size limit in bits 0-3,
- * the compress flag in bit 4 ("meta": both, kept by every tier), and a
- * Small set's middle offset in bits 5-15 */
+/* The pointer's 16-bit field (ptrlibBare.h): the size limit in bits 0-3
+ * and a spare bit 4 ("meta": kept by every tier), and a Small set's
+ * middle offset in bits 5-15 */
 static constexpr uint32_t MOS_META_BITS = 5;
 static constexpr uint32_t MOS_MIDDLE_BITS = 11;
 static constexpr uint32_t MOS_MIDDLE_UNKNOWN = (1u << MOS_MIDDLE_BITS) - 1;
@@ -59,16 +59,13 @@ static_assert(MOS_META_BITS + MOS_MIDDLE_BITS == 16, "the field is 16 bits");
 static_assert(FLEX_CAP_LEVEL_65536 < 16, "a size limit takes 4 bits");
 
 #define MOS_LIMIT_(m) ptrlibBareBits(ptrlibBareField(m), 0, 4)
-#define MOS_COMPRESS_(m) ptrlibBareBits(ptrlibBareField(m), 4, 1)
 #define MOS_META_(m) ptrlibBareBits(ptrlibBareField(m), 0, MOS_META_BITS)
 #define MOS_MIDDLE_(m)                                                         \
     ptrlibBareBits(ptrlibBareField(m), MOS_META_BITS, MOS_MIDDLE_BITS)
 
-/* The meta bits of a set of 'limit' that does ('compress') or does not
- * compress */
-DK_INLINE_ALWAYS uint32_t mosMetaOf_(const uint32_t compress,
-                                     const uint32_t limit) {
-    return ptrlibBareSetBits(ptrlibBareSetBits(0, 0, 4, limit), 4, 1, compress);
+/* The meta bits of a set of 'limit' */
+DK_INLINE_ALWAYS uint32_t mosMetaOf_(const uint32_t limit) {
+    return ptrlibBareSetBits(0, 0, 4, limit);
 }
 
 /* The pointer of tier 'type' at 'body', with 'meta' and (Small only)
@@ -332,15 +329,11 @@ static multiOrderedSet *mosNewSmall_(const uint32_t meta) {
 
 multiOrderedSet *multiOrderedSetNew(void) {
     return mosNewSmall_(
-        mosMetaOf_(0, dkTierDefaultLimit(DK_TIER_MULTIORDEREDSET)));
+        mosMetaOf_(dkTierDefaultLimit(DK_TIER_MULTIORDEREDSET)));
 }
 
 multiOrderedSet *multiOrderedSetNewLimit(flexCapSizeLimit limit) {
-    return mosNewSmall_(mosMetaOf_(0, limit));
-}
-
-multiOrderedSet *multiOrderedSetNewCompress(flexCapSizeLimit limit) {
-    return mosNewSmall_(mosMetaOf_(1, limit));
+    return mosNewSmall_(mosMetaOf_(limit));
 }
 
 multiOrderedSet *multiOrderedSetCopy(const multiOrderedSet *mos) {
@@ -394,10 +387,6 @@ size_t multiOrderedSetBytes(const multiOrderedSet *mos) {
 
 flexCapSizeLimit multiOrderedSetLimit(const multiOrderedSet *mos) {
     return (flexCapSizeLimit)MOS_LIMIT_(mos);
-}
-
-bool multiOrderedSetCompresses(const multiOrderedSet *mos) {
-    return MOS_COMPRESS_(mos) != 0;
 }
 
 void multiOrderedSetStats(const multiOrderedSet *mos, dkTierStats *out) {
@@ -2593,42 +2582,35 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     }
 
     TEST("multiOrderedSet: Reset from every tier gives an empty Small with "
-         "the same limit and compression") {
-        for (int32_t compress = 0; compress < 2; compress++) {
-            for (int32_t tier = MOS_TYPE_SMALL; tier <= MOS_TYPE_FULL; tier++) {
-                cleaner(multiOrderedSetFree) multiOrderedSet *mos =
-                    compress ? multiOrderedSetNewCompress(FLEX_CAP_LEVEL_64)
-                             : multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
-                const uint32_t depth = MOS_COMPRESS_(mos);
-                int64_t next = 0;
-                do {
-                    databox score;
-                    DATABOX_SET_DOUBLE(&score, (double)next);
-                    const databox member = databoxNewSigned(next);
-                    multiOrderedSetAdd(&mos, &score, &member);
-                    next++;
-                } while (mosType_(mos) != (multiOrderedSetType)tier);
-
-                multiOrderedSetReset(&mos);
-                const databox member = databoxNewSigned(5);
-                if (mosType_(mos) != MOS_TYPE_SMALL ||
-                    multiOrderedSetCount(mos) != 0 ||
-                    multiOrderedSetExists(mos, &member) ||
-                    multiOrderedSetLimit(mos) != FLEX_CAP_LEVEL_64 ||
-                    MOS_COMPRESS_(mos) != depth) {
-                    ERR("compress %d tier %d: reset to tier %d, count %zu",
-                        compress, tier, mosType_(mos),
-                        multiOrderedSetCount(mos));
-                }
-
+         "the same limit") {
+        for (int32_t tier = MOS_TYPE_SMALL; tier <= MOS_TYPE_FULL; tier++) {
+            cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+                multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
+            int64_t next = 0;
+            do {
                 databox score;
-                DATABOX_SET_DOUBLE(&score, 1.5);
+                DATABOX_SET_DOUBLE(&score, (double)next);
+                const databox member = databoxNewSigned(next);
                 multiOrderedSetAdd(&mos, &score, &member);
-                if (multiOrderedSetCount(mos) != 1 ||
-                    !multiOrderedSetExists(mos, &member)) {
-                    ERR("compress %d tier %d: a member after Reset is missing",
-                        compress, tier);
-                }
+                next++;
+            } while (mosType_(mos) != (multiOrderedSetType)tier);
+
+            multiOrderedSetReset(&mos);
+            const databox member = databoxNewSigned(5);
+            if (mosType_(mos) != MOS_TYPE_SMALL ||
+                multiOrderedSetCount(mos) != 0 ||
+                multiOrderedSetExists(mos, &member) ||
+                multiOrderedSetLimit(mos) != FLEX_CAP_LEVEL_64) {
+                ERR("tier %d: reset to tier %d, count %zu", tier, mosType_(mos),
+                    multiOrderedSetCount(mos));
+            }
+
+            databox score;
+            DATABOX_SET_DOUBLE(&score, 1.5);
+            multiOrderedSetAdd(&mos, &score, &member);
+            if (multiOrderedSetCount(mos) != 1 ||
+                !multiOrderedSetExists(mos, &member)) {
+                ERR("tier %d: a member after Reset is missing", tier);
             }
         }
     }
@@ -2769,32 +2751,30 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         err += mosWideCheck_(mos, members, present, "drained");
     }
 
-    TEST("multiOrderedSet: the compress setting survives growth, shrink and "
-         "copy") {
+    TEST("multiOrderedSet: the size limit survives growth, shrink and copy") {
         cleaner(multiOrderedSetFree) multiOrderedSet *mos =
-            multiOrderedSetNewCompress(FLEX_CAP_LEVEL_64);
+            multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
         int64_t next = 0;
         while (mosType_(mos) != MOS_TYPE_FULL) {
             const databox b = databoxNewSigned(next++);
             multiOrderedSetAdd(&mos, &b, &b);
         }
-        if (MOS_COMPRESS_(mos) != 1 || MOS_LIMIT_(mos) != FLEX_CAP_LEVEL_64) {
-            ERR("Full kept depth %u limit %u", MOS_COMPRESS_(mos),
-                MOS_LIMIT_(mos));
+        if (MOS_LIMIT_(mos) != FLEX_CAP_LEVEL_64) {
+            ERR("Full kept limit %u", MOS_LIMIT_(mos));
         }
         while (next > 1) {
             const databox b = databoxNewSigned(--next);
             multiOrderedSetRemove(&mos, &b);
         }
-        if (mosType_(mos) != MOS_TYPE_SMALL || MOS_COMPRESS_(mos) != 1 ||
+        if (mosType_(mos) != MOS_TYPE_SMALL ||
             MOS_LIMIT_(mos) != FLEX_CAP_LEVEL_64) {
-            ERR("drained to tier %d with depth %u limit %u", mosType_(mos),
-                MOS_COMPRESS_(mos), MOS_LIMIT_(mos));
+            ERR("drained to tier %d with limit %u", mosType_(mos),
+                MOS_LIMIT_(mos));
         }
         cleaner(multiOrderedSetFree) multiOrderedSet *copy =
             multiOrderedSetCopy(mos);
-        if (MOS_COMPRESS_(copy) != 1) {
-            ERR("a copy lost the compress setting");
+        if (MOS_LIMIT_(copy) != FLEX_CAP_LEVEL_64) {
+            ERR("a copy lost the size limit");
         }
     }
 
@@ -4443,10 +4423,9 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         static const multiOrderedSetType tiers[3] = {
             MOS_TYPE_SMALL, MOS_TYPE_MEDIUM, MOS_TYPE_FULL};
         for (size_t t = 0; t < 3; t++) {
-            for (int compress = 0; compress <= 1; compress++) {
+            {
                 cleaner(multiOrderedSetFree) multiOrderedSet *s =
-                    compress ? multiOrderedSetNewCompress(FLEX_CAP_LEVEL_2048)
-                             : multiOrderedSetNew();
+                    multiOrderedSetNew();
                 const size_t n = sizes[t];
                 /* The oracle: score per member id; -1 marks removed */
                 int64_t oracle[900];
@@ -4460,7 +4439,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                         ERR("tier %zu: AddNX refused new member %zu", t, i);
                     }
                 }
-                if (!compress && mosType_(s) != tiers[t]) {
+                if (mosType_(s) != tiers[t]) {
                     ERR("tier %zu built type %d", t, (int)mosType_(s));
                 }
 
@@ -4568,8 +4547,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                         member.len != strlen(name) ||
                         memcmp(databoxBytes(&member), name, member.len) ||
                         score.data.i64 != oracle[order[k]]) {
-                        ERR("tier %zu compress %d: rank %zu differs", t,
-                            compress, k);
+                        ERR("tier %zu: rank %zu differs", t, k);
                         break;
                     }
                 }

@@ -285,19 +285,14 @@ static_assert(sizeof(mosIterator) == 24, "the tier tag packs with the flags");
 /* Create with specific size limit for tier promotion */
 [[nodiscard]] multiOrderedSet *multiOrderedSetNewLimit(flexCapSizeLimit limit);
 
-/* Create with compression enabled for deeper tiers */
-[[nodiscard]] multiOrderedSet *
-multiOrderedSetNewCompress(flexCapSizeLimit limit);
-
 /* Duplicate an existing multiOrderedSet */
 [[nodiscard]] multiOrderedSet *multiOrderedSetCopy(const multiOrderedSet *mos);
 
 /* Free a multiOrderedSet */
 void multiOrderedSetFree(multiOrderedSet *mos);
 
-/* Empty the set: an empty Small with the same limit and compression,
- * freeing a larger tier's structures (a Small keeps its allocation).
- * Rewrites '*mos'. */
+/* Empty the set: an empty Small with the same limit, freeing a larger tier's
+ * structures (a Small keeps its allocation). Rewrites '*mos'. */
 void multiOrderedSetReset(multiOrderedSet **mos);
 
 /* Pack the rows into the densest layout they allow: each of Full's
@@ -321,8 +316,6 @@ size_t multiOrderedSetBytes(const multiOrderedSet *mos);
 /* The size limit the set was made with, in every tier: when a tier grows,
  * and the size Full's sub-maps split at */
 flexCapSizeLimit multiOrderedSetLimit(const multiOrderedSet *mos);
-/* Whether the set was made with multiOrderedSetNewCompress */
-bool multiOrderedSetCompresses(const multiOrderedSet *mos);
 
 /* The tier, sub-maps (1, 2, or Full's count), pairs, and bytes: the
  * sub-maps' flex bytes, and those plus each tier's struct (Full: its

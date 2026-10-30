@@ -143,7 +143,6 @@ CONSTRUCTORS = {
     "mdscNewFromFile": "mdscfree",
     # every other constructor whose result the caller owns ([[nodiscard]]
     # in its header), by family
-    "multimapNewCompress": "multimapFree",
     "multimapNewConfigure": "multimapFree",
     "multimapSetNew": "multimapFree",
     "multimapMediumNewFromOneGrow": "multimapMediumFree",
@@ -158,7 +157,6 @@ CONSTRUCTORS = {
     "intsetU32NewLen": "intsetU32Free",
     "multiroarDeserializeRaw": "multiroarFree",
     "multiOrderedSetNewLimit": "multiOrderedSetFree",
-    "multiOrderedSetNewCompress": "multiOrderedSetFree",
     "multiOrderedSetCopy": "multiOrderedSetFree",
     "multiOrderedSetUnion": "multiOrderedSetFree",
     "multiOrderedSetIntersect": "multiOrderedSetFree",

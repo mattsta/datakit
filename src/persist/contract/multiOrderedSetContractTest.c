@@ -36,9 +36,8 @@ static void pcMosScore(uint64_t *rng, databoxBig *score) {
 }
 
 static void *pcMosBuild(const persistContractBuild *b) {
-    /* The settings vary by seed, so the snapshot carries them: the
-     * default, a small limit (builds reach Medium and Full), or a small
-     * limit with compression */
+    /* The limit varies by seed, so the snapshot carries it: the default,
+     * or a small limit (builds reach Medium and Full) of two sizes */
     multiOrderedSet *mos;
     switch (b->seed % 3) {
     case 0:
@@ -51,7 +50,7 @@ static void *pcMosBuild(const persistContractBuild *b) {
         break;
     default:
         /* @own: caller; free=multiOrderedSetFree */
-        mos = multiOrderedSetNewCompress(FLEX_CAP_LEVEL_512);
+        mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_512);
         break;
     }
     persistContractStart(b->log, mos);
@@ -113,9 +112,7 @@ static bool pcMosHoldsBytes(const void *structure, const databox *bytes) {
 }
 
 static bool pcMosSameSettings(const void *original, const void *restored) {
-    return multiOrderedSetLimit(original) == multiOrderedSetLimit(restored) &&
-           multiOrderedSetCompresses(original) ==
-               multiOrderedSetCompresses(restored);
+    return multiOrderedSetLimit(original) == multiOrderedSetLimit(restored);
 }
 
 const persistContractType persistContractMultiOrderedSet = {

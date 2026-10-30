@@ -113,8 +113,8 @@ per-node row totals (not built), or a larger size limit.
 
 `multiOrderedSetNew` takes its limit from a process default, 2048 until
 `dkTierSetDefaultLimit(DK_TIER_MULTIORDEREDSET, limit)` (`dkTierLimit.h`)
-changes it for sets made afterwards; `multiOrderedSetNewLimit` and
-`multiOrderedSetNewCompress` take the limit directly. `dktools tune`
+changes it for sets made afterwards; `multiOrderedSetNewLimit` takes the
+limit directly. `dktools tune`
 measures the choice on the machine it runs on.
 
 Measured numbers per operation live in
@@ -153,8 +153,8 @@ adds each member with one search of the result.
 
 | Group        | Calls                                                                                                                                                                                                                                  |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| make         | `multiOrderedSetNew`, `multiOrderedSetNewLimit`, `multiOrderedSetNewCompress`, `multiOrderedSetCopy`, `multiOrderedSetFree`                                                                                                            |
-| size         | `multiOrderedSetCount`, `multiOrderedSetBytes`, `multiOrderedSetStats`, `multiOrderedSetLimit`, `multiOrderedSetCompresses`                                                                                                            |
+| make         | `multiOrderedSetNew`, `multiOrderedSetNewLimit`, `multiOrderedSetCopy`, `multiOrderedSetFree`                                                                                                                                          |
+| size         | `multiOrderedSetCount`, `multiOrderedSetBytes`, `multiOrderedSetStats`, `multiOrderedSetLimit`                                                                                                                                         |
 | write        | `multiOrderedSetAdd`, `multiOrderedSetAddNX` (absent only), `multiOrderedSetAddXX` (present only), `multiOrderedSetAddGetPrevious`, `multiOrderedSetIncrBy`                                                                            |
 | remove       | `multiOrderedSetRemove`, `multiOrderedSetRemoveGetScore`, `multiOrderedSetRemoveIf`, `multiOrderedSetRemoveRangeByScore`, `multiOrderedSetRemoveRangeByRank`, `multiOrderedSetPopMin`, `multiOrderedSetPopMax`, `multiOrderedSetReset` |
 | by member    | `multiOrderedSetExists`, `multiOrderedSetGetScore`, `multiOrderedSetGetRank`, `multiOrderedSetGetReverseRank` (-1 when absent)                                                                                                         |
