@@ -106,6 +106,8 @@ bool multimapSmallIteratorNextWithSlots(multimapIterator *iter,
                                         databox *elements[],
                                         databoxWide *slots);
 
+size_t multimapSmallDeleteRange(multimapSmall *m, const databox *lo,
+                                const databox *hi);
 bool multimapSmallDeleteByPredicate(multimapSmall *m,
                                     const multimapPredicate *p);
 

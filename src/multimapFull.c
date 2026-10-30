@@ -2799,6 +2799,84 @@ bool multimapFullDeleteByPredicate(multimapFull *m,
     return true;
 }
 
+/* The key of the first (or, 'last', the last) row of 'map' compared with
+ * 'against' */
+static int multimapFullCompareRowKey_(const flex *map,
+                                      uint32_t elementsPerEntry, bool last,
+                                      const databox *against) {
+    const flexEntry *fe =
+        last ? flexIndex(map, -(int32_t)elementsPerEntry) : flexHead(map);
+    databox key;
+    databoxWide keyWide;
+    flexGetByTypeInto(fe, &key, &keyWide);
+    return databoxCompare(&key, against);
+}
+
+/* Rows with keys in [lo, hi]: the sub-map holding lo and those after it,
+ * up to the first that reaches past hi.  A sub-map wholly inside is freed
+ * whole; the edge sub-maps lose their rows in one move each; the edges
+ * are then repaired as one delete leaves them.  O(log n + sub-maps
+ * touched + rows in the edge sub-maps). */
+size_t multimapFullDeleteRange(multimapFull *m, const databox *lo,
+                               const databox *hi) {
+    if (!m->values || (lo && hi && databoxCompare(lo, hi) > 0)) {
+        return 0;
+    }
+
+    const uint32_t epe = m->elementsPerEntry;
+    const multimapFullIdx first =
+        lo ? multimapFullKeyMap_(m, lo, false, nullptr) : 0;
+    multimapFullIdx lastTouched = first;
+    size_t removed = 0;
+    for (multimapFullIdx i = first; i < m->count;) {
+        flex **map = getMapPtr(m, i);
+        if (i > first) {
+            if (hi && multimapFullCompareRowKey_(*map, epe, false, hi) > 0) {
+                break; /* this sub-map starts past the range */
+            }
+
+            if (!hi || multimapFullCompareRowKey_(*map, epe, true, hi) <= 0) {
+                removed += flexCount(*map) / epe;
+                flexFree(*map);
+                reallocDecrCount(m, i);
+                continue; /* the next sub-map is now at i */
+            }
+        }
+
+        const size_t rows =
+            flexDeleteSortedKeyRange(map, epe, lo, hi, GET_MIDDLE(m, i, *map));
+        if (rows) {
+            removed += rows;
+            SET_MIDDLE_FORCE(m, i, *map);
+            updateRangeBoxForIdx(m, i, *map);
+        }
+
+        lastTouched = i;
+        if (hi && flexCount(*map) &&
+            multimapFullCompareRowKey_(*map, epe, true, hi) > 0) {
+            break; /* rows past hi remain here: the range ends in it */
+        }
+        i++;
+    }
+
+    if (!removed) {
+        return 0;
+    }
+
+    m->values -= removed;
+
+    /* The far edge first: repairing it never moves the near one */
+    if (lastTouched > first && lastTouched < m->count) {
+        multimapFullRepairAfterDelete_(m, lastTouched,
+                                       getMapPtr(m, lastTouched), nullptr);
+    }
+    if (first < m->count) {
+        multimapFullRepairAfterDelete_(m, first, getMapPtr(m, first), nullptr);
+    }
+
+    return removed;
+}
+
 #ifdef DATAKIT_TEST
 #define CTEST_INCLUDE_KVGEN
 #include "ctest.h"

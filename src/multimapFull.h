@@ -167,6 +167,8 @@ bool multimapFullIteratorNextWithSlots(multimapIterator *iter,
                                        databox *elements[], databoxWide *slots);
 
 bool multimapFullDeleteByPredicate(multimapFull *m, const multimapPredicate *p);
+size_t multimapFullDeleteRange(multimapFull *m, const databox *lo,
+                               const databox *hi);
 
 #ifdef DATAKIT_TEST
 void multimapFullVerify(const multimapFull *m);

@@ -716,6 +716,16 @@ bool multimapSmallDeleteByPredicate(multimapSmall *m,
     return false;
 }
 
+size_t multimapSmallDeleteRange(multimapSmall *m, const databox *lo,
+                                const databox *hi) {
+    const size_t rows = flexDeleteSortedKeyRange(&m->map, m->elementsPerEntry,
+                                                 lo, hi, GET_MIDDLE(m));
+    if (rows) {
+        SET_MIDDLE_FORCE(m);
+    }
+    return rows;
+}
+
 #ifdef DATAKIT_TEST
 void multimapSmallRepr(const multimapSmall *m) {
     flexRepr(m->map);

@@ -1405,11 +1405,13 @@ static bool multimapDeleteNextRowIf_(multimap **m, multimapIterator *it,
     return true;
 }
 
-/* The tiers' one-pass trim of every row with a key at or below the bound
- * (as far as one row with the bound itself) */
-static bool multimapDeleteByPredicateTier_(multimap **m,
-                                           const multimapPredicate *p) {
-    MULTIMAP_DELETE_(m, DeleteByPredicate, p);
+size_t multimapDeleteRange(multimap **m, const databox *lo, const databox *hi) {
+    size_t rows;
+    MULTIMAP_UPDATE_(rows =, *m, DeleteRange, lo, hi);
+    if (rows) {
+        multimapShrinkIfNecessary_(m);
+    }
+    return rows;
 }
 
 bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p) {
@@ -1417,29 +1419,20 @@ bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p) {
     multimapIterator it;
     switch (p->condition) {
     case MULTIMAP_CONDITION_LESS_THAN_EQUAL:
-        /* The tiers trim a sorted prefix in one pass.  It ends at one row
-         * whose key equals the bound; a set may hold more rows with that
-         * key, and they are the head now. */
-        if (multimapIsSet(*m)) {
-            any = multimapDeleteByPredicateTier_(m, p);
-            for (;;) {
-                multimapIteratorInit(*m, &it, true);
-                if (!multimapDeleteNextRowIf_(m, &it, p)) {
-                    return any;
-                }
-                any = true;
-            }
-        }
-        return multimapDeleteByPredicateTier_(m, p);
+        /* The prefix up to the bound (a set's every row with it): one
+         * range delete */
+        return multimapDeleteRange(m, nullptr, &p->compareAgainst) > 0;
     case MULTIMAP_CONDITION_ALL:
         if (!multimapCount(*m)) {
             return false;
         }
         multimapReset(m);
         return true;
+    case MULTIMAP_CONDITION_GREATER_THAN_EQUAL:
+        /* The suffix from the bound: one range delete */
+        return multimapDeleteRange(m, &p->compareAgainst, nullptr) > 0;
     case MULTIMAP_CONDITION_LESS_THAN:
     case MULTIMAP_CONDITION_GREATER_THAN:
-    case MULTIMAP_CONDITION_GREATER_THAN_EQUAL:
         /* Keys sort, so the rows that meet the condition are those at one
          * end: they leave from it, one search each */
         for (;;) {
@@ -1456,11 +1449,8 @@ bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p) {
         if (!multimapIsSet(*m)) {
             return multimapDelete(m, &p->compareAgainst);
         }
-        while (multimapIteratorInitAt(*m, &it, true, &p->compareAgainst) &&
-               multimapDeleteNextRowIf_(m, &it, p)) {
-            any = true;
-        }
-        return any;
+        return multimapDeleteRange(m, &p->compareAgainst, &p->compareAgainst) >
+               0;
     default:
         return false; /* NONE: no row meets it */
     }
@@ -1822,6 +1812,7 @@ void multimapVerify(const multimap *m) {
 #define CTEST_INCLUDE_KVGEN
 #include "ctest.h"
 #include "dkBits.h"
+#include "dkRandom.h"
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
@@ -4915,6 +4906,95 @@ int multimapTest(int, char *[]) {
                             "left, want %zu (deleted %d)",
                             set ? "set" : "map", rows, (int)conds[c], left,
                             before, keep, any);
+                    }
+                }
+            }
+        }
+    }
+
+    TEST("DeleteRange: removes exactly the rows with keys in [lo, hi], in "
+         "maps and sets of every tier") {
+        /* The same maps and sets as above at 20, 300, 3000 and 20000 rows;
+         * twelve ranges in a row on each (absent bounds, 128-bit keys,
+         * lo > hi, each end open, past both ends, the whole map): each deletes
+         * the rows a scan counts in it, leaves none of them, and the map
+         * verifies after every one */
+        const int64_t sizes[] = {20, 300, 3000, 20000};
+        uint64_t seed = 5;
+        for (int set = 0; set < 2 && !err; set++) {
+            for (size_t s = 0; s < countof(sizes) && !err; s++) {
+                const int64_t rows = sizes[s];
+                const int64_t keys = set ? rows / 3 : rows;
+                cleaner(multimapFree) multimap *m =
+                    multimapNewConfigure(2, set, false, FLEX_CAP_LEVEL_512);
+                databoxBig wide[1];
+                for (int64_t r = 0; r < rows; r++) {
+                    const int64_t k = set ? r / 3 : r;
+                    databox key = databoxNewSigned(k * 2);
+                    if (k % 16 == 15) {
+                        DATABOX_BIG_SIGNED_128(&wide[0],
+                                               ((__int128_t)1 << 100) + k);
+                        key = *(databox *)&wide[0];
+                    }
+                    const databox val = databoxNewSigned(r);
+                    const databox *row[2] = {&key, &val};
+                    multimapInsert(&m, row);
+                }
+
+                for (int t = 0; t < 12 && !err; t++) {
+                    databoxBig loBig;
+                    databoxBig hiBig;
+                    int64_t a = (int64_t)dkSplitmix64Bounded(
+                                    &seed, (uint64_t)(2 * keys + 4)) -
+                                2;
+                    int64_t b = a + (int64_t)dkSplitmix64Bounded(
+                                        &seed, (uint64_t)(keys / 3 + 2));
+                    if (t == 3) {
+                        b = a - 1; /* lo > hi */
+                    } else if (t == 11) {
+                        a = -10;
+                        b = 4 * keys + 10; /* everything left */
+                    }
+                    DATABOX_BIG_SIGNED_128(&loBig, a);
+                    DATABOX_BIG_SIGNED_128(&hiBig, b);
+                    if (t == 5) {
+                        DATABOX_BIG_SIGNED_128(&hiBig,
+                                               ((__int128_t)1 << 100) + keys);
+                    }
+                    const databox *lo =
+                        t == 7 ? nullptr : (const databox *)&loBig;
+                    const databox *hi =
+                        t == 9 ? nullptr : (const databox *)&hiBig;
+
+                    size_t inRange = 0;
+                    const size_t before = multimapCount(m);
+                    multimapIterator it;
+                    databox kb = {};
+                    databox vb = {};
+                    databox *got[2] = {&kb, &vb};
+                    databoxWide slots[2];
+                    multimapIteratorInit(m, &it, true);
+                    while (multimapIteratorNextWithSlots(&it, got, slots)) {
+                        inRange += (!lo || databoxCompare(&kb, lo) >= 0) &&
+                                   (!hi || databoxCompare(&kb, hi) <= 0);
+                    }
+
+                    const size_t deleted = multimapDeleteRange(&m, lo, hi);
+                    multimapVerify(m);
+                    size_t left = 0;
+                    bool stayed = false;
+                    multimapIteratorInit(m, &it, true);
+                    while (multimapIteratorNextWithSlots(&it, got, slots)) {
+                        left++;
+                        stayed |= (!lo || databoxCompare(&kb, lo) >= 0) &&
+                                  (!hi || databoxCompare(&kb, hi) <= 0);
+                    }
+                    if (deleted != inRange || stayed ||
+                        left != before - inRange || multimapCount(m) != left) {
+                        ERR("%s of %" PRId64 " rows, range %d: deleted %zu, "
+                            "want %zu; %zu left of %zu",
+                            set ? "set" : "map", rows, t, deleted, inRange,
+                            left, before);
                     }
                 }
             }

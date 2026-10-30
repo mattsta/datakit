@@ -113,6 +113,8 @@ bool multimapMediumIteratorNextWithSlots(multimapIterator *iter,
                                          databox *elements[],
                                          databoxWide *slots);
 
+size_t multimapMediumDeleteRange(multimapMedium *m, const databox *lo,
+                                 const databox *hi);
 bool multimapMediumDeleteByPredicate(multimapMedium *m,
                                      const multimapPredicate *p);
 

@@ -791,6 +791,12 @@ void flexDeleteUpToInclusivePlusN(flex **ff, flexEntry *fe,
                                   const int32_t nMore);
 void flexDeleteSortedValueWithMiddle(flex **ff, uint_fast32_t elementsPerEntry,
                                      flexEntry *fe, flexEntry **middleEntry);
+/* Delete the rows of a sorted flex whose key is in [lo, hi] (a NULL bound:
+ * open at that end; one search, one move; 'middleEntry' is stale
+ * afterwards); returns the rows deleted */
+size_t flexDeleteSortedKeyRange(flex **ff, uint_fast32_t elementsPerEntry,
+                                const databox *lo, const databox *hi,
+                                const flexEntry *middleEntry);
 flex *flexSplitRange(flex **ff, int32_t index, uint32_t num);
 flex *flexSplitMiddle(flex **ff, uint_fast32_t elementsPerEntry,
                       const flexEntry *middleEntry);

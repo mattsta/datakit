@@ -1030,6 +1030,26 @@ bool multimapMediumDeleteByPredicate(multimapMedium *m,
     return false;
 }
 
+size_t multimapMediumDeleteRange(multimapMedium *m, const databox *lo,
+                                 const databox *hi) {
+    size_t rows = 0;
+    for (size_t i = 0; i < 2; i++) {
+        const size_t here = flexDeleteSortedKeyRange(
+            &m->map[i], m->elementsPerEntry, lo, hi, GET_MIDDLE(m, i));
+        if (here) {
+            SET_MIDDLE_FORCE(m, i);
+            rows += here;
+        }
+    }
+
+    /* Draining map 0 must never strand data in map 1 (see
+     * DeleteByPredicate) */
+    if (rows) {
+        multimapMediumConform_(m, 0);
+    }
+    return rows;
+}
+
 #ifdef DATAKIT_TEST
 #define CTEST_INCLUDE_KEYGEN
 #define CTEST_INCLUDE_VALGEN

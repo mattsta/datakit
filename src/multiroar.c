@@ -2174,7 +2174,8 @@ typedef struct mrSpanRow_ {
 defcleanerName(mrSpanRow_ *, zfree, SpanRows);
 
 /* Apply 'op' to every bit of the whole chunks [w0, w1]: a set writes them
- * as one row (a run), a clear deletes their rows, a flip turns the gaps
+ * as one row (a run), a clear deletes their rows (one multimap range
+ * delete for both), a flip turns the gaps
  * between rows into full rows, deletes the full rows and flips the rest.
  * Runs are cut at both edges first, so every row met lies inside.  The
  * cost is the rows inside, never the chunks spanned. */
@@ -2185,15 +2186,36 @@ static void mrSpanApply_(multiroar *r, uint64_t w0, uint64_t w1,
         mrSplitAt_(r, w1 + 1);
     }
 
-    /* The rows inside, in order (collected first: the changes below move
-     * them) */
+    const databox from = databoxNewUnsigned(w0);
+    multimapIterator iter;
+    databox kv[2];
+    if (op != MULTIROAR_RANGE_FLIP_) {
+        /* Every row inside goes in one range delete; the runs among them
+         * are counted first (only a roar holding runs has any) */
+        uint64_t runsInside = 0;
+        if (r->runs && multimapIteratorInitAt(r->map, &iter, true, &from)) {
+            while (multimapIteratorNextInto(&iter, kv, 2) &&
+                   kv[0].data.u <= w1) {
+                runsInside += GET_CHUNK_TYPE(&kv[1]) == CHUNK_TYPE_RUN_ALL_1;
+            }
+        }
+
+        const databox to = databoxNewUnsigned(w1);
+        multimapDeleteRange(&r->map, &from, &to);
+        r->runs -= runsInside;
+        if (op == MULTIROAR_RANGE_SET_) {
+            mrPutFull_(r, w0, w1);
+        }
+
+        return;
+    }
+
+    /* Flip: the rows inside, in order (collected first: the changes below
+     * move them) */
     size_t count = 0;
     size_t cap = 8;
     cleanerName(zfree, SpanRows) mrSpanRow_ *rows =
         zmalloc(cap * sizeof(*rows));
-    const databox from = databoxNewUnsigned(w0);
-    multimapIterator iter;
-    databox kv[2];
     if (multimapIteratorInitAt(r->map, &iter, true, &from)) {
         while (multimapIteratorNextInto(&iter, kv, 2) && kv[0].data.u <= w1) {
             if (count == cap) {
@@ -2211,19 +2233,7 @@ static void mrSpanApply_(multiroar *r, uint64_t w0, uint64_t w1,
         }
     }
 
-    if (op != MULTIROAR_RANGE_FLIP_) {
-        for (size_t i = 0; i < count; i++) {
-            mrDeleteRow_(r, rows[i].last, rows[i].run);
-        }
-
-        if (op == MULTIROAR_RANGE_SET_) {
-            mrPutFull_(r, w0, w1);
-        }
-
-        return;
-    }
-
-    /* Flip: each gap fills, each full row empties, each other row flips */
+    /* Each gap fills, each full row empties, each other row flips */
     uint64_t gapFrom = w0;
     bool gapOpen = true; /* false once a row ends at the last chunk */
     for (size_t i = 0; i < count; i++) {

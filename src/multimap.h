@@ -339,6 +339,14 @@ bool multimapLookupByPosition(multimap *m, int64_t keyIndex,
                               databox *elements[]);
 
 bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p);
+
+/* Delete every row whose key is in [lo, hi] (none when lo > hi; a NULL
+ * bound leaves that end open), a set's rows by their first element.  A
+ * bound must not point into the map's own rows (copy such a key first:
+ * the delete moves them).  Each flex touched loses its rows in one
+ * move and a sub-map wholly inside is freed whole: O(log n + rows in the
+ * edge flexes), never one search per row.  Returns the rows deleted. */
+size_t multimapDeleteRange(multimap **m, const databox *lo, const databox *hi);
 bool multimapProcessPredicate(const multimapPredicate *p, const databox *value);
 typedef bool(multimapElementWalker)(void *userData, const databox *elements[]);
 size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,

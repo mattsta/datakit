@@ -19,8 +19,8 @@ sorted at all times, so lookups are binary searches and iteration is ordered.
 - Map mode (unique keys, values replaced) or Set mode (unique whole rows)
 - Reference containers (`multimapAtom`) for string interning
 - Forward/reverse iteration with an arbitrary starting key
-- Predicate-driven walk (`multimapProcessUntil`) and bulk trim
-  (`multimapDeleteByPredicate`)
+- Predicate-driven walk (`multimapProcessUntil`), bulk trim
+  (`multimapDeleteByPredicate`) and key-range delete (`multimapDeleteRange`)
 
 **Headers**: `multimap.h`, `multimapCommon.h`
 
@@ -613,7 +613,8 @@ if (multimapDeleteWithFound(&m, &key, &deletedRef)) {
 
 Every delete entry point (`Delete`, `DeleteReporting`, `DeleteTaking`,
 `DeleteFullWidth`, `DeleteWithReference`, `DeleteWithFound`,
-`DeleteRandomValue`, `DeleteByPosition`, `DeleteByPredicate`, `DeleteEntry`)
+`DeleteRandomValue`, `DeleteByPosition`, `DeleteByPredicate`, `DeleteRange`,
+`DeleteEntry`)
 can move the map to a smaller variant once it drains (see "Automatic Tier
 Thresholds"), so like an insert it may rewrite `*m`. Full also frees
 submaps that become empty; `multimapReset()` replaces any tier with an
@@ -628,14 +629,14 @@ bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p);
 Every row whose key meets the condition is removed; the result is true when any
 was. Keys sort, so each condition removes one run of rows:
 
-| Condition                            | Removes                              | Cost                                      |
-| ------------------------------------ | ------------------------------------ | ----------------------------------------- |
-| `LESS_THAN_EQUAL`                    | the prefix `<= compareAgainst`       | one pass (whole inner maps freed at once) |
-| `LESS_THAN`                          | the prefix `< compareAgainst`        | one search per row removed                |
-| `GREATER_THAN`, `GREATER_THAN_EQUAL` | the suffix `>` / `>= compareAgainst` | one search per row removed                |
-| `EQUAL`                              | the key's row (a set: all its rows)  | one search per row                        |
-| `ALL`                                | every row (the map is reset)         | one reset                                 |
-| `NONE`                               | nothing                              | none                                      |
+| Condition                   | Removes                             | Cost                                 |
+| --------------------------- | ----------------------------------- | ------------------------------------ |
+| `LESS_THAN_EQUAL`           | the prefix `<= compareAgainst`      | one range delete (see below)         |
+| `GREATER_THAN_EQUAL`        | the suffix `>= compareAgainst`      | one range delete                     |
+| `LESS_THAN`, `GREATER_THAN` | the prefix `<` / suffix `>`         | one search per row removed           |
+| `EQUAL`                     | the key's row (a set: all its rows) | one search (a set: one range delete) |
+| `ALL`                       | every row (the map is reset)        | one reset                            |
+| `NONE`                      | nothing                             | none                                 |
 
 In a set, the rows of a key are all removed together under each condition.
 
@@ -647,6 +648,26 @@ multimapPredicate pred = {.condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
 if (multimapDeleteByPredicate(&m, &pred)) {
     printf("Trimmed all rows with key <= 100\n");
 }
+```
+
+### Range Deletion
+
+```c
+size_t multimapDeleteRange(multimap **m, const databox *lo, const databox *hi);
+```
+
+Every row whose key is in `[lo, hi]` is removed (a set's rows by their first
+element), and the count removed is returned. A NULL bound leaves that end
+open; `lo > hi` removes nothing. Each flex touched loses its rows in one
+move and an inner map wholly inside the range is freed whole, so the cost
+is one search plus the rows in the two edge flexes, never one search per
+row. A bound must not point into the map's own rows (copy such a key
+first): the delete moves them.
+
+```c
+databox lo = databoxNewSigned(100);
+databox hi = databoxNewSigned(199);
+size_t gone = multimapDeleteRange(&m, &lo, &hi); /* keys 100..199 */
 ```
 
 To remove rows by a test the conditions can't express, iterate and delete

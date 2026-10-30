@@ -4361,6 +4361,74 @@ void flexDeleteUpToInclusivePlusN(flex **ff, flexEntry *fe,
     flexDeleteUpToInclusive(ff, fe);
 }
 
+/* Delete every row of a sorted flex of 'elementsPerEntry'-entry rows whose
+ * key (the row's first entry) lies in [lo, hi] (a NULL bound: open at that
+ * end): one search for lo, one walk over the rows deleted, one move.
+ * 'middleEntry' is the flex's middle (as the sorted finds take it) and is
+ * stale afterwards.  Returns the rows deleted. */
+size_t flexDeleteSortedKeyRange(flex **ff, uint_fast32_t elementsPerEntry,
+                                const databox *lo, const databox *hi,
+                                const flexEntry *middleEntry) {
+    if (!*ff || flexCount(*ff) == 0 ||
+        (lo && hi && databoxCompare(lo, hi) > 0)) {
+        return 0;
+    }
+
+    flexEntry *const head = flexHead(*ff);
+    flexEntry *start = lo ? flexGetByTypeSortedWithMiddle(*ff, elementsPerEntry,
+                                                          lo, middleEntry)
+                          : head;
+
+    /* A set repeats a key across rows and the search may land on any of
+     * them: step back to the first row at or past lo */
+    while (lo && start != head) {
+        flexEntry *prev = start && flexEntryIsValid(*ff, start)
+                              ? start
+                              : nullptr; /* the end: the last row next */
+        if (!prev) {
+            prev = flexIndex(*ff, -(int32_t)elementsPerEntry);
+        } else {
+            for (uint_fast32_t i = 0; prev && i < elementsPerEntry; i++) {
+                prev = flexPrev(*ff, prev);
+            }
+        }
+
+        databox key;
+        databoxWide keyWide;
+        if (!prev) {
+            break;
+        }
+        flexGetByTypeInto(prev, &key, &keyWide);
+        if (databoxCompare(&key, lo) < 0) {
+            break;
+        }
+        start = prev;
+    }
+
+    size_t rows = 0;
+    for (flexEntry *fe = start; fe && flexEntryIsValid(*ff, fe);) {
+        if (hi) {
+            databox key;
+            databoxWide keyWide;
+            flexGetByTypeInto(fe, &key, &keyWide);
+            if (databoxCompare(&key, hi) > 0) {
+                break;
+            }
+        }
+
+        rows++;
+        for (uint_fast32_t i = 0; fe && i < elementsPerEntry; i++) {
+            fe = flexNext(*ff, fe);
+        }
+    }
+
+    if (rows) {
+        flexDeleteCount(ff, &start, (uint32_t)(rows * elementsPerEntry));
+    }
+
+    return rows;
+}
+
 flex *flexSplitRange(flex **const ff, const int32_t index, const uint32_t num) {
     flexEntry *fe;
     FLEX_INDEX(*ff, index, fe);
