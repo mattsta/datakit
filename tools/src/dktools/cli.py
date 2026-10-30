@@ -18,6 +18,7 @@ from . import (
     configure,
     countof,
     coverage,
+    deadsurface,
     defconst,
     docgaps,
     dropargs,
@@ -391,6 +392,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     sts.add_argument("headers", nargs="*", help="repo-relative public headers")
     sts.add_argument("--all", action="store_true", help="also list the data structs")
+
+    sub.add_parser(
+        "deadsurface",
+        help="list public settings fields and enum constants no library code "
+        "acts on: half-built features (a report: exit 0)",
+    )
 
     dg = sub.add_parser(
         "docgaps",
@@ -1499,6 +1506,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return handles.run(args.repo, tuple(args.headers), args.list)
     if args.command == "structs":
         return structs.run(args.repo, tuple(args.headers), args.all)
+    if args.command == "deadsurface":
+        return deadsurface.run(args.repo)
     if args.command == "headers":
         return headers.run(
             args.repo, tuple(args.paths), args.build, args.preset, args.jobs
