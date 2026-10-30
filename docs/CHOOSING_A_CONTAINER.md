@@ -18,17 +18,19 @@ of magnitude and as ratios between containers, not as guarantees.
 
 Throughput spans 1K to 1M elements and every element kind measured.
 
-| You need                                      | Use             | Operations per second                                     | Bytes per element                                    |
-| --------------------------------------------- | --------------- | --------------------------------------------------------- | ---------------------------------------------------- |
-| Values by position, fixed width               | multiarray      | 3-30M; reads to 190M while small                          | exactly the width                                    |
-| A queue or log: append, pop, iterate          | multilist       | 3-17M appends and pops                                    | 4-5 for small integers, width + 2 for strings        |
-| Key -> value, lookups only                    | multidict       | 1.2-16M reads, 0.6-4.5M writes                            | key + value + 6-11                                   |
-| Key -> value in key order (ranges, iteration) | multimap        | 0.5-3M, every operation                                   | key + value + 4-9 (the densest map)                  |
-| Members ranked by score                       | multiOrderedSet | 1.8-14M reads, 0.3-2M writes                              | member twice + score + ~20; over 40 bytes once + ~60 |
-| Integer membership, read-mostly               | intset          | 20-72M reads                                              | 2, 4 or 8, by the widest value                       |
-| Integer membership, write-heavy or large      | multiroar       | 2.7-7M sets, 37-56M reads (clustered values)              | under 1 when values cluster                          |
-| Many copies of the same values (interning)    | multimapAtom    | 1-2M interns (compact), 2-14M (fast); reads by id to 200M | value + 11-19 (compact), + 36-50 (fast)              |
-| Recency for a cache stored elsewhere          | multilru        | 16-92M                                                    | 14-23 per entry, no values                           |
+| You need                                              | Use             | Operations per second                                     | Bytes per element                                    |
+| ----------------------------------------------------- | --------------- | --------------------------------------------------------- | ---------------------------------------------------- |
+| Values by position, fixed width                       | multiarray      | 3-30M; reads to 190M while small                          | exactly the width                                    |
+| A queue or log: append, pop, iterate                  | multilist       | 3-17M appends and pops                                    | 4-5 for small integers, width + 2 for strings        |
+| Key -> value, lookups only                            | multidict       | 1.2-16M reads, 0.6-4.5M writes                            | key + value + 6-11                                   |
+| Key -> value in key order (ranges, iteration)         | multimap        | 0.5-3M, every operation                                   | key + value + 4-9 (the densest map)                  |
+| Members ranked by score                               | multiOrderedSet | 1.8-14M reads, 0.3-2M writes                              | member twice + score + ~20; over 40 bytes once + ~60 |
+| Integer membership, read-mostly                       | intset          | 20-72M reads                                              | 2, 4 or 8, by the widest value                       |
+| Integer membership, write-heavy or large              | multiroar       | 2.7-7M sets, 37-56M reads (clustered values)              | under 1 when values cluster                          |
+| Many copies of the same values (interning)            | multimapAtom    | 1-2M interns (compact), 2-14M (fast); reads by id to 200M | value + 11-19 (compact), + 36-50 (fast)              |
+| Recency for a cache stored elsewhere                  | multilru        | 16-92M                                                    | 14-23 per entry, no values                           |
+| A sorted map read far more than written               | coldmap         | 0.5-2M lookups, 50M rows scanned                          | records at a quarter to a sixth of a multimap's      |
+| A cache that keeps cold rows instead of dropping them | multitier       | the hot path is multidict's; a cold read about 0.1M       | hot rows as multidict, the rest as coldmap           |
 
 ## What the measurements show
 
@@ -117,6 +119,20 @@ multilru keeps only recency and weights per handle, at 14-23 bytes each.
 It stores no values, so it pairs with a container that does. Promotions,
 weight updates and deletes run at 16-92M/s, and weight updates reach
 440M/s while small.
+
+### Read-mostly and tiered maps: coldmap and multitier
+
+These two are measured by perfRegression (`coldmap`, `coldmapLimits`,
+`multitier`), not the matrix. coldmap keeps sorted rows in LZ4-compressed
+blocks: 100,000 record rows take 1.27 MB at the default 8 KB blocks
+against a multimap's 6 MB, with 2 us lookups (0.55 us at 1 KB blocks for
+2.48 MB) and 19 ns a row to scan; single-row writes cost about 5 us, sorted
+batches one recompression per block. multitier puts a multidict in front of
+a coldmap and a sink behind it: held to a quarter of the rows hot, the
+same 100,000 rows take 2.77 MB against 6.01 MB, reads of the hot tenth stay
+fast and a read from the cold level costs about 9 us. See
+[COLDMAP.md](modules/multi/COLDMAP.md) and
+[MULTITIER.md](modules/multi/MULTITIER.md).
 
 ## Measuring it yourself
 

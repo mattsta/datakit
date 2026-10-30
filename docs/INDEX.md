@@ -70,6 +70,8 @@ These containers use **scale-aware** implementations with small/medium/large var
 - [multilru](modules/multi/MULTILRU.md) - Least Recently Used cache
 - [multiroar](modules/multi/MULTIROAR.md) - Roaring bitmap implementation
 - [idRows](modules/multi/IDROWS.md) - Rows addressed by integer id, read and changed in place without a search
+- [coldmap](modules/multi/COLDMAP.md) - A sorted map in compressed blocks, for rows read far more than written
+- [multitier](modules/multi/MULTITIER.md) - A key-value map in hot (multidict), cold (coldmap) and sink levels
 - [Interning](modules/multi/ATOMS.md) - the atom table (multimapAtom): index, store and id choices, ids and references, measured costs
 
 #### Persistence

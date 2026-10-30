@@ -1160,7 +1160,7 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
 ## tune — size limits and load factors measured on this machine
 
 ```sh
-uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist,multimapAtom,multidict,flexSlack] \
+uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,multilist,multimapAtom,coldmap,multidict,flexSlack] \
     [--mix [NAME:]KEY=SHARE[,KEY=SHARE...]]... [--baseline N] [--slower PCT] \
     [--runs N] [--reuse]
 ```
@@ -1168,7 +1168,9 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
 - Builds HEAD plus the changed tracked paths with the perf preset under
   `ROOT/tune/NAME`, then runs perfRegression's sweeps `--runs` times:
   the size-limit sweeps (`<family>Limits`: every operation at every limit
-  from 256 B to 8 KB, 100,000 values, rows named `<op><limit>`) and
+  from 256 B to 8 KB, 100,000 values, rows named `<op><limit>`; coldmap's
+  `coldmapLimits` builds, looks up and scans 100,000 record rows at raw block
+  limits from 1 KB to 64 KB, its build row's bytes the coldmap) and
   multidict's load factor sweep (`multidictLimits`: 200% to 3200%, each
   operation summed over tables of 40k, 70k and 100k entries so a factor's
   numbers span a growth cycle; bytes are the tables' metered heap), and
@@ -1178,7 +1180,7 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   does not weigh bytes, so read the slack's byte changes too.
 - Everything is read against the baseline: the setting the plain
   constructors use today, each family's own (2048 for the size limits, 512
-  for the atom table's nodes, 800 for multidict, the compiled slack
+  for the atom table's nodes, 8192 for coldmap's blocks, 800 for multidict, the compiled slack
   percent for flexSlack; `--baseline` sets one for every family), marked
   `*`.
   `--slower PCT` (default 15) is how much slower a win may make a mix or
@@ -1212,7 +1214,8 @@ uv run --project tools dktools tune NAME [--families multimap,multiOrderedSet,mu
   ratio range) are kept in the work directory.
 - The call is `dkTierSetDefaultLimit` (`src/dkTierLimit.h`), which each
   family's plain constructor (`multimapNew`, `multiOrderedSetNew`,
-  `multilistNew`, every `multimapAtom` constructor) reads; for multidict,
+  `multilistNew`, every `multimapAtom` constructor, a coldmap made without a
+  raw limit) reads; for multidict,
   `multidictSetDefaultLoadFactors`
   (`src/multidict.h`), which `multidictNew` reads.
 

@@ -48,7 +48,9 @@ large gap after many deletes is what `Compact` closes.
 
 L is the size limit's byte cutoff (`flexOptimizationSizeLimit[limit]`).
 The plain constructors of multimap, multiOrderedSet and multilist read a
-process default per family, 2048 until changed:
+process default per family, 2048 until changed (the atom table's index,
+`DK_TIER_MULTIMAP_ATOM`, starts at 512; coldmap's blocks,
+`DK_TIER_COLDMAP`, at 8192, read by a coldmap made without a raw limit):
 
 ```c
 #include "dkTierLimit.h"

@@ -903,6 +903,9 @@ size_t multidictLRURepack(multidict *d);
 /* Presence without a use: an inspector for a caller about to name the
  * key in the operation it decides on */
 bool multidictExistsNoTouch(multidict *d, const databox *keybox);
+/* multidictFind as an inspector: the value, with no LRU use */
+bool multidictFindNoTouch(multidict *d, const databox *keybox,
+                          databox *valbox);
 
 void multidictSetEvictPolicy(multidict *d, multidictEvictPolicy policy);
 multidictEvictPolicy multidictGetEvictPolicy(multidict *d);

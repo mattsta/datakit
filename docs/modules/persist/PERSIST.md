@@ -476,9 +476,12 @@ Fenwick trees (`fenwick/fenwickPersist.h`) and `persistOpsMultiFenwick`,
 ones (see FENWICK.md), `persistOpsSegment<T>` for the typed segment trees
 (`segment/segmentPersist.h`; see SEGMENT.md), and `persistOpsMultimapAtom`,
 `persistOpsMultimapAtomDense`, `persistOpsStringPool` and `persistOpsAtomPool`
-for atom tables (`atomPersist.h`; see multimap/VARIANTS.md), and
-`persistOpsIdRows` for rows addressed by id (`idRows.h`; format and ops in
-`persist.h`).
+for atom tables (`atomPersist.h`; see multimap/VARIANTS.md),
+`persistOpsIdRows` for rows addressed by id (`idRows.h`), `persistOpsColdmap`
+for sorted maps in compressed blocks (`coldmap.h`; see multi/COLDMAP.md) and
+`persistOpsMultitier` for key-value maps in levels (`multitier.h`; see
+multi/MULTITIER.md); the last three describe their formats and ops in
+`persist.h`.
 
 ### Applying ops outside recovery
 

@@ -311,7 +311,17 @@ void mflexCloseShrink(mflex **mm, mflexState *state, flex *f);
 
 /* Close without compression attempt */
 void mflexCloseNoCompress(mflex **mm, mflexState *state, const flex *f);
+
+/* A read-only open for blocks from outside the process (restored,
+ * received): NULL when the block does not decompress whole */
+const flex *mflexOpenChecked(const mflex *m, mflexState *state);
 ```
+
+A compressed block this process made always decompresses to the size its
+header states; one that does not means memory is corrupt, and `mflexOpen`,
+`mflexOpenReadOnly` and every write path stop the process with
+`DK_DIAG_MFLEX_UNREADABLE` (DIAGNOSTICS.md). `mflexOpenChecked` is the form
+for bytes that came from outside: it reports nothing and returns NULL.
 
 ### Example: Manual Operations
 
@@ -399,6 +409,44 @@ mflexSetCompressNever(&coldData, state);  /* Disable initially */
 mflexSetCompressAuto(&coldData, state);   /* Try to compress */
 ```
 
+### Compress Policy
+
+Each state carries the policy its closes apply:
+
+```c
+/* Keep a block compressed only when that saves at least minSavingPercent
+ * (0-99) of its bytes; compress at LZ4 level 'level' (0 fast, 1-12 LZ4HC:
+ * smaller, slower to compress, the same to decompress).  A new state:
+ * 0% (any saving) at level 0.  False, unchanged, for a value out of
+ * range. */
+bool mflexStateSetPolicy(mflexState *state, uint8_t minSavingPercent,
+                         uint8_t level);
+void mflexStateGetPolicy(const mflexState *state, uint8_t *minSavingPercent,
+                         uint8_t *level);
+```
+
+A block that barely compresses (integer rows store at 87-92% of their flex
+size) pays a decompression on every open for little memory; a required
+saving keeps such blocks plain. Data written once and read often can take
+LZ4HC: on snapshot data LZ4 stores 39% and LZ4HC 9 24%.
+
+### State Statistics
+
+```c
+typedef struct mflexStateStats {
+    uint64_t decompressions;   /* opens of compressed blocks */
+    uint64_t plainOpens;       /* opens of plain ones */
+    uint64_t closesCompressed; /* closes that kept the block compressed */
+    uint64_t closesPlain;      /* closes left plain (policy or no gain) */
+    uint64_t bytesIn;          /* flex bytes the closes took in */
+    uint64_t bytesStored;      /* bytes they kept */
+} mflexStateStats;
+void mflexStateGetStats(const mflexState *state, mflexStateStats *out);
+```
+
+`bytesStored / bytesIn` is the ratio a store achieves, and
+`decompressions` against `plainOpens` how often its reads pay for it.
+
 ## Compression Behavior
 
 ### When Compression Happens
@@ -412,9 +460,10 @@ mflex attempts compression after:
 mflex does **not** compress if:
 
 - The type tag is `MFLEX_TYPE_NO_COMPRESS`
-- `flexConvertToCFlex` refuses or fails (below the 64-byte floor, above
-  LZ4's single-shot input maximum, or the result will not fit the buffer)
-- (grow path only) — nothing further; a successful compress is accepted
+- `flexConvertToCFlexLevel` refuses or fails (below the 64-byte floor,
+  above LZ4's single-shot input maximum, or the result does not fit the
+  budget: strictly smaller than the flex and saving the state's
+  `minSavingPercent`)
 - (shrink path only) the compressed result does not land in a **smaller
   allocator size class**
 
@@ -422,10 +471,15 @@ mflex does **not** compress if:
 
 The two close paths do not apply the same test.
 
+Both paths give LZ4 a byte budget: the compressed form must be strictly
+smaller than the flex and save the state's `minSavingPercent`, so a block
+that does not compress that far fails inside LZ4 and stays plain (one
+pass, no second attempt).
+
 ```c
 /* mflexCloseGrow — grew the flex, so compress into the state's
- * compression buffer (growing that buffer first if needed) and accept
- * any successful compression. */
+ * compression buffer (growing that buffer first if needed) within the
+ * policy's budget, at the policy's level. */
 if (type == MFLEX_TYPE_NO_COMPRESS) {
     return mflexCloseNoCompress(...);
 }
@@ -434,7 +488,8 @@ if (STATE_COMPRESSED_SIZE < flexBytes(f)) {
     grow STATE_COMPRESSED to jebufSizeAllocation(flexBytes(f));
 }
 
-if (flexConvertToCFlex(f, STATE_COMPRESSED, STATE_COMPRESSED_SIZE)) {
+if (flexConvertToCFlexLevel(f, STATE_COMPRESSED, budget(flexBytes(f)),
+                            level)) {
     swap the buffer into *mm, shrink it to cflexBytes(), tag CFLEX;
     the old *mm buffer becomes the state's new scratch (no free/malloc)
 } else {
@@ -444,9 +499,11 @@ if (flexConvertToCFlex(f, STATE_COMPRESSED, STATE_COMPRESSED_SIZE)) {
 
 ```c
 /* mflexCloseShrink — shrank the flex, so try to compress back INTO the
- * mflex's existing allocation, and only keep the result if it buys a
- * smaller allocator size class. */
-if (flexConvertToCFlex(f, mfc(*mm), mflexBytesActual(*mm)) &&
+ * mflex's existing allocation (within the budget), and only keep the
+ * result if it buys a smaller allocator size class. */
+if (flexConvertToCFlexLevel(f, mfc(*mm),
+                            min(budget(flexBytes(f)), mflexBytesActual(*mm)),
+                            level) &&
     jebufUseNewAllocation(flexBytes(f), mflexBytesActual(*mm))) {
     tag CFLEX
 } else {
@@ -874,8 +931,10 @@ Using low 2 bits for tags (pointers are always 4-byte aligned):
 **LZ4 Integration**:
 Uses LZ4 from the flex/cflex layer:
 
-- `flexConvertToCFlex()` - compress flex to cflex
-- `cflexConvertToFlex()` - decompress cflex to flex
+- `flexConvertToCFlex()` / `flexConvertToCFlexLevel()` - compress flex to
+  cflex (LZ4, or LZ4HC at levels 1-12)
+- `cflexConvertToFlex()` - decompress cflex to flex (false unless the
+  entries come back whole)
 
 **Use Cases**:
 
