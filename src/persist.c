@@ -393,10 +393,34 @@ persistConfig persistDefaultConfig(void) {
  * ============================================================================
  */
 
+/* Whether a writer may use checksum 't': every artifact carries an
+ * integrity check, so NONE is only for builds made with the insecure test
+ * gate (and an unknown value is never) */
+static bool persistChecksumWritable_(persistChecksum t) {
+    switch (t) {
+    case PERSIST_CHECKSUM_NONE:
+#ifdef DATAKIT_ENABLE_INSECURE_TEST_ALGOS
+        return true;
+#else
+        return false;
+#endif
+    case PERSIST_CHECKSUM_XXH64:
+    case PERSIST_CHECKSUM_XXH3_64:
+    case PERSIST_CHECKSUM_XXH3_128:
+    case PERSIST_CHECKSUM_BLAKE3_KEYED:
+    case PERSIST_CHECKSUM_HMAC_SHA256:
+    case PERSIST_CHECKSUM_HMAC_BLAKE3:
+        return true;
+    }
+    return false;
+}
+
 persist *persistCreate(const persistOps *ops, const persistConfig *config) {
-    /* A descriptor states the format it writes and reads */
+    /* A descriptor states the format it writes and reads, and the
+     * configuration names a checksum a write can use */
     if (!ops || ops->formatVersion == 0 ||
-        ops->minReadVersion > ops->formatVersion) {
+        ops->minReadVersion > ops->formatVersion ||
+        (config && !persistChecksumWritable_(config->checksumType))) {
         return nullptr;
     }
 
@@ -674,7 +698,7 @@ static bool persistCheckFileFormat(persist *p, const dkFormatSpec *container,
 }
 
 bool persistSetConfig(persist *p, const persistConfig *config) {
-    if (!p || !config) {
+    if (!p || !config || !persistChecksumWritable_(config->checksumType)) {
         return false;
     }
 
@@ -6544,6 +6568,40 @@ int persistTest(int, char *[]) {
         persistClose(p);
     }
 
+    TEST("a checksum no write can use is refused at create and set") {
+        /* Every artifact carries an integrity check: NONE (outside the
+         * insecure test build) and unknown values never configure */
+        persistConfig none = persistDefaultConfig();
+        none.checksumType = PERSIST_CHECKSUM_NONE;
+        persistConfig unknown = persistDefaultConfig();
+        unknown.checksumType = (persistChecksum)99;
+#ifndef DATAKIT_ENABLE_INSECURE_TEST_ALGOS
+        persist *refused = persistCreate(&persistOpsFlex, &none);
+        if (refused) {
+            ERR("a NONE checksum configured a persist");
+            persistClose(refused);
+        }
+#endif
+        persist *unknownP = persistCreate(&persistOpsFlex, &unknown);
+        if (unknownP) {
+            ERR("an unknown checksum configured a persist");
+            persistClose(unknownP);
+        }
+
+        persist *p = persistCreate(&persistOpsFlex, nullptr);
+        persistConfig after = {};
+        persistGetConfig(p, &after);
+        if (persistSetConfig(p, &unknown) ||
+#ifndef DATAKIT_ENABLE_INSECURE_TEST_ALGOS
+            persistSetConfig(p, &none) ||
+#endif
+            (persistGetConfig(p, &after),
+             after.checksumType != PERSIST_CHECKSUM_XXH64)) {
+            ERR("set took a checksum no write can use");
+        }
+        persistClose(p);
+    }
+
     TEST("only REPLACE and OPAQUE_SET rows carry a whole value") {
         for (uint16_t op = 0; op < 64; op++) {
             const bool whole =
@@ -11144,7 +11202,7 @@ int persistTest(int, char *[]) {
         if (!persistSetConfig(p, &config)) {
             ERR("SetConfig refused a new buffer size");
         }
-        persistConfig back;
+        persistConfig back = {};
         persistGetConfig(p, &back);
         if (back.walBufferSize != 16) {
             ERR("GetConfig does not report the new buffer size");

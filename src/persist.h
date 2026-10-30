@@ -686,7 +686,9 @@ struct persistWALEntry {
  * ============================================================================
  */
 
-/* Create persistence context for a data structure */
+/* Create persistence context for a data structure (NULL config: the
+ * defaults).  NULL for a configuration whose checksumType no write can
+ * use: NONE (outside insecure test builds) or an unknown value. */
 persist *persistCreate(const persistOps *ops, const persistConfig *config);
 
 /* Attach storage backends (snapshot and WAL can be different) */
@@ -701,7 +703,8 @@ const persistOps *persistGetOps(const persist *p);
 
 /* Configuration.  A change of walBufferSize first writes out the buffered
  * WAL bytes; when that write fails persistSetConfig returns false and
- * keeps the old configuration. */
+ * keeps the old configuration.  It refuses (false, unchanged) a
+ * checksumType persistCreate refuses. */
 persistConfig persistDefaultConfig(void);
 bool persistSetConfig(persist *p, const persistConfig *config);
 void persistGetConfig(const persist *p, persistConfig *config);
