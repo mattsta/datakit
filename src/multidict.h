@@ -572,6 +572,17 @@ multidictEvictPolicy multidictGetEvictPolicy(multidict *d);
 void multidictTouch(multidict *d, const databox *keybox);
 int multidictGetLRULevel(multidict *d, const databox *keybox);
 
+/* The use history, for saving and restoring it: multidictLRUWalk visits
+ * every tracked key coldest first (level 0 oldest to newest, then level
+ * 1, ...) with its level, until 'visit' returns false; it returns the keys
+ * visited (the key is borrowed for the call).  multidictLRUPlace makes a
+ * tracked key the newest of 'level', moving no other key: placing keys
+ * in a walk's order rebuilds that order exactly.  False when the key is
+ * not tracked or the level is past the LRU's. */
+typedef bool multidictLRUVisitFn(void *ctx, const databox *key, uint32_t level);
+size_t multidictLRUWalk(multidict *d, multidictLRUVisitFn *visit, void *ctx);
+bool multidictLRUPlace(multidict *d, const databox *keybox, uint32_t level);
+
 /* Whether 'keybox' is present, as an inspector: no LRU use (for a caller
  * that names the key in the operation it decides on) */
 bool multidictExistsNoTouch(multidict *d, const databox *keybox);

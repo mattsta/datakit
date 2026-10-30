@@ -1060,6 +1060,18 @@ void multilruDecrease(multilru *mlru, multilruPtr ptr) {
     mlruBalanceDown_(mlru, level - 1);
 }
 
+bool multilruPlace(multilru *mlru, multilruPtr ptr, size_t level) {
+    const uint64_t idx = ptr;
+    if (idx == 0 || idx >= mlru->capacity || !E_POPULATED(mlru, idx) ||
+        E_HEAD(mlru, idx) || level >= mlru->maxLevels) {
+        return false;
+    }
+
+    removeFromList(mlru, idx);
+    insertAtLevelHead(mlru, idx, level);
+    return true;
+}
+
 multilruPtr multilruPeekMinimum(const multilru *mlru) {
     return mlruVictim_(mlru);
 }
@@ -5380,6 +5392,49 @@ int multilruTest(int, char *[]) {
                 ERR("step %zu (op %u): order differs from the model", step, op);
                 break;
             }
+        }
+    }
+
+    TEST("placing entries oldest first rebuilds a recorded order, moving "
+         "nothing else") {
+        cleaner(multilruFree) multilru *live = multilruNewWithLevels(4);
+        multilruPtr h[40];
+        for (size_t i = 0; i < 40; i++) {
+            h[i] = multilruInsert(live);
+        }
+        uint64_t rng = 0xB1ACE;
+        for (size_t i = 0; i < 200; i++) {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            multilruIncrease(live, h[rng % 40]);
+        }
+
+        /* The same handles, placed in the live order coldest first */
+        multilruPtr order[40];
+        const size_t n = multilruCollectLowest(live, order, 40);
+        cleaner(multilruFree) multilru *back = multilruNewWithLevels(4);
+        for (size_t i = 0; i < 40; i++) {
+            (void)multilruInsert(back);
+        }
+        multilruStats before;
+        multilruGetStats(back, &before);
+        for (size_t i = 0; i < n; i++) {
+            if (!multilruPlace(back, order[i],
+                               multilruGetLevel(live, order[i]))) {
+                ERR("placing %zu refused", i);
+            }
+        }
+        multilruPtr got[40];
+        multilruStats after;
+        multilruGetStats(back, &after);
+        if (multilruCollectLowest(back, got, 40) != n ||
+            memcmp(got, order, n * sizeof(*got)) != 0 ||
+            after.promotions != before.promotions ||
+            after.demotions != before.demotions ||
+            multilruPlace(back, order[0], 4) || multilruPlace(back, 0, 0)) {
+            ERR("%s", "placed order differs, or a placement counted or "
+                      "a bad one was taken");
         }
     }
 

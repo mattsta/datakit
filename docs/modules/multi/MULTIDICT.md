@@ -907,6 +907,15 @@ bool multidictExistsNoTouch(multidict *d, const databox *keybox);
 bool multidictFindNoTouch(multidict *d, const databox *keybox,
                           databox *valbox);
 
+/* The use history: every tracked key coldest first with its level, and
+ * placing a key as the newest of a level (placing keys in a walk's order
+ * rebuilds it exactly).  Snapshots record it: a restored dict evicts in
+ * the order the live one would. */
+typedef bool multidictLRUVisitFn(void *ctx, const databox *key,
+                                 uint32_t level);
+size_t multidictLRUWalk(multidict *d, multidictLRUVisitFn *visit, void *ctx);
+bool multidictLRUPlace(multidict *d, const databox *keybox, uint32_t level);
+
 void multidictSetEvictPolicy(multidict *d, multidictEvictPolicy policy);
 multidictEvictPolicy multidictGetEvictPolicy(multidict *d);
 

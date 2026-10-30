@@ -4925,6 +4925,45 @@ static int mdPersistPairCompare_(const void *a, const void *b) {
     return databoxCompare((const databox *)&pa->key, (const databox *)&pb->key);
 }
 
+/* The use history a snapshot records: per tracked key, coldest first, its
+ * index among the sorted pairs and its LRU level */
+defcleanerName(void *, zfree, MdLruAt);
+defcleanerName(flexEntry **, zfree, MdKeyAt);
+defcleanerName(uint8_t *, zfree, MdSeen);
+
+typedef struct mdPersistLRU_ {
+    mdPersistPair **order; /* the pairs, sorted by key */
+    size_t pairs;
+    struct {
+        uint64_t index;
+        uint32_t level;
+    } *at;
+    size_t count;
+} mdPersistLRU_;
+
+static bool mdPersistLRUVisit_(void *ctx, const databox *key, uint32_t level) {
+    mdPersistLRU_ *lru = ctx;
+    size_t lo = 0;
+    size_t hi = lru->pairs;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        const int cmp =
+            databoxCompare((const databox *)&lru->order[mid]->key, key);
+        if (cmp == 0) {
+            lru->at[lru->count].index = mid;
+            lru->at[lru->count].level = level;
+            lru->count++;
+            return lru->count < lru->pairs;
+        }
+        if (cmp < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return true; /* tracked but not among the pairs: not recorded */
+}
+
 static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     const multidict *d = structure;
 
@@ -4983,6 +5022,27 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
         multidictIteratorRelease(&iter);
     }
     qsort(order, got, sizeof(*order), mdPersistPairCompare_);
+
+    /* With LRU tracking, the use history before the pairs: the number of
+     * tracked keys, then coldest first each key's place in the sorted
+     * pairs and its level */
+    if (multidictLRULevels(d)) {
+        mdPersistLRU_ lru = {.order = order, .pairs = got};
+        cleanerName(zfree, MdLruAt) void *atBuf =
+            zcalloc(got ? got : 1, sizeof(*lru.at));
+        lru.at = atBuf;
+        multidictLRUWalk((multidict *)d, mdPersistLRUVisit_, &lru);
+        flexRow history = FLEX_ROW_INIT;
+        flexRowUnsigned(&history, lru.count);
+        flexRowAppendExact(&f, &history);
+        for (size_t i = 0; i < lru.count; i++) {
+            flexRow placed = FLEX_ROW_INIT;
+            flexRowUnsigned(&placed, lru.at[i].index);
+            flexRowUnsigned(&placed, lru.at[i].level);
+            flexRowAppendExact(&f, &placed);
+        }
+    }
+
     for (size_t i = 0; i < got; i++) {
         const databox *pair[2] = {(const databox *)&order[i]->key,
                                   (const databox *)&order[i]->val};
@@ -5015,9 +5075,9 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
 
-    /* The key-matching element, the hash seed and the settings, then whole
-     * pairs */
-    if (count < 2 + MD_PERSIST_SETTINGS || (count - MD_PERSIST_SETTINGS) % 2) {
+    /* The key-matching element, the hash seed and the settings, the use
+     * history (with LRU tracking), then whole pairs */
+    if (count < 2 + MD_PERSIST_SETTINGS) {
         return nullptr;
     }
     databox tag = {};
@@ -5048,6 +5108,25 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         return nullptr;
     }
     count -= 2 + MD_PERSIST_SETTINGS;
+
+    /* The use history: each tracked key coldest first, as its index among
+     * the pairs and its level (each index once, levels within the LRU) */
+    uint64_t placed = 0;
+    flexEntry *history = nullptr;
+    if (s[7]) {
+        if (!count || !flexReadUnsigned(f, &fe, &placed) ||
+            placed > (count - 1) / 4) {
+            return nullptr;
+        }
+        history = fe;
+        for (uint64_t i = 0; i < 2 * placed; i++) {
+            fe = flexNext(f, fe);
+        }
+        count -= 1 + 2 * placed;
+    }
+    if (count % 2 || placed > count / 2) {
+        return nullptr;
+    }
 
     multidictType *type;
     if (want) {
@@ -5091,11 +5170,18 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         multidictExpand(d, count / 2);
     }
 
-    /* Iterate through flex and add each key-value pair */
+    /* Iterate through flex and add each key-value pair, keeping where
+     * each key is for the history */
+    const size_t pairs = count / 2;
+    cleanerName(zfree, MdKeyAt) flexEntry **keyAt =
+        placed ? zcalloc(pairs, sizeof(*keyAt)) : nullptr;
     for (size_t i = 0; i + 1 < count; i += 2) {
         databoxBig key, val; /* room for 96/128-bit keys and values */
 
         /* Get key */
+        if (keyAt) {
+            keyAt[i / 2] = fe;
+        }
         flexGetByTypeBig(fe, &key);
         fe = flexNext(f, fe);
 
@@ -5105,6 +5191,25 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
 
         /* Add to multidict (its default class never refuses) */
         multidictPut(d, (databox *)&key, (databox *)&val);
+    }
+
+    /* Coldest first, each key placed as the newest of its level */
+    cleanerName(zfree, MdSeen) uint8_t *seen =
+        placed ? zcalloc(pairs, sizeof(*seen)) : nullptr;
+    for (uint64_t i = 0; i < placed; i++) {
+        uint64_t index;
+        uint64_t level;
+        databoxBig key;
+        if (!flexReadUnsigned(f, &history, &index) ||
+            !flexReadUnsigned(f, &history, &level) || index >= pairs ||
+            seen[index] || level >= s[7]) {
+            multidictFree(d);
+            multidictDefaultClassFree(qdc);
+            return nullptr;
+        }
+        seen[index] = 1;
+        flexGetByTypeBig(keyAt[index], &key);
+        multidictLRUPlace(d, (const databox *)&key, (uint32_t)level);
     }
 
     multidictSetMaxMemory(d, s[2]);
@@ -5583,8 +5688,7 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         .policy = (multilruPolicy)policy,
         .evictStrategy = (multilruEvictStrategy)strategy,
         .enableWeights = weights,
-        /* entries placed at their recorded levels; the setting after */
-        .unboundedLevels = true,
+        .unboundedLevels = flags & 2,
     };
     cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
     if (!mlru) {
@@ -5633,20 +5737,10 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         }
     }
 
-    /* Coldest first, move each entry to the head of its level, so each
-     * level ends newest at its head as recorded: Increase lands at the
-     * head of the next level (re-heads at the top one), Decrease at the
-     * head of the one below */
-    const uint64_t top = maxLevels - 1;
+    /* Coldest first, each entry placed as the newest of its level, so each
+     * level ends in its recorded order (placement moves nothing else) */
     for (uint64_t i = 0; i < entries; i++) {
-        const uint64_t raises =
-            levelOf[i] == top ? (top ? top : 1) : levelOf[i] + 1u;
-        for (uint64_t l = 0; l < raises; l++) {
-            multilruIncrease(mlru, order[i]);
-        }
-        if (levelOf[i] != top) {
-            multilruDecrease(mlru, order[i]);
-        }
+        multilruPlace(mlru, order[i], levelOf[i]);
     }
 
     /* Free the holes so the first recorded is reused first: each delete
@@ -5666,7 +5760,6 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         multilruDelete(mlru, holes[i - 1]);
     }
 
-    multilruSetUnboundedLevels(mlru, flags & 2);
     multilruSetAutoEvict(mlru, !(flags & 4));
     /* @own: caller; free=multilruFree */
     multilru *out = mlru;

@@ -47,6 +47,9 @@ Level 0 (coldest)  ------>  [MRU] <- entries <- [LRU] --> EVICT
   ages back down as newer ones climb past it.
   `unboundedLevels` (config, or `multilruSetUnboundedLevels`) turns the
   shares off: entries then keep the level their uses reached
+- multilruPlace() puts an entry as the newest of a given level and moves
+  nothing else (no share applied, nothing counted): placing entries oldest
+  first rebuilds a recorded order, as a restore does
 - multilruRemoveMinimum() demotes the coldest entry to level-1,
   or truly evicts it when it is already at level 0
 ```

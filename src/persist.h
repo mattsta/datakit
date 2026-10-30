@@ -1266,13 +1266,15 @@ extern const persistOps persistOpsMultiroar;
 extern const persistOps persistOpsHyperloglog;
 extern const persistOps persistOpsMultilist;
 extern const persistOps persistOpsMultimap;
-/* persistOpsMultidict snapshots record how the dict's keys match:
- * nothing for multidictTypeExactKey (the original layout), a tag for
- * multidictTypeCaseKey and another for any other type.  Its restore
- * rebuilds an exact or case dict from the record (a snapshot without one
- * restores exact, as it always did) and refuses one written by a dict
- * with a custom type, which it cannot rebuild: restoring it under other
- * key matching would merge or split keys.  To persist a dict with a
+/* persistOpsMultidict snapshots record how the dict's keys match (a tag
+ * for multidictTypeExactKey, for multidictTypeCaseKey and for any other
+ * type), the hash seed, the settings, and with LRU tracking the use
+ * history (the tracked keys coldest first, each as its index among the
+ * pairs and its level), then the pairs in key order.  A restore rebuilds
+ * an exact or case dict, with the use history placed exactly
+ * (multidictLRUPlace), and refuses one written by a dict with a custom
+ * type, which it cannot rebuild: restoring it under other key matching
+ * would merge or split keys.  To persist a dict with a
  * custom type, use a copy of persistOpsMultidict whose .restore calls
  * multidictPersistRestoreAs with that type; it too refuses a snapshot
  * written by a dict of another kind (exact, case or custom). */
@@ -1300,11 +1302,18 @@ extern const persistOps persistOpsIdRows;
 
 /* persistOpsColdmap (coldmap.c), format 1:
  *   snapshot: flex [elementsPerEntry, raw limit (a flexCapSizeLimit),
- *             stored target, required saving, LZ4 level, then every row
- *             in key order, stored exactly]
- *   restore:  refuses a config out of range and rows that are not whole
- *             or whose keys do not strictly ascend; blocks are packed
- *             and compressed again, as coldmapNewFromDump does.
+ *             stored target, required saving, LZ4 level, block count,
+ *             then per block in key order: compressed (0 or 1), the
+ *             block's bytes as kept (one BYTES entry: the compressed
+ *             form, or the flex of its rows)]
+ *   restore:  keeps every block as it was stored, never packed or
+ *             compressed again, so the restored coldmap has the same
+ *             blocks, bytes and totals.  Refuses a config out of range,
+ *             a block count that does not match the entries, a block
+ *             that does not open whole (a compressed one through
+ *             mflexOpenChecked, a plain one as flexValidateBufferDeep
+ *             checks), holds no row or a partial row, or whose keys do
+ *             not strictly ascend from past the block before's last key.
  *   WAL:
  *     INSERT      [row elements...]       coldmapInsert (args: const
  *                                         databox *const *)

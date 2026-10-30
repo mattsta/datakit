@@ -342,6 +342,28 @@ static bool verifyMultidictMatchesTracker(multidictP *d,
     return true;
 }
 
+/* A walk's keys and levels in order, each as a hash of both (two walks
+ * are the same when their sequences are) */
+typedef struct mdTestWalk_ {
+    uint64_t at[512];
+    size_t count;
+} mdTestWalk_;
+
+static bool mdTestWalkVisit_(void *ctx, const databox *key, uint32_t level) {
+    mdTestWalk_ *w = ctx;
+    uint64_t h = 1469598103934665603ULL ^ level;
+    for (size_t i = 0; i < key->len; i++) {
+        h = (h ^ key->data.bytes.start[i]) * 1099511628211ULL;
+    }
+    if (w->count < 512) {
+        w->at[w->count] = h;
+    }
+    w->count++;
+    return true;
+}
+
+defcleanerName(uint8_t *, zfree, MdSnap);
+
 int multidictPTest(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
@@ -349,6 +371,57 @@ int multidictPTest(int, char *[]) {
     if (!dkTestTmpDirPath(&tmp, "multidictPTest", basePath, sizeof(basePath))) {
         ERR("could not create a scratch directory: %s", strerror(errno));
         return err;
+    }
+
+    TEST("a snapshot keeps the use history: the restored dict walks the same "
+         "keys coldest first at the same levels") {
+        cleaner(multidictDefaultClassFree) multidictClass *qdc =
+            multidictDefaultClassNew();
+        cleaner(multidictFree) multidict *live =
+            multidictNew(&multidictTypeExactKey, qdc, 42);
+        multidictEnableLRU(live, 4);
+        char key[24];
+        for (uint64_t i = 0; i < 300; i++) {
+            const int n = snprintf(key, sizeof(key), "k%04" PRIu64, i);
+            const databox k = databoxNewBytes(key, (size_t)n);
+            const databox v = databoxNewSigned((int64_t)i);
+            multidictPut(live, &k, &v);
+        }
+        uint64_t rng = 0xD1C7;
+        for (size_t i = 0; i < 1500; i++) {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            const int n = snprintf(key, sizeof(key), "k%04" PRIu64,
+                                   (rng % 300) * ((rng >> 40) % 3 ? 1 : 0));
+            const databox k = databoxNewBytes(key, (size_t)n);
+            databox v = {};
+            multidictFind(live, &k, &v);
+        }
+
+        size_t len = 0;
+        cleanerName(zfree, MdSnap) uint8_t *snap =
+            persistOpsMultidict.snapshot(live, &len);
+        multidict *back =
+            snap ? persistOpsMultidict.restore(snap, len) : nullptr;
+        size_t againLen = 0;
+        cleanerName(zfree, MdSnap) uint8_t *again =
+            back ? persistOpsMultidict.snapshot(back, &againLen) : nullptr;
+        mdTestWalk_ want = {};
+        mdTestWalk_ got = {};
+        multidictLRUWalk(live, mdTestWalkVisit_, &want);
+        if (back) {
+            multidictLRUWalk(back, mdTestWalkVisit_, &got);
+        }
+        if (!back || againLen != len || memcmp(snap, again, len) != 0 ||
+            want.count != 300 || got.count != want.count ||
+            memcmp(want.at, got.at, sizeof(want.at)) != 0) {
+            ERR("use history lost: %zu keys walked live, %zu restored",
+                want.count, got.count);
+        }
+        if (back) {
+            persistOpsMultidict.free(back);
+        }
     }
 
     TEST("multidictP create empty and close") {

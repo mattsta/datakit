@@ -31,6 +31,7 @@
 /* Fixed-width string buffer used by test bulk-insert scratch allocations. */
 typedef char multidictTestBuf32[32];
 defcleanerName(databox *, zfree, Databoxes);
+defcleanerName(multilruPtr *, zfree, MdLruPtrs);
 defcleanerName(multidictTestBuf32 *, zfree, Buf32);
 #endif
 
@@ -2842,6 +2843,44 @@ static void mdLRUMoved_(multilruPtr from, multilruPtr to, void *ctx) {
     lruKeyRef *refs = (lruKeyRef *)d->lruPtrToKey;
     refs[to] = refs[from];
     refs[from].valid = 0;
+}
+
+size_t multidictLRUWalk(multidict *d, multidictLRUVisitFn *visit, void *ctx) {
+    if (!d || !d->lruEnabled || !d->lru) {
+        return 0;
+    }
+
+    const size_t n = multilruCount(d->lru);
+    if (!n) {
+        return 0;
+    }
+    cleanerName(zfree, MdLruPtrs) multilruPtr *order =
+        zcalloc(n, sizeof(*order));
+    const size_t got = multilruCollectLowest(d->lru, order, n);
+    size_t visited = 0;
+    for (size_t i = 0; i < got; i++) {
+        databox keybox = {};
+        databoxWide wide;
+        if (!multidictLRUKeyOf(d, order[i], &keybox, &wide)) {
+            continue;
+        }
+        visited++;
+        if (!visit(ctx, &keybox,
+                   (uint32_t)multilruGetLevel(d->lru, order[i]))) {
+            break;
+        }
+    }
+    return visited;
+}
+
+bool multidictLRUPlace(multidict *d, const databox *keybox, uint32_t level) {
+    if (!d || !d->lruEnabled || !keybox) {
+        return false;
+    }
+
+    databox ptrBox = {};
+    return multidictFindNoTouch_(d->lruKeyToPtr, keybox, &ptrBox) &&
+           multilruPlace(d->lru, (multilruPtr)ptrBox.data.u64, level);
 }
 
 size_t multidictLRURepack(multidict *d) {

@@ -307,6 +307,13 @@ void multilruDelete(multilru *mlru, multilruPtr ptr);
  * invalid pointer.  For replaying a logged demotion. */
 void multilruDecrease(multilru *mlru, multilruPtr ptr);
 
+/* Place an entry as the newest of level 'level' (below maxLevels), moving
+ * nothing else: no level share is applied and no promotion or demotion is
+ * counted.  For restoring a recorded order: placing entries oldest first
+ * rebuilds each level's order.  False, nothing moved, for an invalid
+ * pointer or level. */
+bool multilruPlace(multilru *mlru, multilruPtr ptr, size_t level);
+
 /* The entry multilruRemoveMinimum would take next under the current
  * strategy and limits (0 when empty): it demotes it when multilruGetLevel
  * > 0 and evicts it at level 0.  Lets a writer log an eviction step before
