@@ -14,10 +14,11 @@ time), is built with the compiler's perf preset under
 ``DK_PERF_MODULES`` set to ``--modules``, watched by the platform's
 sampling profiler:
 
-- macOS: ``sample PID`` (part of the base system), attached once the run
-  starts and stopped once its work is done, while the process holds at
-  exit (``DK_PROFILE_HOLD_FDS``: sample writes its report from a live
-  process); its report is read back;
+- macOS: ``sample PID`` (part of the base system), which takes a moment
+  to start and reads stacks from a live process: the run holds at start
+  until it is sampling (``DK_PROFILE_HOLD_FDS``) and at exit until it
+  has reported (the sampler is stopped while the process lives), and
+  the holds' own frames are left out; the report is read back;
 - Linux: ``perf record -g``, read back with ``perf script``.
 
 The recording stays in the work directory.  Printed (and written to
@@ -38,6 +39,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,11 +49,14 @@ from .gitutil import ToolError
 
 #: how long ``sample`` may take to finish once the run has ended
 SAMPLE_GRACE = 60.0
+#: seconds ``sample`` takes to start sampling, before the run is let go
+SAMPLE_START = 1.5
+#: frames of the run's own waiting (datakit-test.c's profile hold),
+#: left out of the profile with everything under them
+SAMPLE_HOLD_FRAMES = ("profileHoldAtExit_", "profileHoldSetup_")
 
 #: a call-graph line of a ``sample`` report: tree marks, a count, a name
 _SAMPLE_NODE = re.compile(r"^(?P<lead>[ +!:|]*)(?P<count>\d+) (?P<name>.*?)(  \(in |$)")
-#: a "Sort by top of stack" line: a name, its library, a count
-_SAMPLE_TOP = re.compile(r"^\s+(?P<name>.*?)  \(in .*?\)\s+(?P<count>\d+)\s*$")
 
 
 @dataclass
@@ -88,46 +93,69 @@ class Samples:
         for name in set(stack):
             self.inclusive[name] += weight
 
+    def merge(self, other: Samples) -> None:
+        """Add another recording's samples (one profile from many reports)"""
+        self.total += other.total
+        self.self_weight.update(other.self_weight)
+        self.inclusive.update(other.inclusive)
 
-def parse_sample(text: str) -> Samples:
-    """The samples of a macOS ``sample`` report.
 
-    Inclusive weights come from its call graph, a tree whose lines are
-    indented by tree marks and carry the samples under that node: a node
-    counts unless the same function is already above it on its path.
-    The total is the threads' root counts.  Self weights come from its
-    "Sort by top of stack" list."""
+def parse_sample(text: str, exclude: tuple[str, ...] = ()) -> Samples:
+    """The samples of a macOS ``sample`` report, read from its call graph:
+    a tree whose lines are indented by tree marks and carry the samples
+    under that node.  A node's self weight is its count less its
+    children's; it counts inclusively unless the same function is already
+    above it on its path.  The total is the threads' root counts.  A node
+    named in 'exclude' leaves the profile with everything under it (its
+    count comes off every node above it): a run's own waiting, such as the
+    profile hold at exit."""
     samples = Samples()
-    section = None
-    path: list[tuple[int, str]] = []
+    in_graph = False
+    # open nodes, outermost first: [depth, name, count, children's count]
+    path: list[list] = []
+    skip_below: int | None = None
+
+    def close(node: list) -> None:
+        depth, name, count, children = node
+        if name.startswith("Thread_"):
+            samples.total += count
+            return
+        if count - children > 0:
+            samples.self_weight[name] += count - children
+        if count > 0 and name not in {n[1] for n in path}:
+            samples.inclusive[name] += count
+
     for line in text.splitlines():
         if line.startswith("Call graph:"):
-            section = "graph"
+            in_graph = True
             continue
-        if line.startswith("Sort by top of stack"):
-            section = "top"
+        if not in_graph:
             continue
         if not line.strip():
-            section = None
+            break
+        m = _SAMPLE_NODE.match(line)
+        if not m:
             continue
-        if section == "graph":
-            m = _SAMPLE_NODE.match(line)
-            if not m:
-                continue
-            depth = len(m.group("lead"))
-            count = int(m.group("count"))
-            name = m.group("name").strip()
-            while path and path[-1][0] >= depth:
-                path.pop()
-            if name.startswith("Thread_"):
-                samples.total += count
-            elif name not in {n for _, n in path}:
-                samples.inclusive[name] += count
-            path.append((depth, name))
-        elif section == "top":
-            m = _SAMPLE_TOP.match(line)
-            if m:
-                samples.self_weight[m.group("name").strip()] += int(m.group("count"))
+        depth = len(m.group("lead"))
+        if skip_below is not None and depth > skip_below:
+            continue
+        skip_below = None
+        while path and path[-1][0] >= depth:
+            close(path.pop())
+        count = int(m.group("count"))
+        name = m.group("name").strip()
+        if name in exclude:
+            for i, node in enumerate(path):
+                node[2] -= count
+                if i < len(path) - 1:
+                    node[3] -= count
+            skip_below = depth
+            continue
+        if path:
+            path[-1][3] += count
+        path.append([depth, name, count, 0])
+    while path:
+        close(path.pop())
     return samples
 
 
@@ -177,17 +205,19 @@ def _fail(name: str, what: str, log: Path) -> int:
 
 def _record_sample(
     name: str, command: list[str], work: Path, cwd: Path, env: dict[str, str]
-) -> tuple[int, Path]:
-    """macOS: the run, with ``sample`` attached to it until it ends; the
-    exit code and the report"""
-    report = work / "sample.txt"
+) -> tuple[int, list[Path]]:
+    """macOS: the run, sampled from when the sampler samples until its work
+    is done; the exit code and the report"""
     run_log = work / "profile-run.log"
     sample_log = work / "profile-sample.log"
-    # sample writes its report from a live process: the run holds at exit
-    # (DK_PROFILE_HOLD_FDS, datakit-test.c) until the sampler has finished
+    # sample writes a report from a live process, and an interrupted one
+    # can stall: it runs in fixed windows that end on their own, while the
+    # run holds at exit (DK_PROFILE_HOLD_FDS, datakit-test.c) until the
+    # window it finished in has reported
     done_r, done_w = os.pipe()
     release_r, release_w = os.pipe()
     env = {**env, "DK_PROFILE_HOLD_FDS": f"{done_w},{release_r}"}
+    reports: list[Path] = []
     with (
         run_log.open("wb") as run_out,
         sample_log.open("wb") as sample_out,
@@ -197,6 +227,7 @@ def _record_sample(
     ):
         os.close(done_w)
         os.close(release_r)
+        report = work / "sample.txt"
         sampler_cmd = [
             "sample",
             str(target.pid),
@@ -207,29 +238,36 @@ def _record_sample(
             str(report),
         ]
         with procs.started(sampler_cmd, sample_out) as sampler:
-            # The run's done byte (or EOF, if it died): the sampler is
-            # stopped while the process still lives, and writes its report
-            os.read(done_r, 1)
-            os.close(done_r)
-            if sampler.poll() is None:
-                os.kill(sampler.pid, signal.SIGINT)
             try:
-                sampler.wait(timeout=SAMPLE_GRACE)
-            except subprocess.TimeoutExpired:
-                os.kill(sampler.pid, signal.SIGKILL)
-                sampler.wait()
-            os.close(release_w)
-            target.wait()
+                # The run starts work once the sampler is sampling (an
+                # interrupt before then can stall it); its done byte (or
+                # EOF, if it died) stops the sampler, which reports while
+                # the run still holds
+                time.sleep(SAMPLE_START)
+                os.write(release_w, b"g")
+                os.read(done_r, 1)
+                if sampler.poll() is None:
+                    os.kill(sampler.pid, signal.SIGINT)
+                try:
+                    sampler.wait(timeout=SAMPLE_GRACE)
+                except subprocess.TimeoutExpired:
+                    os.kill(sampler.pid, signal.SIGKILL)
+                    sampler.wait()
+            finally:
+                os.close(done_r)
+                os.close(release_w)
+        if report.exists():
+            reports.append(report)
     if target.returncode != 0:
-        return _fail(name, f"run exit {target.returncode}", run_log), report
-    if not report.exists():
-        return _fail(name, f"sample exit {sampler.returncode}", sample_log), report
-    return 0, report
+        return _fail(name, f"run exit {target.returncode}", run_log), reports
+    if not reports:
+        return _fail(name, "sample wrote no report", sample_log), reports
+    return 0, reports
 
 
 def _record_perf(
     name: str, command: list[str], work: Path, cwd: Path, env: dict[str, str]
-) -> tuple[int, Path]:
+) -> tuple[int, list[Path]]:
     """Linux: ``perf record`` around the run, then ``perf script``"""
     data = work / "perf.data"
     report = work / "perf-script.txt"
@@ -242,9 +280,9 @@ def _record_perf(
         timeout=steps.CTEST_TIMEOUT,
     )
     if not record.ok:
-        return _fail(
-            name, f"{record.name} {record.describe_failure()}", record.log
-        ), report
+        return _fail(name, f"{record.name} {record.describe_failure()}", record.log), [
+            report
+        ]
     script = steps.run_logged(
         "profile script",
         ["perf", "script", "-i", str(data)],
@@ -253,8 +291,10 @@ def _record_perf(
         timeout=steps.CTEST_TIMEOUT,
     )
     if not script.ok:
-        return _fail(name, f"{script.name} {script.describe_failure()}", report), report
-    return 0, report
+        return _fail(name, f"{script.name} {script.describe_failure()}", report), [
+            report
+        ]
+    return 0, [report]
 
 
 def run(repo: Path, opts: ProfileOptions) -> int:
@@ -300,16 +340,22 @@ def run(repo: Path, opts: ProfileOptions) -> int:
     command = [str(side.binary), "test", "perfRegression"]
     env = {**os.environ, "DK_PERF_MODULES": modules}
     record = _record_sample if darwin else _record_perf
-    code, report = record(name, command, work, src, env)
+    code, reports = record(name, command, work, src, env)
     if code:
         return code
 
-    text = report.read_text(errors="replace")
-    samples = parse_sample(text) if darwin else parse_perf_script(text)
+    samples = Samples()
+    for report in reports:
+        text = report.read_text(errors="replace")
+        samples.merge(
+            parse_sample(text, exclude=SAMPLE_HOLD_FRAMES)
+            if darwin
+            else parse_perf_script(text)
+        )
     header = [
         f"profile {name}: {config.label}, modules {modules}",
         f"  tree      {perfcompare.current_label(opts.rev, commit, tree, bench)}",
-        f"  recording {report}",
+        f"  recording {reports[0].parent} ({len(reports)} report(s))",
     ]
     lines = header + render(samples, opts.top)
     if not samples.total:

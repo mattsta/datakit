@@ -63,12 +63,30 @@ class Parsers(unittest.TestCase):
         self.assertEqual(s.inclusive["databoxCompare"], 6)
         self.assertEqual(s.inclusive["benchLoop"], 4)
         self.assertNotIn("Thread_9001", s.inclusive)
-        # self weights from the top-of-stack list, nothing from the
-        # "Total number in stack" list or the image table
+        # self weights from the tree (a node less its children), nothing
+        # from the "Total number in stack" list or the image table
         self.assertEqual(
             dict(s.self_weight),
             {"databoxCompare": 6, "benchLoop": 4, "_pthread_start": 2},
         )
+
+    def test_an_excluded_frame_leaves_with_its_subtree(self) -> None:
+        held = SAMPLE.replace("4 benchLoop", "4 profileHoldAtExit_")
+        s = profile.parse_sample(held, exclude=("profileHoldAtExit_",))
+        # its 4 come off every node above it: the thread, start, main
+        self.assertEqual(s.total, 8)
+        self.assertEqual(s.inclusive["main"], 6)
+        self.assertEqual(s.inclusive["start"], 6)
+        self.assertNotIn("profileHoldAtExit_", s.inclusive)
+        self.assertNotIn("profileHoldAtExit_", s.self_weight)
+        self.assertEqual(s.self_weight["databoxCompare"], 6)
+
+    def test_reports_merge_into_one_profile(self) -> None:
+        a = profile.parse_sample(SAMPLE)
+        a.merge(profile.parse_sample(SAMPLE))
+        self.assertEqual(a.total, 24)
+        self.assertEqual(a.inclusive["main"], 20)
+        self.assertEqual(a.self_weight["benchLoop"], 8)
 
     def test_perf_script_reads_leaf_first_symbols(self) -> None:
         s = profile.parse_perf_script(PERF_SCRIPT)

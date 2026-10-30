@@ -12698,14 +12698,16 @@ static int runAllTests(int argc, char *argv[]) {
     return result;
 }
 
-/* `dktools profile` (macOS): a sampler writes its report from a live
- * process, so a profiled run holds at exit.  DK_PROFILE_HOLD_FDS is "W,R":
- * one byte is written to W when the run is done, then the process waits
+/* `dktools profile` (macOS): a sampler takes a moment to start and writes
+ * its report from a live process, so a profiled run holds at both ends.
+ * DK_PROFILE_HOLD_FDS is "W,R": the run starts once a byte arrives on R
+ * (the sampler is sampling); when done it writes one byte to W and waits
  * for R to close (the sampler has finished). */
 static int profileHoldDone_ = -1;
 static int profileHoldRelease_ = -1;
 
-static void profileHoldAtExit_(void) {
+/* Not inlined: the profiler leaves these frames (the waits) out by name */
+[[gnu::noinline]] static void profileHoldAtExit_(void) {
     fflush(stdout);
     const char done = 'x';
     if (write(profileHoldDone_, &done, 1) == 1) {
@@ -12715,7 +12717,7 @@ static void profileHoldAtExit_(void) {
     }
 }
 
-static void profileHoldSetup_(void) {
+[[gnu::noinline]] static void profileHoldSetup_(void) {
     const char *fds = getenv("DK_PROFILE_HOLD_FDS");
     int w = -1;
     int r = -1;
@@ -12723,6 +12725,8 @@ static void profileHoldSetup_(void) {
         profileHoldDone_ = w;
         profileHoldRelease_ = r;
         atexit(profileHoldAtExit_);
+        char go;
+        (void)read(r, &go, 1);
     }
 }
 
