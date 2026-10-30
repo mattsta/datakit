@@ -525,13 +525,21 @@ bool multidictGetByteBasedExpansion(const multidict *d,
                                     uint64_t *targetSlotBytes,
                                     uint64_t *maxSlotBytes);
 
-/* LRU Policy Configuration */
+/* Which entry multidictEvictToLimit removes next.  The LRU, LFU and
+ * SIZE_LRU policies need LRU tracking (multidictEnableLRU); without it they
+ * take a random entry.  LRU and LFU take the same entry, the coldest one
+ * tracked: the tracking's level count decides what cold means (one level:
+ * least recently used; more: each use lifts an entry a level, so the
+ * coldest is the least used, ties by recency).  SIZE_LRU looks at the 8
+ * coldest: the oldest whose size (key and value bytes) alone brings the
+ * dict under its limit, else the largest, so a large cold entry goes
+ * before many small ones. */
 typedef enum multidictEvictPolicy {
-    MULTIDICT_EVICT_NONE = 0, /* No eviction (default) */
-    MULTIDICT_EVICT_RANDOM,   /* Random eviction (existing behavior) */
-    MULTIDICT_EVICT_LRU,      /* Least Recently Used */
-    MULTIDICT_EVICT_LFU,      /* Least Frequently Used (approx via levels) */
-    MULTIDICT_EVICT_SIZE_LRU, /* LRU weighted by entry size */
+    MULTIDICT_EVICT_RANDOM = 0, /* a random entry (the default) */
+    MULTIDICT_EVICT_NONE,       /* nothing: EvictToLimit removes no entry */
+    MULTIDICT_EVICT_LRU,        /* the coldest tracked entry */
+    MULTIDICT_EVICT_LFU,        /* the coldest tracked entry (see above) */
+    MULTIDICT_EVICT_SIZE_LRU,   /* size-aware among the 8 coldest */
 } multidictEvictPolicy;
 
 /* LRU Tracking (optional, zero overhead when disabled)

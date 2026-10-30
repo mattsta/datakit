@@ -309,6 +309,16 @@ DK_STATIC multidictUpdateResult multidictUpdate_(multidict *d,
                                                  void *ctx);
 static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
                                      databox *keybox, databoxWide *slot);
+static bool multidictLRUSelectVictimBySize(multidict *d, mdLRUCandidates *cands,
+                                           uint64_t excess, databox *keybox,
+                                           databoxWide *slot);
+
+/* Whether 'policy' chooses its victim from the LRU tracking */
+DK_INLINE_ALWAYS bool mdEvictNeedsLRU_(const multidictEvictPolicy policy) {
+    return policy == MULTIDICT_EVICT_LRU || policy == MULTIDICT_EVICT_LFU ||
+           policy == MULTIDICT_EVICT_SIZE_LRU;
+}
+
 DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
                                             databox *valbox);
 DK_STATIC int32_t multidictStringKeyCompare_(void *privdata, const void *key1,
@@ -2399,12 +2409,13 @@ bool multidictIsOverLimit(multidict *d) {
     return multidictUserBytes(d) > d->maxMemory;
 }
 
-/* Evict entries until we're under the memory limit.
- * Uses LRU when enabled, otherwise random eviction.
- * Returns number of entries evicted. */
+/* Evict entries until we're under the memory limit, each victim chosen by
+ * the eviction policy (multidictEvictPolicy).  Returns number of entries
+ * evicted. */
 uint32_t multidictEvictToLimit(multidict *d) {
-    if (unlikely(!d) || d->maxMemory == 0) {
-        return 0; /* No limit set */
+    if (unlikely(!d) || d->maxMemory == 0 ||
+        d->evictPolicy == MULTIDICT_EVICT_NONE) {
+        return 0; /* No limit set, or no eviction chosen */
     }
 
     uint32_t evicted = 0;
@@ -2426,8 +2437,13 @@ uint32_t multidictEvictToLimit(multidict *d) {
         bool fromLRU = false;
 
         /* Select victim based on eviction policy */
-        if (d->evictPolicy == MULTIDICT_EVICT_LRU && d->lruEnabled) {
-            /* LRU eviction: the coldest entry not yet passed over */
+        if (d->evictPolicy == MULTIDICT_EVICT_SIZE_LRU && d->lruEnabled) {
+            /* Size-aware: among the coldest, the one that frees enough */
+            fromLRU = multidictLRUSelectVictimBySize(
+                d, &lruCands, multidictUserBytes(d) - d->maxMemory, &keybox,
+                &keyWide);
+        } else if (mdEvictNeedsLRU_(d->evictPolicy) && d->lruEnabled) {
+            /* LRU and LFU: the coldest entry not yet passed over */
             fromLRU = multidictLRUSelectVictim(d, &lruCands, &keybox, &keyWide);
         }
 
@@ -2561,7 +2577,10 @@ bool multidictEnableLRU(multidict *d, size_t levels) {
     d->lruPtrToKey = nullptr;
     d->lruPtrToKeySize = 0;
     d->lruEnabled = true;
-    d->evictPolicy = MULTIDICT_EVICT_LRU;
+    /* Tracking makes LRU the default; a policy the caller chose stays */
+    if (d->evictPolicy == MULTIDICT_EVICT_RANDOM) {
+        d->evictPolicy = MULTIDICT_EVICT_LRU;
+    }
 
     return true;
 }
@@ -2592,7 +2611,10 @@ void multidictDisableLRU(multidict *d) {
     }
 
     d->lruEnabled = false;
-    d->evictPolicy = MULTIDICT_EVICT_NONE;
+    /* A policy that needs the tracking falls back to the default */
+    if (mdEvictNeedsLRU_(d->evictPolicy)) {
+        d->evictPolicy = MULTIDICT_EVICT_RANDOM;
+    }
 }
 
 /* Check if LRU is enabled */
@@ -2610,16 +2632,16 @@ size_t multidictLRULevels(const multidict *d) {
     return stats.maxLevels;
 }
 
-/* Set eviction policy */
+/* Set eviction policy (a value outside the enum changes nothing) */
 void multidictSetEvictPolicy(multidict *d, multidictEvictPolicy policy) {
-    if (likely(d)) {
+    if (likely(d) && policy <= MULTIDICT_EVICT_SIZE_LRU) {
         d->evictPolicy = policy;
     }
 }
 
 /* Get eviction policy */
 multidictEvictPolicy multidictGetEvictPolicy(multidict *d) {
-    return d ? d->evictPolicy : MULTIDICT_EVICT_NONE;
+    return d ? d->evictPolicy : MULTIDICT_EVICT_RANDOM;
 }
 
 /* Touch a key - mark as recently accessed for LRU */
@@ -2834,6 +2856,19 @@ size_t multidictLRURepack(multidict *d) {
     return moved;
 }
 
+/* Candidates left to try in 'cands', refilled from the cold end when
+ * spent (the passed-over candidates lead, so they are skipped); false
+ * when every tracked entry was passed over */
+static bool mdLRUWindow_(multidict *d, mdLRUCandidates *cands) {
+    if (cands->pos >= cands->count) {
+        /* Only the first 'count' slots are written */
+        cands->count = (uint32_t)multilruCollectLowest(d->lru, cands->ptr,
+                                                       MD_LRU_CANDIDATES);
+        cands->pos = cands->skip;
+    }
+    return cands->pos < cands->count;
+}
+
 /* Internal: Select victim using LRU policy (called from eviction).  The
  * victim stays tracked; multidictDelete untracks it if the eviction
  * commits, and otherwise the caller counts it in cands->skip. */
@@ -2843,19 +2878,7 @@ static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
         return false;
     }
 
-    while (cands->skip < MD_LRU_CANDIDATES) {
-        if (cands->pos >= cands->count) {
-            /* Refill from the cold end; the passed-over candidates lead.
-             * Only the first 'count' slots are written. */
-            cands->count = (uint32_t)multilruCollectLowest(d->lru, cands->ptr,
-                                                           MD_LRU_CANDIDATES);
-
-            cands->pos = cands->skip;
-            if (cands->pos >= cands->count) {
-                return false; /* every tracked entry was passed over */
-            }
-        }
-
+    while (cands->skip < MD_LRU_CANDIDATES && mdLRUWindow_(d, cands)) {
         const multilruPtr ptr = cands->ptr[cands->pos++];
         if (!multilruIsPopulated(d->lru, ptr)) {
             continue; /* already untracked since the refill */
@@ -2866,6 +2889,67 @@ static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
         }
 
         /* No key resolves for this handle: leave it and pass over it */
+        cands->skip++;
+    }
+
+    return false;
+}
+
+/* The size-aware choice among the coldest: of the next (up to) 8
+ * candidates, the oldest whose entry (key and value bytes) alone covers
+ * 'excess', else the largest.  The chosen candidate moves to the front of
+ * those 8 and is consumed, so the rest keep their order. */
+static constexpr uint32_t MD_LRU_SIZE_WINDOW = 8;
+static bool multidictLRUSelectVictimBySize(multidict *d, mdLRUCandidates *cands,
+                                           uint64_t excess, databox *keybox,
+                                           databoxWide *slot) {
+    if (!d->lruEnabled || !d->lru) {
+        return false;
+    }
+
+    while (cands->skip < MD_LRU_CANDIDATES && mdLRUWindow_(d, cands)) {
+        const uint32_t end = cands->count - cands->pos < MD_LRU_SIZE_WINDOW
+                                 ? cands->count
+                                 : cands->pos + MD_LRU_SIZE_WINDOW;
+        uint32_t covering = UINT32_MAX;
+        uint32_t largest = UINT32_MAX;
+        size_t largestBytes = 0;
+        for (uint32_t i = cands->pos; i < end && covering == UINT32_MAX; i++) {
+            const multilruPtr ptr = cands->ptr[i];
+            databox val;
+            databoxWide valWide;
+            mdBoxAim_(&val, &valWide);
+            if (!multilruIsPopulated(d->lru, ptr) ||
+                !multidictLRUKeyOf(d, ptr, keybox, slot) ||
+                !multidictFindNoTouch_(d, keybox, &val)) {
+                continue;
+            }
+
+            mdBoxSettle_(&val);
+            const size_t bytes = mdBoxSize_(keybox) + mdBoxSize_(&val);
+            if (bytes >= excess) {
+                covering = i;
+            } else if (largest == UINT32_MAX || bytes > largestBytes) {
+                largest = i;
+                largestBytes = bytes;
+            }
+        }
+
+        const uint32_t chosen = covering != UINT32_MAX ? covering : largest;
+        if (chosen == UINT32_MAX) {
+            /* None of these resolves: pass over them all */
+            cands->skip += end - cands->pos;
+            cands->pos = end;
+            continue;
+        }
+
+        const multilruPtr ptr = cands->ptr[chosen];
+        memmove(&cands->ptr[cands->pos + 1], &cands->ptr[cands->pos],
+                (chosen - cands->pos) * sizeof(cands->ptr[0]));
+        cands->ptr[cands->pos++] = ptr;
+        if (multidictLRUKeyOf(d, ptr, keybox, slot)) {
+            return true;
+        }
         cands->skip++;
     }
 
@@ -6481,7 +6565,7 @@ static int multidictTestLRUToggle_(void) {
     }
     multidictDisableLRU(d);
     if (multidictHasLRU(d) ||
-        multidictGetEvictPolicy(d) != MULTIDICT_EVICT_NONE ||
+        multidictGetEvictPolicy(d) != MULTIDICT_EVICT_RANDOM ||
         multidictEnableLRU(d, 4) || multidictCount(d) != 50) {
         ERR("LRU toggle: disabling a populated dict");
     }
@@ -10372,6 +10456,85 @@ int multidictTest(int, char *[]) {
         multidictSetEvictPolicy(d, MULTIDICT_EVICT_NONE);
         assert(multidictGetEvictPolicy(d) == MULTIDICT_EVICT_NONE);
         multidictSetEvictPolicy(d, MULTIDICT_EVICT_LRU);
+    }
+
+    TEST("20.6b every eviction policy chooses as it says") {
+        /* Five small entries, one 2 KB entry, then fifteen small ones, a
+         * limit 40 bytes under the total; s00 used three times, then every
+         * other key once.  NONE evicts nothing; RANDOM evicts until under
+         * the limit; LRU (one level: recency) takes s00 first, its last use
+         * being the oldest, and keeps the large one; LFU (four levels) keeps
+         * the much-used s00; SIZE_LRU takes the large one alone */
+        static const struct {
+            multidictEvictPolicy policy;
+            size_t levels;
+        } runs[] = {{MULTIDICT_EVICT_NONE, 0},
+                    {MULTIDICT_EVICT_RANDOM, 0},
+                    {MULTIDICT_EVICT_LRU, 1},
+                    {MULTIDICT_EVICT_LFU, 4},
+                    {MULTIDICT_EVICT_SIZE_LRU, 1}};
+        static char big[2048];
+        memset(big, 'b', sizeof(big));
+        for (size_t r = 0; r < countof(runs); r++) {
+            cleaner(multidictFree) multidict *e =
+                multidictNew(&multidictTypeExactKey, qdc, 7);
+            if (runs[r].levels) {
+                multidictEnableLRU(e, runs[r].levels);
+            }
+            multidictSetEvictPolicy(e, runs[r].policy);
+            char key[8];
+            for (int i = 0; i < 21; i++) {
+                const bool large = i == 5;
+                snprintf(key, sizeof(key), large ? "big" : "s%02d",
+                         i < 5 ? i : i - 1);
+                const databox k = databoxNewBytesString(key);
+                const databox v = large
+                                      ? databoxNewBytes(big, sizeof(big))
+                                      : databoxNewBytesString("value-0123456");
+                MULTIDICT_TEST_OK(multidictAdd(e, &k, &v));
+            }
+            for (int use = 0; use < 3; use++) {
+                const databox k = databoxNewBytesString("s00");
+                multidictTouch(e, &k);
+            }
+            for (int i = 1; i < 21; i++) {
+                const bool large = i == 5;
+                snprintf(key, sizeof(key), large ? "big" : "s%02d",
+                         i < 5 ? i : i - 1);
+                const databox k = databoxNewBytesString(key);
+                multidictTouch(e, &k);
+            }
+
+            const uint64_t total = multidictKeyBytes(e) + multidictValBytes(e);
+            multidictSetMaxMemory(e, total - 40);
+            const uint32_t evicted = multidictEvictToLimit(e);
+            const databox bigKey = databoxNewBytesString("big");
+            const databox s0 = databoxNewBytesString("s00");
+            const bool bigLeft = multidictExistsNoTouch(e, &bigKey);
+            const bool s0Left = multidictExistsNoTouch(e, &s0);
+            bool ok = false;
+            switch (runs[r].policy) {
+            case MULTIDICT_EVICT_NONE:
+                ok = evicted == 0 && multidictCount(e) == 21;
+                break;
+            case MULTIDICT_EVICT_RANDOM:
+                ok = evicted > 0 && !multidictIsOverLimit(e);
+                break;
+            case MULTIDICT_EVICT_LRU:
+                ok = evicted >= 2 && bigLeft && !s0Left;
+                break;
+            case MULTIDICT_EVICT_LFU:
+                ok = evicted >= 2 && bigLeft && s0Left;
+                break;
+            case MULTIDICT_EVICT_SIZE_LRU:
+                ok = evicted == 1 && !bigLeft && s0Left;
+                break;
+            }
+            if (!ok) {
+                ERR("policy %d: evicted %u, big %d, s00 %d",
+                    (int)runs[r].policy, evicted, bigLeft, s0Left);
+            }
+        }
     }
 
     TEST("20.7 the GetLRULevel API") {

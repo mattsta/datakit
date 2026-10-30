@@ -885,11 +885,11 @@ LRU tracking is off by default and costs nothing while disabled.
 
 ```c
 typedef enum multidictEvictPolicy {
-    MULTIDICT_EVICT_NONE = 0, /* No eviction (default) */
-    MULTIDICT_EVICT_RANDOM,   /* Random victim */
-    MULTIDICT_EVICT_LRU,      /* Least Recently Used */
-    MULTIDICT_EVICT_LFU,      /* Least Frequently Used (approximate) */
-    MULTIDICT_EVICT_SIZE_LRU, /* LRU weighted by entry size */
+    MULTIDICT_EVICT_RANDOM = 0, /* a random entry (the default) */
+    MULTIDICT_EVICT_NONE,       /* nothing: EvictToLimit removes no entry */
+    MULTIDICT_EVICT_LRU,        /* the coldest tracked entry */
+    MULTIDICT_EVICT_LFU,        /* the coldest tracked entry (see below) */
+    MULTIDICT_EVICT_SIZE_LRU,   /* size-aware among the 8 coldest */
 } multidictEvictPolicy;
 
 bool multidictEnableLRU(multidict *d, size_t levels);
@@ -915,6 +915,24 @@ multidictEnableLRU(d, 7);
 multidictSetEvictPolicy(d, MULTIDICT_EVICT_LRU);
 multidictSetMaxMemory(d, 256ULL * 1024 * 1024);
 ```
+
+`multidictEvictToLimit` removes one victim at a time, chosen by the policy,
+until the dict's key and value bytes fit its limit:
+
+- `RANDOM` (the default): a random entry.
+- `NONE`: nothing is removed.
+- `LRU` and `LFU`: the coldest tracked entry. The LRU's level count
+  decides what cold means: with one level it is the least recently used;
+  with more, each use lifts an entry a level, so the coldest is the least
+  used, ties going by recency. Enabling LRU tracking turns a `RANDOM`
+  policy into `LRU`; a policy set explicitly stays.
+- `SIZE_LRU`: of the 8 coldest tracked entries, the oldest whose size
+  (key and value bytes) alone brings the dict under its limit, else the
+  largest, so one large cold entry goes before many small ones (the rule
+  multilru's `MLRU_EVICT_SIZE_LRU` applies to weights).
+
+Without LRU tracking, `LRU`, `LFU` and `SIZE_LRU` take random entries;
+disabling the tracking sets such a policy back to `RANDOM`.
 
 The LRU levels are backed by [multilru](MULTILRU.md), so the level count
 here means the same thing it does there. The LRU keeps a slot per entry ever
