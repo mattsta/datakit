@@ -834,6 +834,12 @@ bool flexMultiplyDouble(const flex *f, double *result);
 /* CFlex */
 size_t cflexBytesCompressed(const cflex *c);
 size_t cflexBytes(const cflex *c);
+/* Whether 'buflen' bytes from outside are a whole compressed flex
+ * envelope: its header and compressed length read within the buffer and
+ * the compressed data ends where the buffer does.  Must return for any
+ * input; the compressed data itself is checked by decompressing it
+ * (mflexOpenChecked). */
+bool cflexValidateBuffer(const uint8_t *buf, size_t buflen);
 cflex *cflexDuplicate(const cflex *c);
 bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen);
 /* flexConvertToCFlex at an LZ4 level: 0 is LZ4 (fastest), 1-12 LZ4HC at

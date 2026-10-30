@@ -52,6 +52,17 @@ mflex *mflexNewNoCompress(void);
 mflex *mflexConvertFromFlex(flex *f, mflexState *state);
 mflex *mflexConvertFromFlexNoCompress(flex *f);
 
+/* The bytes 'm' keeps, compressed or plain ('*len' of them, owned by 'm'):
+ * with mflexIsCompressed, what mflexNewFromStored takes back */
+const void *mflexStoredBytes(const mflex *m, size_t *len);
+/* A block rebuilt from bytes mflexStoredBytes gave (copied), compressed
+ * when 'compressed'.  The bytes may come from outside: NULL unless they
+ * are a whole flex (flexValidateBufferDeep) or a whole compressed
+ * envelope (cflexValidateBuffer); a compressed block's entries are
+ * checked when it is first opened, with mflexOpenChecked. */
+[[nodiscard]] mflex *mflexNewFromStored(const void *bytes, size_t len,
+                                        bool compressed);
+
 /* mflex metadata */
 bool mflexIsEmpty(const mflex *m);
 size_t mflexCount(const mflex *m);

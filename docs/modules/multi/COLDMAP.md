@@ -131,8 +131,12 @@ that), short repeated phrases at 52-70%, records at 16-46% (perfRegression `mapB
 ## Persistence
 
 A snapshot is one flex: the config (row width, raw limit, stored target, required saving, LZ4
-level, defaults resolved) and every row in key order. A restore checks the rows (whole, keys
-strictly ascending) and packs them as a build does. WAL ops: INSERT a row, DELETE a key or a sorted batch of keys,
+level, defaults resolved), the block count, then each block in key order as it is kept (whether
+it is compressed, and its bytes). A restore keeps every block as it was stored, with no packing
+or compressing again, so the restored coldmap has the same blocks, the same stored bytes and the
+same totals, and WAL replay over it makes the same splits and merges the live coldmap made. It
+refuses a block that does not open whole (a compressed one is decompressed and checked), holds no
+row or a partial row, or whose keys do not strictly ascend from past the block before. WAL ops: INSERT a row, DELETE a key or a sorted batch of keys,
 BULK_INSERT a sorted batch, BULK_DELETE a key range. `coldmapP` (`persist/coldmapP.h`) logs
 each change before making it: a refused log changes nothing, and a change that would change
 nothing (a missing key, an empty batch, a range holding no row) logs nothing; a batch of

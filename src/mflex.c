@@ -619,6 +619,23 @@ mflex *mflexConvertFromFlexNoCompress(flex *f) {
     return m;
 }
 
+const void *mflexStoredBytes(const mflex *m, size_t *len) {
+    *len = mflexBytesActual(m);
+    return mff(m);
+}
+
+mflex *mflexNewFromStored(const void *bytes, size_t len, bool compressed) {
+    if (compressed ? !cflexValidateBuffer(bytes, len)
+                   : !flexValidateBufferDeep(bytes, len)) {
+        return nullptr;
+    }
+
+    /* @own: caller; free=mflexFree */
+    void *copy = zmalloc(len);
+    memcpy(copy, bytes, len);
+    return _MFLEX_TAG(copy, compressed ? MFLEX_TYPE_CFLEX : MFLEX_TYPE_FLEX);
+}
+
 /* ====================================================================
  * Tests
  * ==================================================================== */
@@ -1000,6 +1017,55 @@ int mflexTest(int, char *[]) {
         memset(c + cflexBytes(c) - data, 0, data);
         if (mflexOpenChecked(m, state)) {
             ERR("%s", "a damaged compressed block opened");
+        }
+    }
+
+    TEST("stored bytes rebuild the same block, compressed or plain; every "
+         "truncation, and a compressed block taken as plain, is refused") {
+        /* @own: container; free=mflexFree */
+        flex *rows = flexNew();
+        for (int i = 0; i < 200; i++) {
+            flexPushBytes(&rows, "a compressible row of text", 26,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        /* @own: container; free=mflexFree */
+        flex *few = flexNew();
+        flexPushSigned(&few, 7, FLEX_ENDPOINT_TAIL);
+        cleaner(mflexFree) mflex *packed = mflexConvertFromFlex(rows, state);
+        cleaner(mflexFree) mflex *plain = mflexConvertFromFlex(few, state);
+        const mflex *blocks[2] = {packed, plain};
+        for (size_t b = 0; b < 2; b++) {
+            const bool compressed = mflexIsCompressed(blocks[b]);
+            size_t len;
+            const uint8_t *bytes = mflexStoredBytes(blocks[b], &len);
+            cleaner(mflexFree) mflex *back =
+                mflexNewFromStored(bytes, len, compressed);
+            size_t backLen = 0;
+            const void *backBytes =
+                back ? mflexStoredBytes(back, &backLen) : nullptr;
+            if (compressed != (b == 0) || !back ||
+                mflexIsCompressed(back) != compressed || backLen != len ||
+                memcmp(backBytes, bytes, len) ||
+                !mflexOpenChecked(back, state)) {
+                ERR("block %zu: not rebuilt as stored", b);
+            }
+
+            for (size_t cut = 0; cut < len; cut++) {
+                cleaner(mflexFree) mflex *part =
+                    mflexNewFromStored(bytes, cut, compressed);
+                if (part) {
+                    ERR("block %zu: %zu of %zu bytes taken", b, cut, len);
+                    break;
+                }
+            }
+        }
+
+        size_t len;
+        const void *bytes = mflexStoredBytes(packed, &len);
+        cleaner(mflexFree) mflex *asPlain =
+            mflexNewFromStored(bytes, len, false);
+        if (asPlain) {
+            ERR("%s", "a compressed block taken as plain");
         }
     }
 

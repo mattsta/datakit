@@ -6340,6 +6340,35 @@ size_t cflexBytes(const cflex *const c) {
     return headerSize + compressedBytesDescSize + compressedBytesLen;
 }
 
+bool cflexValidateBuffer(const uint8_t *buf, size_t buflen) {
+    if (!buf || buflen < FLEX_EMPTY_HEADER_SIZE) {
+        return false;
+    }
+
+    /* The header is a flex header stating the open flex's size and count;
+     * then the compressed length and the compressed data, which end where
+     * the buffer does */
+    varintWidth bytesWidth = 0;
+    uint64_t bytes = 0;
+    if (!flexSplitVarintTryDecode(buf, buflen, &bytesWidth, &bytes) ||
+        (size_t)bytesWidth >= buflen) {
+        return false;
+    }
+
+    const size_t countWidth = varintTaggedGetLenQuick_(buf + bytesWidth);
+    if (countWidth == 0 || countWidth >= buflen - bytesWidth) {
+        return false;
+    }
+
+    const size_t headerWidth = bytesWidth + countWidth;
+    varintWidth compressedWidth = 0;
+    uint64_t compressed = 0;
+    return bytes >= headerWidth &&
+           flexSplitVarintTryDecode(buf + headerWidth, buflen - headerWidth,
+                                    &compressedWidth, &compressed) &&
+           compressed == buflen - headerWidth - compressedWidth;
+}
+
 cflex *cflexDuplicate(const cflex *const c) {
     const size_t copyBytes = cflexBytes(c);
     /* @own: caller; free=zfree */

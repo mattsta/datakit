@@ -53,11 +53,10 @@ static void coldmapBlockUncount_(coldmap *cm, const coldmapBlock *b) {
     cm->keyBytes -= coldmapKeyBytes_(&b->first);
 }
 
-/* Keep 'f' (rows, at least one) as block 'b' and count it: 'f' was opened
- * from b->rows through the coldmap's state ('grew': rows came in, else
- * only went), or is a new flex when b->rows is NULL */
-static void coldmapBlockStore_(coldmap *cm, coldmapBlock *b, flex *f,
-                               bool grew) {
+/* Block 'b's routing key and reading numbers, from 'f': its rows (at least
+ * one), open */
+static void coldmapBlockDescribe_(const coldmap *cm, coldmapBlock *b,
+                                  const flex *f) {
     databoxFreeData(&b->first);
     databoxBig first = {};
     flexGetByTypeBig(flexHead(f), &first);
@@ -65,6 +64,23 @@ static void coldmapBlockStore_(coldmap *cm, coldmapBlock *b, flex *f,
     b->count = (uint32_t)(flexCount(f) / cm->elementsPerEntry);
     b->middle = (uint32_t)(flexMiddle(f, cm->elementsPerEntry) - f);
     b->raw = (uint32_t)flexBytes(f);
+}
+
+/* Block 'b's numbers into the totals, with b->rows as it is kept */
+static void coldmapBlockCount_(coldmap *cm, const coldmapBlock *b) {
+    cm->rows += b->count;
+    cm->rawBytes += b->raw;
+    cm->storedBytes += mflexBytesActual(b->rows);
+    cm->compressedBlocks += mflexIsCompressed(b->rows);
+    cm->keyBytes += coldmapKeyBytes_(&b->first);
+}
+
+/* Keep 'f' (rows, at least one) as block 'b' and count it: 'f' was opened
+ * from b->rows through the coldmap's state ('grew': rows came in, else
+ * only went), or is a new flex when b->rows is NULL */
+static void coldmapBlockStore_(coldmap *cm, coldmapBlock *b, flex *f,
+                               bool grew) {
+    coldmapBlockDescribe_(cm, b, f);
     if (!b->rows) {
         /* @own: container; free=mflexFree */
         b->rows = mflexConvertFromFlex(f, cm->state);
@@ -73,12 +89,7 @@ static void coldmapBlockStore_(coldmap *cm, coldmapBlock *b, flex *f,
     } else {
         mflexCloseShrink(&b->rows, cm->state, f);
     }
-
-    cm->rows += b->count;
-    cm->rawBytes += b->raw;
-    cm->storedBytes += mflexBytesActual(b->rows);
-    cm->compressedBlocks += mflexIsCompressed(b->rows);
-    cm->keyBytes += coldmapKeyBytes_(&b->first);
+    coldmapBlockCount_(cm, b);
 }
 
 /* A new, empty block at index 'at' (the blocks from 'at' move up one) */
@@ -172,16 +183,23 @@ static bool coldmapRowsAscend_(const flex *rows,
     return true;
 }
 
+/* The first entry (the key) of the last row of 'rows' (at least one) */
+static flexEntry *coldmapLastRow_(const flex *rows,
+                                  multimapElements elementsPerEntry) {
+    flexEntry *rowStart = flexTail(rows);
+    for (multimapElements e = 1; e < elementsPerEntry; e++) {
+        rowStart = flexPrev(rows, rowStart);
+    }
+    return rowStart;
+}
+
 /* How many rows, counted back from the tail of 'rows', reach 'cut' bytes
  * (at least one) */
 static size_t coldmapTailRows_(const flex *rows,
                                multimapElements elementsPerEntry, size_t cut) {
     const size_t total = flexCount(rows) / elementsPerEntry;
     const flexEntry *tail = flexTail(rows);
-    flexEntry *rowStart = flexTail(rows);
-    for (multimapElements e = 1; e < elementsPerEntry; e++) {
-        rowStart = flexPrev(rows, rowStart);
-    }
+    flexEntry *rowStart = coldmapLastRow_(rows, elementsPerEntry);
 
     size_t take = 1;
     while (take < total && (size_t)(tail - rowStart) < cut) {
@@ -765,33 +783,96 @@ bool coldmapRowsAscend(const flex *rows, multimapElements elementsPerEntry) {
 /* ====================================================================
  * Persistence (persistOpsColdmap; the format is described in persist.h)
  * ==================================================================== */
-/* Elements before the rows: elementsPerEntry, raw limit, stored target,
- * required saving, LZ4 level */
-static constexpr uint32_t COLDMAP_PERSIST_CONFIG = 5;
+/* Elements before the blocks: elementsPerEntry, raw limit, stored target,
+ * required saving, LZ4 level, block count */
+static constexpr uint32_t COLDMAP_PERSIST_HEADER = 6;
+/* Elements per block: compressed (0 or 1), the bytes as kept */
+static constexpr uint32_t COLDMAP_PERSIST_BLOCK = 2;
 
 static uint8_t *coldmapPersistSnapshot_(const void *structure, size_t *len) {
     const coldmap *cm = structure;
     const coldmapConfig *c = &cm->config;
-    const databox fields[COLDMAP_PERSIST_CONFIG] = {
+    const databox fields[COLDMAP_PERSIST_HEADER] = {
         DATABOX_UNSIGNED(cm->elementsPerEntry),
         DATABOX_UNSIGNED(c->rawLimit),
         DATABOX_UNSIGNED(c->storedTarget),
         DATABOX_UNSIGNED(c->minSavingPercent),
         DATABOX_UNSIGNED(c->level),
+        DATABOX_UNSIGNED(cm->blockCount),
     };
-    const databox *header[COLDMAP_PERSIST_CONFIG];
-    for (uint32_t i = 0; i < COLDMAP_PERSIST_CONFIG; i++) {
+    const databox *header[COLDMAP_PERSIST_HEADER];
+    for (uint32_t i = 0; i < COLDMAP_PERSIST_HEADER; i++) {
         header[i] = &fields[i];
     }
 
     /* @own: caller; free=zfree */
     flex *f = flexNew();
-    flexAppendMultipleExact(&f, COLDMAP_PERSIST_CONFIG, header);
-    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
-    cleaner(flexFree) flex *rows = coldmapDump(cm, state);
-    flexBulkAppendFlex(&f, rows);
+    flexAppendMultipleExact(&f, COLDMAP_PERSIST_HEADER, header);
+    for (size_t i = 0; i < cm->blockCount; i++) {
+        const mflex *rows = cm->blocks[i].rows;
+        size_t bytes;
+        const void *stored = mflexStoredBytes(rows, &bytes);
+        const databox block[COLDMAP_PERSIST_BLOCK] = {
+            DATABOX_UNSIGNED(mflexIsCompressed(rows)),
+            DATABOX_WITH_BYTES((uint8_t *)stored, bytes),
+        };
+        const databox *entries[COLDMAP_PERSIST_BLOCK] = {&block[0], &block[1]};
+        flexAppendMultipleExact(&f, COLDMAP_PERSIST_BLOCK, entries);
+    }
     *len = flexBytes(f);
     return (uint8_t *)f;
+}
+
+/* The snapshot's blocks, from 'fe' on, appended to 'cm' (empty) as they
+ * were kept: each opens whole (mflexOpenChecked) into whole rows, at
+ * least one, whose keys ascend from past the block before's last key */
+static bool coldmapPersistRestoreBlocks_(coldmap *cm, const flex *f,
+                                         flexEntry *fe, uint64_t blocks) {
+    const multimapElements epe = cm->elementsPerEntry;
+    databox last = {}; /* owned: the block before's last key */
+    bool ok = true;
+    for (uint64_t i = 0; i < blocks; i++) {
+        uint64_t compressed;
+        databox stored = {};
+        if (!flexReadUnsigned(f, &fe, &compressed) || compressed > 1) {
+            ok = false;
+            break;
+        }
+        flexGetByType(fe, &stored);
+        fe = flexNext(f, fe);
+        /* @own: container; free=coldmapFree */
+        mflex *m = DATABOX_IS_BYTES(&stored)
+                       ? mflexNewFromStored(databoxBytes(&stored), stored.len,
+                                            compressed)
+                       : nullptr;
+        if (!m) {
+            ok = false;
+            break;
+        }
+
+        coldmapBlock *b = coldmapBlockInsert_(cm, cm->blockCount);
+        b->rows = m;
+        const flex *rows = mflexOpenChecked(m, cm->state);
+        if (!rows || flexCount(rows) < epe || flexBytes(rows) > UINT32_MAX ||
+            !coldmapRowsAscend_(rows, epe)) {
+            ok = false;
+            break;
+        }
+
+        coldmapBlockDescribe_(cm, b, rows);
+        if (i && databoxCompare(&last, &b->first) >= 0) {
+            ok = false;
+            break;
+        }
+        coldmapBlockCount_(cm, b);
+        databoxBig tail = {};
+        flexGetByTypeBig(coldmapLastRow_(rows, epe), &tail);
+        databoxFreeData(&last);
+        last = databoxCopy((const databox *)&tail);
+    }
+
+    databoxFreeData(&last);
+    return ok;
 }
 
 static void *coldmapPersistRestore_(const uint8_t *data, size_t len) {
@@ -800,21 +881,23 @@ static void *coldmapPersistRestore_(const uint8_t *data, size_t len) {
     }
 
     const flex *f = (const flex *)data;
+    const size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
-    uint64_t v[COLDMAP_PERSIST_CONFIG];
-    if (flexCount(f) < COLDMAP_PERSIST_CONFIG) {
+    uint64_t v[COLDMAP_PERSIST_HEADER];
+    if (count < COLDMAP_PERSIST_HEADER) {
         return nullptr;
     }
-    for (uint32_t i = 0; i < COLDMAP_PERSIST_CONFIG; i++) {
+    for (uint32_t i = 0; i < COLDMAP_PERSIST_HEADER; i++) {
         if (!flexReadUnsigned(f, &fe, &v[i])) {
             return nullptr;
         }
     }
 
-    /* The rows are checked as any dump is (whole, ascending keys) */
+    const size_t blockEntries = count - COLDMAP_PERSIST_HEADER;
     if (v[0] == 0 || v[0] > UINT16_MAX || v[1] < FLEX_CAP_LEVEL_64 ||
         v[1] > FLEX_CAP_LEVEL_65536 || v[2] == 0 || v[2] > UINT32_MAX ||
-        v[3] > 99 || v[4] > 12) {
+        v[3] > 99 || v[4] > 12 || blockEntries % COLDMAP_PERSIST_BLOCK ||
+        v[5] != blockEntries / COLDMAP_PERSIST_BLOCK) {
         return nullptr;
     }
 
@@ -822,11 +905,13 @@ static void *coldmapPersistRestore_(const uint8_t *data, size_t len) {
                                   .storedTarget = (uint32_t)v[2],
                                   .minSavingPercent = (uint8_t)v[3],
                                   .level = (uint8_t)v[4]};
-    /* @own: container; free=coldmapFree */
-    flex *rows = flexDuplicate(f);
-    flexDeleteRange(&rows, 0, COLDMAP_PERSIST_CONFIG);
     /* @own: caller; free=coldmapFree */
-    return coldmapNewFromDump((multimapElements)v[0], &config, rows);
+    coldmap *cm = coldmapNew((multimapElements)v[0], &config);
+    if (cm && !coldmapPersistRestoreBlocks_(cm, f, fe, v[5])) {
+        coldmapFree(cm);
+        return nullptr;
+    }
+    return cm;
 }
 
 /* BULK_DELETE's body: [which bounds are given (1 lo, 2 hi), lo?, hi?] */
@@ -1068,6 +1153,72 @@ static bool coldmapVerify_(const coldmap *cm, mflexState *state) {
     }
     return rows == cm->rows && raw == cm->rawBytes &&
            stored == cm->storedBytes && compressed == cm->compressedBlocks;
+}
+
+/* Whether 'a' and 'b' keep the same blocks: the same bytes, compressed
+ * alike, the same reading numbers, and the same totals */
+static bool coldmapSameBlocks_(const coldmap *a, const coldmap *b) {
+    if (a->blockCount != b->blockCount || a->rows != b->rows ||
+        a->rawBytes != b->rawBytes || a->storedBytes != b->storedBytes ||
+        a->keyBytes != b->keyBytes ||
+        a->compressedBlocks != b->compressedBlocks) {
+        return false;
+    }
+
+    for (size_t i = 0; i < a->blockCount; i++) {
+        const coldmapBlock *x = &a->blocks[i];
+        const coldmapBlock *y = &b->blocks[i];
+        size_t xLen;
+        size_t yLen;
+        const void *xBytes = mflexStoredBytes(x->rows, &xLen);
+        const void *yBytes = mflexStoredBytes(y->rows, &yLen);
+        if (xLen != yLen || memcmp(xBytes, yBytes, xLen) ||
+            mflexIsCompressed(x->rows) != mflexIsCompressed(y->rows) ||
+            x->count != y->count || x->middle != y->middle ||
+            x->raw != y->raw || databoxCompare(&x->first, &y->first)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* A copy of snapshot 'snap' (a flex) with its first two blocks' entries
+ * in swapped order when 'swap', else in order */
+static flex *coldmapTestReorder_(const flex *snap, bool swap) {
+    /* @own: caller; free=flexFree */
+    flex *out = flexNew();
+    const size_t first = COLDMAP_PERSIST_HEADER;
+    const size_t pair = 2 * COLDMAP_PERSIST_BLOCK;
+    for (size_t n = 0; n < flexCount(snap); n++) {
+        size_t from = n;
+        if (swap && n >= first && n < first + pair) {
+            from = n < first + COLDMAP_PERSIST_BLOCK
+                       ? n + COLDMAP_PERSIST_BLOCK
+                       : n - COLDMAP_PERSIST_BLOCK;
+        }
+        databox box = {};
+        flexGetByType(flexIndex(snap, (int32_t)from), &box);
+        flexPushByTypeExact(&out, &box, FLEX_ENDPOINT_TAIL);
+    }
+    return out;
+}
+
+/* The offset in snapshot 'snap' of the last byte of its first compressed
+ * block (0: none) */
+static size_t coldmapTestCompressedTail_(const flex *snap) {
+    flexEntry *fe = flexIndex(snap, COLDMAP_PERSIST_HEADER);
+    while (fe) {
+        uint64_t compressed = 0;
+        databox stored = {};
+        flexReadUnsigned(snap, &fe, &compressed);
+        flexGetByType(fe, &stored);
+        if (compressed) {
+            return (size_t)((const uint8_t *)databoxBytes(&stored) - snap) +
+                   stored.len - 1;
+        }
+        fe = flexNext(snap, fe);
+    }
+    return 0;
 }
 
 int coldmapTest(int argc, char *argv[]) {
@@ -1512,6 +1663,91 @@ int coldmapTest(int argc, char *argv[]) {
             if (coldmapDeleteMany(cm, bad, nullptr) ||
                 coldmapCount(cm) != multimapCount(m)) {
                 ERR("config %zu: repeated keys taken", c);
+            }
+        }
+    }
+
+    TEST("a snapshot keeps the blocks as stored: a restore has the same "
+         "blocks and snapshots to the same bytes; damaged blocks are "
+         "refused") {
+        /* Records compress; integers under a 20% saving stay plain */
+        static const coldmapConfig configs[] = {
+            {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
+            {.rawLimit = FLEX_CAP_LEVEL_512,
+             .storedTarget = 128,
+             .minSavingPercent = 20},
+        };
+        static const coldmapShape_ shapes[] = {COLDMAP_SHAPE_RECORDS,
+                                               COLDMAP_SHAPE_INTS};
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        for (size_t c = 0; c < countof(configs); c++) {
+            cleaner(multimapFree) multimap *m =
+                coldmapTestRows_(shapes[c], 300);
+            cleaner(coldmapFree) coldmap *cm =
+                coldmapNewFromDump(2, &configs[c], multimapDump(m));
+            /* Inserts split blocks; deletes shrink and merge them */
+            uint64_t rng = 0x452821E638D01377ULL + c;
+            char key[32];
+            for (size_t step = 0; step < 3000; step++) {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                const databox k = coldmapTestKey_(shapes[c], (rng >> 8) % 1200,
+                                                  key, sizeof(key));
+                if (rng % 3) {
+                    const databox v = databoxNewSigned((int64_t)(rng >> 20));
+                    const databox *row[2] = {&k, &v};
+                    coldmapInsert(cm, row);
+                } else {
+                    coldmapDelete(cm, &k);
+                }
+            }
+            if (cm->blockCount < 3 || (c == 0) != (cm->compressedBlocks > 0)) {
+                ERR("config %zu: %zu blocks, %" PRIu64 " compressed", c,
+                    cm->blockCount, cm->compressedBlocks);
+            }
+
+            size_t len = 0;
+            cleanerName(zfree, Void) void *snap =
+                persistOpsColdmap.snapshot(cm, &len);
+            cleaner(coldmapFree) coldmap *back =
+                persistOpsColdmap.restore(snap, len);
+            size_t againLen = 0;
+            cleanerName(zfree, Void) void *again =
+                back ? persistOpsColdmap.snapshot(back, &againLen) : nullptr;
+            if (!back || !coldmapSameBlocks_(cm, back) ||
+                !coldmapVerify_(back, state) || againLen != len ||
+                memcmp(snap, again, len)) {
+                ERR("config %zu: the restore's blocks or snapshot differ", c);
+                continue;
+            }
+
+            /* The snapshot rebuilt entry by entry restores; with its
+             * first two blocks swapped, keys no longer ascend */
+            cleaner(flexFree) flex *inOrder = coldmapTestReorder_(snap, false);
+            cleaner(flexFree) flex *swapped = coldmapTestReorder_(snap, true);
+            cleaner(coldmapFree) coldmap *rebuilt =
+                persistOpsColdmap.restore(inOrder, flexBytes(inOrder));
+            cleaner(coldmapFree) coldmap *outOfOrder =
+                persistOpsColdmap.restore(swapped, flexBytes(swapped));
+            if (!rebuilt || !coldmapSameBlocks_(cm, rebuilt) || outOfOrder) {
+                ERR("config %zu: blocks in order refused or out of order "
+                    "taken",
+                    c);
+            }
+
+            /* The last byte of a compressed block is the last byte of its
+             * rows (a trailer): flipped, the block does not open */
+            if (c == 0) {
+                const size_t at = coldmapTestCompressedTail_(snap);
+                cleanerName(zfree, Void) void *bad = zmalloc(len);
+                memcpy(bad, snap, len);
+                ((uint8_t *)bad)[at] ^= 0xFF;
+                cleaner(coldmapFree) coldmap *flipped =
+                    persistOpsColdmap.restore(bad, len);
+                if (!at || flipped) {
+                    ERR("%s", "a flipped byte in a compressed block taken");
+                }
             }
         }
     }
