@@ -74,6 +74,12 @@ bool coldmapExists(const coldmap *cm, mflexState *state, const databox *key);
 /* Insert the row elements[0 .. elementsPerEntry - 1], replacing the row
  * with its key; true when it replaced one */
 bool coldmapInsert(coldmap *cm, const databox *elements[]);
+/* Insert every row of 'rows' (a dump's form: whole rows, strictly
+ * ascending keys; not consumed), each replacing the row with its key: the
+ * rows bound for one block go in with one decompression and one
+ * compression.  'replaced' (may be NULL): how many replaced a row.  False,
+ * nothing changed, when the rows do not ascend. */
+bool coldmapInsertMany(coldmap *cm, const flex *rows, size_t *replaced);
 /* Delete 'key's row; false when there is none */
 bool coldmapDelete(coldmap *cm, const databox *key);
 /* Delete the rows whose keys lie in [lo, hi] (a NULL bound: open at that

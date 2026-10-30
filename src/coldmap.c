@@ -3,6 +3,7 @@
 #include "cleaner.h"
 
 defcleaner(flex *, flexFree);
+defcleanerName(void *, zfree, Void);
 
 /* One block: a flex of whole rows (compressed or plain), its first key as
  * an owned copy (routing never borrows block memory), and what reading it
@@ -332,6 +333,87 @@ bool coldmapInsert(coldmap *cm, const databox *elements[]) {
         coldmapBlockStore_(cm, coldmapBlockInsert_(cm, at + 1), upper, true);
     }
     return replaced;
+}
+
+/* Row 'row' of a dump's rows decoded into 'box' (bytes stay in 'rows') */
+static flexEntry *coldmapDecodeRow_(const flex *rows, flexEntry *fe,
+                                    multimapElements elementsPerEntry,
+                                    databoxBig *box) {
+    for (multimapElements e = 0; e < elementsPerEntry; e++) {
+        flexGetByTypeBig(fe, &box[e]);
+        fe = flexNext(rows, fe);
+    }
+    return fe;
+}
+
+bool coldmapInsertMany(coldmap *cm, const flex *rows, size_t *replaced) {
+    const multimapElements epe = cm->elementsPerEntry;
+    if (!coldmapRowsAscend_(rows, epe)) {
+        return false;
+    }
+
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(epe, sizeof(databoxBig) + sizeof(databox *));
+    databoxBig *box = storage;
+    const databox **row = (const databox **)(box + epe);
+    for (multimapElements e = 0; e < epe; e++) {
+        row[e] = (const databox *)&box[e];
+    }
+
+    const size_t total = flexCount(rows) / epe;
+    flexEntry *fe = total ? flexHead(rows) : nullptr;
+    size_t done = 0;
+    size_t replacedRows = 0;
+    while (done < total) {
+        fe = coldmapDecodeRow_(rows, fe, epe, box);
+        size_t at;
+        if (!cm->blockCount || !coldmapRoute_(cm, row[0], &at)) {
+            /* No blocks, or below every key: the single-row path */
+            replacedRows += coldmapInsert(cm, row);
+            done++;
+            continue;
+        }
+
+        /* Every following row that routes to this block goes in with it:
+         * one decompression and one compression for the batch */
+        coldmapBlock *b = &cm->blocks[at];
+        const databox *next =
+            at + 1 < cm->blockCount ? &cm->blocks[at + 1].first : nullptr;
+        coldmapBlockUncount_(cm, b);
+        flex *f = mflexOpen(b->rows, cm->state);
+        flexEntry *middle = f + b->middle;
+        for (;;) {
+            replacedRows +=
+                flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+                    &f, epe, row, &middle, true, nullptr);
+            done++;
+            if (done == total || flexBytes(f) > cm->rawCap) {
+                break;
+            }
+
+            flexEntry *after = coldmapDecodeRow_(rows, fe, epe, box);
+            if (next && databoxCompare(row[0], next) >= 0) {
+                break; /* the next block's row: decoded again there */
+            }
+            fe = after;
+        }
+
+        flex *upper = nullptr;
+        if (flexBytes(f) > cm->rawCap && flexCount(f) >= 2 * (size_t)epe) {
+            /* @own: container; free=mflexFree */
+            upper = flexSplitMiddle(&f, epe, flexMiddle(f, epe));
+        }
+        coldmapBlockStore_(cm, b, f, true);
+        if (upper) {
+            coldmapBlockStore_(cm, coldmapBlockInsert_(cm, at + 1), upper,
+                               true);
+        }
+    }
+
+    if (replaced) {
+        *replaced = replacedRows;
+    }
+    return true;
 }
 
 bool coldmapDelete(coldmap *cm, const databox *key) {
@@ -926,6 +1008,80 @@ int coldmapTest(int argc, char *argv[]) {
             if (c == 1 && !splitsSeen) {
                 ERR("%s", "512-byte blocks never split");
             }
+        }
+    }
+
+    TEST("batches of sorted rows go in as row-at-a-time inserts would, into "
+         "empty, sparse and dense coldmaps") {
+        static const coldmapConfig configs[] = {
+            {}, {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128}};
+        static const size_t starts[] = {0, 3, 400};
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        for (size_t c = 0; c < countof(configs); c++) {
+            for (size_t s = 0; s < countof(starts); s++) {
+                cleaner(multimapFree) multimap *m =
+                    coldmapTestRows_(COLDMAP_SHAPE_RECORDS, starts[s]);
+                cleaner(coldmapFree) coldmap *cm =
+                    coldmapNewFromDump(2, &configs[c], multimapDump(m));
+                uint64_t rng = 0x13198A2E03707344ULL + c * 7 + s;
+                char key[32];
+                char value[64];
+                for (size_t batch = 0; batch < 40; batch++) {
+                    /* Ids ascend: a random stride from a random start */
+                    cleaner(multimapFree) multimap *rows = multimapNew(2);
+                    size_t id = (rng >> 20) % 900;
+                    size_t replacedWant = 0;
+                    const size_t count = 1 + (rng >> 30) % 120;
+                    for (size_t r = 0; r < count; r++) {
+                        rng ^= rng << 13;
+                        rng ^= rng >> 7;
+                        rng ^= rng << 17;
+                        id += 1 + (rng >> 33) % 9;
+                        const databox k = coldmapTestKey_(COLDMAP_SHAPE_RECORDS,
+                                                          id, key, sizeof(key));
+                        const int vlen =
+                            snprintf(value, sizeof(value),
+                                     "{\"batch\":%zu,\"row\":%zu}", batch, r);
+                        const databox v =
+                            DATABOX_WITH_BYTES((uint8_t *)value, (size_t)vlen);
+                        const databox *row[2] = {&k, &v};
+                        replacedWant += multimapExists(m, &k);
+                        multimapInsert(&m, row);
+                        multimapInsert(&rows, row);
+                    }
+
+                    cleaner(flexFree) flex *dump = multimapDump(rows);
+                    size_t replaced = 0;
+                    if (!coldmapInsertMany(cm, dump, &replaced) ||
+                        replaced != replacedWant) {
+                        ERR("config %zu start %zu batch %zu: %zu replaced, "
+                            "want %zu",
+                            c, s, batch, replaced, replacedWant);
+                    }
+                }
+
+                cleaner(flexFree) flex *want = multimapDump(m);
+                cleaner(flexFree) flex *got = coldmapDump(cm, state);
+                if (!flexEqual(want, got) || !coldmapVerify_(cm, state)) {
+                    ERR("config %zu start %zu: rows or blocks differ", c, s);
+                }
+            }
+        }
+
+        /* Rows that do not ascend change nothing */
+        cleaner(multimapFree) multimap *m =
+            coldmapTestRows_(COLDMAP_SHAPE_INTS, 5);
+        cleaner(coldmapFree) coldmap *cm =
+            coldmapNewFromDump(2, nullptr, multimapDump(m));
+        const databox two = databoxNewSigned(2);
+        const databox one = databoxNewSigned(1);
+        cleaner(flexFree) flex *bad = flexNew();
+        flexPushByTypeExact(&bad, &two, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&bad, &two, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&bad, &one, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&bad, &one, FLEX_ENDPOINT_TAIL);
+        if (coldmapInsertMany(cm, bad, nullptr) || coldmapCount(cm) != 5) {
+            ERR("%s", "rows out of order were taken");
         }
     }
 
