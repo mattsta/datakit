@@ -630,12 +630,13 @@ struct persistConfig {
 
     /* WAL settings */
     persistSyncMode syncMode;
-    size_t walMaxSize;    /* Trigger compaction when WAL exceeds this */
+    size_t walMaxSize;    /* Compact when the WAL reaches this (0: off) */
     size_t walBufferSize; /* Write buffer size (default: 64KB) */
 
-    /* Compaction settings */
-    bool autoCompact;    /* Compact automatically when threshold hit */
-    double compactRatio; /* Compact when WAL size > snapshot * ratio */
+    /* Compaction policy (persistShouldCompact; persistCtx compacts on it
+     * after each logged op) */
+    bool autoCompact;    /* false: never recommend compaction */
+    double compactRatio; /* Compact when WAL > snapshot * ratio (0: off) */
 
     /* Recovery settings */
     bool strictRecovery; /* Fail on any corruption vs skip bad entries */
@@ -1107,7 +1108,9 @@ bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx,
 /* Compact WAL into snapshot */
 bool persistCompact(persist *p, void *structure);
 
-/* Check if compaction is recommended */
+/* Whether the compaction policy says to compact: autoCompact, and the
+ * live WAL (buffered bytes counted) at walMaxSize or past compactRatio
+ * times the snapshot.  persistCtx compacts when it says so. */
 bool persistShouldCompact(const persist *p);
 
 /* ---- Recovery ---- */

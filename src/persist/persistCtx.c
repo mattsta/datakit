@@ -65,6 +65,7 @@ persistCtxConfig persistCtxDefaultConfig(void) {
         .strictRecovery = false,
         .compression = PERSIST_COMPRESS_NONE,
         .compressionLevel = 0,
+        .compactRatio = 0,
     };
 }
 
@@ -193,6 +194,13 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
     pconfig.strictRecovery = ctx->config.strictRecovery;
     pconfig.compression = ctx->config.compression;
     pconfig.compressionLevel = ctx->config.compressionLevel;
+
+    /* One compaction policy: the WAL size and ratio tests are the core's
+     * (persistShouldCompact); the op count is the context's own */
+    pconfig.walMaxSize = ctx->config.compactAfterBytes;
+    pconfig.compactRatio = ctx->config.compactRatio;
+    pconfig.autoCompact =
+        ctx->config.compactAfterBytes > 0 || ctx->config.compactRatio > 0;
 
     switch (ctx->config.syncMode) {
     case PERSIST_CTX_SYNC_NONE:
@@ -357,10 +365,8 @@ bool persistCtxMaybeCompact(persistCtx *ctx, void *structure,
         shouldCompact = true;
     }
 
-    /* Check byte threshold: the live WAL, buffered bytes counted (a
-     * compaction empties it) */
-    if (!shouldCompact && ctx->config.compactAfterBytes > 0 &&
-        persistWALBytes(ctx->p) >= ctx->config.compactAfterBytes) {
+    /* The WAL size and ratio tests: the core's policy */
+    if (!shouldCompact && persistShouldCompact(ctx->p)) {
         shouldCompact = true;
     }
 
@@ -842,6 +848,33 @@ int persistCtxTest(int, char *[]) {
                 }
                 flexCloseP(f);
                 persistCtxFree(ctx);
+            }
+
+            /* A ratio alone compacts when the live WAL passes the snapshot
+             * times the ratio: the WAL restarts each time, so 300 entries
+             * against a growing snapshot compact several times, not on
+             * every op */
+            {
+                ptestCleanupFiles(path);
+                persistCtxConfig config = persistCtxDefaultConfig();
+                config.compactAfterOps = 0;
+                config.compactAfterBytes = 0;
+                config.compactRatio = 1.0;
+                persistCtx *rctx = persistCtxNew(path, &config);
+                flexP *rf = flexNewP(rctx);
+                for (int64_t i = 0; i < 300; i++) {
+                    const databox v = DATABOX_SIGNED(i);
+                    PTEST_LOGGED(flexPushTailP(rf, &v));
+                }
+                persistCtxStats rstats;
+                persistCtxGetStats(rctx, &rstats);
+                if (rstats.totalCompactions < 2 ||
+                    rstats.totalCompactions > 150 || flexCountP(rf) != 300) {
+                    ERR("a ratio of 1 compacted %" PRIu64 " times",
+                        rstats.totalCompactions);
+                }
+                flexCloseP(rf);
+                persistCtxFree(rctx);
             }
 
             /* A byte threshold alone compacts each time the live WAL (its

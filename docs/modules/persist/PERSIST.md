@@ -175,11 +175,15 @@ out-parameter; pass NULL when you do not need it:
     next operation, so call `persistCtxSyncIfDue` from your event loop to
     bound that window.
   - `PERSIST_CTX_SYNC_ALWAYS`: a sync after every operation.
-- `compactAfterOps`, `compactAfterBytes`: compact when either is exceeded
-  since the last compaction (`compactAfterBytes` measures the live WAL,
-  its buffered bytes counted: `persistWALBytes`, and
-  `persistCtxStats.bytesSinceCompact`)
-  (0 disables that trigger). `*CompactP` compacts now.
+- `compactAfterOps`, `compactAfterBytes`, `compactRatio`: compact when any
+  is reached since the last compaction: that many ops, that many WAL bytes,
+  or a WAL larger than the snapshot times the ratio (0 disables a trigger;
+  the ratio is off by default). The WAL is measured live, its buffered
+  bytes counted (`persistWALBytes`, `persistCtxStats.bytesSinceCompact`).
+  The bytes and ratio tests are the core's one policy
+  (`persistShouldCompact`, from `persistConfig.walMaxSize` and
+  `compactRatio`), which a direct core user can ask too. `*CompactP`
+  compacts now.
 - `walBufferSize`: the WAL write buffer.
 - `strictRecovery`: see below.
 - `compression`, `compressionLevel`: snapshot body compression (off by

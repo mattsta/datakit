@@ -2154,30 +2154,25 @@ bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx,
  * ============================================================================
  */
 
+/* The compaction policy, for persistCtx and direct callers alike: the live
+ * WAL (buffered bytes counted) past walMaxSize, or past compactRatio times
+ * the snapshot (0 turns either test off) */
 bool persistShouldCompact(const persist *p) {
-    if (!p || !p->config.autoCompact) {
+    if (!p || !p->config.autoCompact || !p->walStore) {
         return false;
     }
 
-    if (!p->walStore || !p->snapshotStore) {
-        return false;
-    }
-
-    int64_t walSize = p->walStore->size(p->walStore->ctx);
-    if (walSize < 0) {
-        return false;
-    }
-
-    /* Check absolute WAL size limit */
-    if ((size_t)walSize > p->config.walMaxSize) {
+    const uint64_t walBytes = persistWALBytes(p);
+    if (p->config.walMaxSize > 0 && walBytes >= p->config.walMaxSize) {
         return true;
     }
 
-    /* Check ratio to snapshot */
-    int64_t snapSize = p->snapshotStore->size(p->snapshotStore->ctx);
-    if (snapSize > 0 &&
-        (double)walSize > (double)snapSize * p->config.compactRatio) {
-        return true;
+    if (p->config.compactRatio > 0 && p->snapshotStore) {
+        const int64_t snapSize = p->snapshotStore->size(p->snapshotStore->ctx);
+        if (snapSize > 0 &&
+            (double)walBytes > (double)snapSize * p->config.compactRatio) {
+            return true;
+        }
     }
 
     return false;
@@ -12526,6 +12521,14 @@ int persistTest(int, char *[]) {
         persistSetConfig(p, &config);
         if (persistShouldCompact(p)) {
             ERR("compaction recommended under both limits");
+        }
+
+        /* 0 turns a test off */
+        config.walMaxSize = 0;
+        config.compactRatio = 0;
+        persistSetConfig(p, &config);
+        if (persistShouldCompact(p)) {
+            ERR("compaction recommended with both tests off");
         }
 
         /* Compaction empties the WAL; nothing to recommend */

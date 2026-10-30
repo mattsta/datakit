@@ -43,9 +43,12 @@ typedef struct persistCtxConfig {
     /* Sync policy */
     persistCtxSyncMode syncMode;
 
-    /* Compaction thresholds (compact when EITHER is exceeded) */
-    size_t compactAfterOps;   /* Compact after N operations (0 = disabled) */
-    size_t compactAfterBytes; /* Compact after N WAL bytes (0 = disabled) */
+    /* Compaction thresholds (compact when ANY is reached; 0 disables
+     * one).  Bytes and ratio are the core's policy (persistShouldCompact:
+     * walMaxSize, compactRatio); the op count is the context's. */
+    size_t compactAfterOps;   /* Compact after N operations */
+    size_t compactAfterBytes; /* Compact at N WAL bytes, buffered counted */
+    double compactRatio;      /* Compact when WAL > snapshot * ratio */
 
     /* WAL buffer size */
     size_t walBufferSize; /* Buffer size for WAL writes */
