@@ -104,8 +104,9 @@ typedef enum flexEnvelopeAlgo : uint16_t {
 typedef enum flexEnvelopeFlag {
     FLEX_ENV_FLAG_NONE = 0,
 
-    /* Producer asserts the payload is itself a flex; consumers may
-     * automatically run flexValidateBuffer on it after digest passes. */
+    /* Producer asserts the payload is itself a flex: verify and open run
+     * flexValidateBuffer on it once the digest (or tag) passes, and
+     * refuse a payload that is not a flex */
     FLEX_ENV_FLAG_PAYLOAD_FLEX = 1u << 0,
 
     /* A 32-bit key id varint follows immediately after the `flags`
@@ -117,10 +118,6 @@ typedef enum flexEnvelopeFlag {
      * windows: producers tag with the current id; receivers accept
      * any id their keyring holds. */
     FLEX_ENV_FLAG_KEYID_PRESENT = 1u << 1,
-
-    /* Reserved for future compression marker. Producer must not set
-     * this bit in V1; verify rejects envelopes with unknown bits set. */
-    /* FLEX_ENV_FLAG_PAYLOAD_COMPRESSED = 1u << 2, */
 } flexEnvelopeFlag;
 
 /* Mask of all flag bits valid in the current envelope version. Any bit

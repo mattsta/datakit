@@ -1067,12 +1067,12 @@ bool flexEnvelopeVerify(const uint8_t *buf, size_t buf_len,
         goto cleanup;
     }
 
-    /* Optional payload structural check. */
-    if (opts & FLEX_ENV_VERIFY_REQUIRE_FLEX) {
-        if (!flexValidateBuffer(buf + f.payload_offset,
-                                (size_t)f.payload_len)) {
-            goto cleanup;
-        }
+    /* Payload structural check: asked for by the reader, or the producer
+     * said the payload is a flex */
+    if (((opts & FLEX_ENV_VERIFY_REQUIRE_FLEX) ||
+         (f.on_wire_flags & FLEX_ENV_FLAG_PAYLOAD_FLEX)) &&
+        !flexValidateBuffer(buf + f.payload_offset, (size_t)f.payload_len)) {
+        goto cleanup;
     }
 
     if (out_payload) {
@@ -1742,6 +1742,13 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
             setVerifyErr(FLEX_ENV_VERIFY_FAILED_NONCE_REUSED);
             goto cleanup;
         }
+    }
+
+    /* The producer said the payload is a flex: the plaintext must be one */
+    if ((f.on_wire_flags & FLEX_ENV_FLAG_PAYLOAD_FLEX) &&
+        !flexValidateBuffer(plaintext_out, (size_t)f.payload_len)) {
+        dkSecureZero(plaintext_out, (size_t)f.payload_len);
+        goto cleanup;
     }
 
     if (plaintext_written) {
@@ -3756,6 +3763,43 @@ int flexEnvelopeTest(int, char *[]) {
         if (flexEnvelopeVerify(jbuf, junkTotal, &vp, &p, &pl)) {
             ERR("REQUIRE_FLEX accepted non-flex payload "
                 "(flexValidateBuffer not gating)");
+        }
+    }
+
+    TEST("envelope: a payload the producer flags as a flex is checked "
+         "without the reader asking") {
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
+        uint8_t junk[16];
+        ctestReplaySeeded(junk, sizeof(junk), 7);
+        const struct {
+            const uint8_t *bytes;
+            size_t len;
+            uint32_t flags;
+            bool verifies;
+        } cases[] = {
+            {(const uint8_t *)f, flexBytes(f), FLEX_ENV_FLAG_PAYLOAD_FLEX,
+             true},
+            {junk, sizeof(junk), FLEX_ENV_FLAG_PAYLOAD_FLEX, false},
+            {junk, sizeof(junk), FLEX_ENV_FLAG_NONE, true},
+        };
+        for (size_t i = 0; i < countof(cases); i++) {
+            const size_t total = flexEnvelopeWrappedSize(
+                cases[i].len, FLEX_ENV_ALGO_XXH3_64, cases[i].flags);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
+            const flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH3_64,
+                                               .on_wire_flags = cases[i].flags};
+            size_t written = 0;
+            const flexEnvelopeVerifyParams vp = {.opts =
+                                                     FLEX_ENV_VERIFY_DEFAULT};
+            const uint8_t *p = nullptr;
+            uint64_t pl = 0;
+            if (!flexEnvelopeWrap(buf, total, cases[i].bytes, cases[i].len, &wp,
+                                  &written) ||
+                flexEnvelopeVerify(buf, total, &vp, &p, &pl) !=
+                    cases[i].verifies) {
+                ERR("case %zu: verify did not give %d", i, cases[i].verifies);
+            }
         }
     }
 
