@@ -2588,6 +2588,8 @@ const char *persistTypeName(persistType type) {
         return "idRows";
     case PERSIST_TYPE_COLDMAP:
         return "coldmap";
+    case PERSIST_TYPE_MULTITIER:
+        return "multitier";
     default:
         return "unknown";
     }

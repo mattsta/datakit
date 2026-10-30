@@ -223,6 +223,8 @@ typedef enum persistType {
 
     /* A sorted map in compressed blocks */
     PERSIST_TYPE_COLDMAP = 160,
+    /* A key-value map in hot, cold and sink levels */
+    PERSIST_TYPE_MULTITIER = 161,
 
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255
@@ -1314,6 +1316,22 @@ extern const persistOps persistOpsIdRows;
  *                                         databox *[2], NULL for open)
  *   The row width is fixed at creation, so there is no newEmpty. */
 extern const persistOps persistOpsColdmap;
+
+/* persistOpsMultitier (multitier.c), format 1:
+ *   snapshot: flex [hot limit, LRU levels, demotion batch, cold limit,
+ *             cold raw limit, stored target, required saving, LZ4 level,
+ *             then every live row as [key, value] in key order, stored
+ *             exactly]: what the multitier holds, not which level holds it
+ *   restore:  refuses a config out of range and rows that are not whole
+ *             or whose keys do not strictly ascend; the hot level takes
+ *             rows in key order up to its limit, the rest go cold.
+ *   WAL (args: const databox *const *):
+ *     INSERT      [key, value]   multitierSet
+ *     DELETE      [key]          multitierDelete
+ *     BULK_DELETE [keys...]      the rows a sink took, each deleted
+ *   Replay moves rows between levels as the live multitier would, but
+ *   sends none to the sink: only BULK_DELETE removes rows. */
+extern const persistOps persistOpsMultitier;
 
 /* Identity-verified POP fold observability (see the apply-arm
  * comment in persist.c): deep-remove = the stamped element was

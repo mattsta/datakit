@@ -51,6 +51,18 @@ typedef struct multitierConfig {
 /* NULL config: the defaults (no limits: a multidict with LRU tracking) */
 [[nodiscard]] multitier *multitierNew(const multitierConfig *config);
 void multitierFree(multitier *t);
+/* The sink rows leaving the cold level go to (NULL: dropped); a restored
+ * multitier has none until set */
+void multitierSetSink(multitier *t, multitierSinkFn *sink, void *sinkCtx);
+/* The config in force, defaults resolved */
+void multitierGetConfig(const multitier *t, multitierConfig *config);
+
+/* Persistence (persistOpsMultitier) records what the multitier holds, not
+ * where: a snapshot is every live row in key order, and a restore fills
+ * the hot level in key order up to its limit with the rest cold, with no
+ * use history (each row's first Gets warm it again).  A move between
+ * levels changes no row, so it is never logged; a row leaving for the
+ * sink is (multitierP logs it as the sink takes it). */
 
 /* Set 'key' to 'value' in the hot level (a copy at any lower level goes);
  * true when the key was new to the multitier */
