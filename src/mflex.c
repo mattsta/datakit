@@ -57,9 +57,11 @@ enum stateBufferIndex { UNCOMPRESSED = 0, COMPRESSED = 1 };
                               "a compressed block did not decompress whole");  \
             }                                                                  \
             f = STATE_UNCOMPRESSED_FLEX;                                       \
+            state->stats.decompressions++;                                     \
             STATE_UNCOMPRESSED_RETAIN;                                         \
         } else {                                                               \
             f = mff(m);                                                        \
+            state->stats.plainOpens++;                                         \
             /* It's possible a user can OPEN then never close (for read-only   \
              * operations), so make sure to mark state as RELEASED since we    \
              * know the user isn't accessing STATE_UNCOMPRESSED_FLEX           \
@@ -143,6 +145,22 @@ void mflexStateGetPolicy(const mflexState *state, uint8_t *minSavingPercent,
                          uint8_t *level) {
     *minSavingPercent = state->minSavingPercent;
     *level = state->level;
+}
+
+void mflexStateGetStats(const mflexState *state, mflexStateStats *out) {
+    *out = state->stats;
+}
+
+/* A close: 'in' bytes of flex kept as 'stored' bytes, compressed or not */
+static void mflexCountClose_(mflexState *state, size_t in, size_t stored,
+                             bool compressed) {
+    if (compressed) {
+        state->stats.closesCompressed++;
+    } else {
+        state->stats.closesPlain++;
+    }
+    state->stats.bytesIn += in;
+    state->stats.bytesStored += stored;
 }
 
 /* The most bytes a compressed form of a 'totalBytes' flex may take under
@@ -353,6 +371,7 @@ const flex *mflexOpenReadOnly(const mflex *m, mflexState *state) {
 const flex *mflexOpenChecked(const mflex *m, mflexState *state) {
     if (_mflexType(m) != MFLEX_TYPE_CFLEX) {
         STATE_UNCOMPRESSED_RELEASE;
+        state->stats.plainOpens++;
         return mff(m);
     }
 
@@ -361,6 +380,7 @@ const flex *mflexOpenChecked(const mflex *m, mflexState *state) {
         return nullptr;
     }
 
+    state->stats.decompressions++;
     STATE_UNCOMPRESSED_RETAIN;
     return STATE_UNCOMPRESSED_FLEX;
 }
@@ -444,6 +464,7 @@ void mflexCloseGrow(mflex **mm, mflexState *const state, flex *f) {
         /* Shrink compressed flex down to the bytes it actually uses. */
         zreallocSelf(f, cflexBytes(f));
         *mm = _MFLEX_TAG(f, MFLEX_TYPE_CFLEX);
+        mflexCountClose_(state, totalBytes, cflexBytes(f), true);
     } else {
         /* else, compression failed. */
         if (STATE_UNCOMPRESSED_RETAINED) {
@@ -460,6 +481,7 @@ void mflexCloseGrow(mflex **mm, mflexState *const state, flex *f) {
          * the current flex as uncompressed and make it the
          * new '*mm' for the caller. */
         *mm = _MFLEX_TAG(f, MFLEX_TYPE_FLEX);
+        mflexCountClose_(state, totalBytes, totalBytes, false);
     }
 }
 
@@ -496,6 +518,7 @@ void mflexCloseShrink(mflex **mm, mflexState *const state, flex *const f) {
             /* We compressed *into* '*mm', so tag it as compressed and
              * update it for the caller. */
             *mm = _MFLEX_TAG(*mm, MFLEX_TYPE_CFLEX);
+            mflexCountClose_(state, fullSize, cflexBytes(mfc(*mm)), true);
         } else {
             /* else, compression failed, (meaning: this is closing after
              * deleting data, but we are _bigger_ than our original space?)
@@ -510,6 +533,7 @@ void mflexCloseShrink(mflex **mm, mflexState *const state, flex *const f) {
             /* compression failed, so tag as not compressed and update
              * in-place for the caller. */
             *mm = _MFLEX_TAG(f, MFLEX_TYPE_FLEX);
+            mflexCountClose_(state, fullSize, fullSize, false);
         }
     } else {
         /* else, 'f' came from '*mm' originally, so we can't optimize
@@ -536,6 +560,7 @@ void mflexCloseNoCompress(mflex **mm, mflexState *state, const flex *f) {
 
     /* in all cases we want to directly replace '*mm' with 'f' itself. */
     *mm = _MFLEX_TAG(f, MFLEX_TYPE_NO_COMPRESS);
+    mflexCountClose_(state, flexBytes(f), flexBytes(f), false);
 }
 
 /* ====================================================================
@@ -912,6 +937,33 @@ int mflexTest(int, char *[]) {
             mflexStateSetPolicy(ps, 100, 0) || mflexStateSetPolicy(ps, 0, 13)) {
             ERR("LZ4HC %zu vs %zu bytes, or a bad policy taken", stored[2],
                 stored[0]);
+        }
+    }
+
+    TEST("state stats count each open and close and the bytes kept") {
+        cleaner(mflexStateFree) mflexState *ss = mflexStateCreate();
+        /* @own: container; free=mflexFree */
+        flex *f = flexNew();
+        for (int i = 0; i < 200; i++) {
+            flexPushBytes(&f, "a compressible row of text", 26,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        const size_t raw = flexBytes(f);
+        cleaner(mflexFree) mflex *m = mflexConvertFromFlex(f, ss);
+        (void)mflexOpenReadOnly(m, ss);
+        cleaner(mflexFree) mflex *plain = mflexNew();
+        (void)mflexOpenReadOnly(plain, ss);
+        mflexStateStats st;
+        mflexStateGetStats(ss, &st);
+        /* The conversion opens the flex plain, then closes it compressed */
+        if (st.closesCompressed != 1 || st.closesPlain != 0 ||
+            st.decompressions != 1 || st.plainOpens != 2 || st.bytesIn != raw ||
+            st.bytesStored != mflexBytesActual(m)) {
+            ERR("stats: %" PRIu64 " compressed closes, %" PRIu64
+                " decompressions, %" PRIu64 " plain opens, %" PRIu64
+                " in, %" PRIu64 " stored",
+                st.closesCompressed, st.decompressions, st.plainOpens,
+                st.bytesIn, st.bytesStored);
         }
     }
 

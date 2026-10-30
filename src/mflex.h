@@ -26,6 +26,20 @@ void mflexStateFree(mflexState *state);
  * for a value out of range. */
 bool mflexStateSetPolicy(mflexState *state, uint8_t minSavingPercent,
                          uint8_t level);
+
+/* What the opens and closes through a state did: opens of compressed
+ * blocks (each a decompression) and of plain ones; closes that kept the
+ * block compressed and closes the policy left plain; the bytes closes took
+ * in (flex) and kept (stored) */
+typedef struct mflexStateStats {
+    uint64_t decompressions;
+    uint64_t plainOpens;
+    uint64_t closesCompressed;
+    uint64_t closesPlain;
+    uint64_t bytesIn;
+    uint64_t bytesStored;
+} mflexStateStats;
+void mflexStateGetStats(const mflexState *state, mflexStateStats *out);
 void mflexStateGetPolicy(const mflexState *state, uint8_t *minSavingPercent,
                          uint8_t *level);
 

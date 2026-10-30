@@ -1,6 +1,7 @@
 #pragma once
 
 #include "flex.h"
+#include "mflex.h" /* mflexStateStats */
 
 /* State buffer for (de)compression
  *   - buf[0] is the decompression buffer.
@@ -23,4 +24,7 @@ struct mflexState {
      * LZ4 level 'level' (0 fast, 1-12 LZ4HC) */
     uint8_t minSavingPercent;
     uint8_t level;
+
+    /* What this state has done (mflexStateGetStats) */
+    mflexStateStats stats;
 };
