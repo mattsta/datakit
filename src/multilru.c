@@ -1,6 +1,7 @@
 #include "datakit.h"
 
 #include "cleaner.h"
+#include "dkBits.h"   /* dkDivCeil */
 #include "dkEndian.h" /* dkLoadLe64, dkStoreLe64 */
 #include "fibbuf.h"
 #include "jebuf.h"
@@ -132,6 +133,7 @@ struct multilru {
 
     /* Eviction control */
     bool autoEvict; /* Auto-evict on insert when over limits (default: true) */
+    bool unboundedLevels; /* no per-level share (S4LRU segments off) */
     multilruEvictFn *evictCallback; /* Called on true eviction */
     void *evictCallbackData;        /* User data passed to callback */
 
@@ -837,6 +839,7 @@ multilru *multilruNewWithConfig(const multilruConfig *config) {
 
     mlru->policy = config->policy;
     mlru->evictStrategy = config->evictStrategy;
+    mlru->unboundedLevels = config->unboundedLevels;
     mlru->maxCount = config->maxCount;
     mlru->maxWeight = config->maxWeight;
     mlru->autoEvict = true; /* Enable auto-eviction by default */
@@ -955,6 +958,42 @@ multilruPtr multilruInsertWeighted(multilru *mlru, uint64_t weight) {
     return idx;
 }
 
+/* Whether level 'level' holds more than its S4LRU share: an equal share of
+ * the live entries (rounded up), or of the total weight when weights drive
+ * eviction (a level holding one entry is never over) */
+static bool mlruOverShare_(const multilru *mlru, size_t level) {
+    /* x > ceil(total / N) is (x - 1) * N >= total: no division on the
+     * promotion path (a product past 64 bits is over any total) */
+    const multilruLevel *l = &mlru->levels[level];
+    uint64_t scaled;
+    if (mlru->weights && mlru->policy != MLRU_POLICY_COUNT) {
+        return l->count > 1 && l->weight > 0 &&
+               (ckd_mul(&scaled, l->weight - 1, (uint64_t)mlru->maxLevels) ||
+                scaled >= mlru->totalWeight);
+    }
+
+    return l->count > 0 &&
+           (l->count - 1) * (uint64_t)mlru->maxLevels >= mlru->count;
+}
+
+/* S4LRU segments: an entry just placed at 'level' may overfill it; its
+ * oldest entry then moves to the head of the level below, which may
+ * overfill that one in turn (at most maxLevels - 1 moves).  Level 0 has no
+ * share: eviction bounds it. */
+static void mlruBalanceDown_(multilru *mlru, size_t level) {
+    if (mlru->unboundedLevels) {
+        return;
+    }
+
+    while (level > 0 && mlruOverShare_(mlru, level)) {
+        const uint64_t oldest = mlru->levels[level].tail;
+        removeFromList(mlru, oldest);
+        insertAtLevelHead(mlru, oldest, level - 1);
+        mlru->statDemotions++;
+        level--;
+    }
+}
+
 void multilruIncrease(multilru *mlru, multilruPtr ptr) {
     const uint64_t idx = ptr;
     if (idx == 0 || idx >= mlru->capacity || !E_POPULATED(mlru, idx) ||
@@ -973,6 +1012,7 @@ void multilruIncrease(multilru *mlru, multilruPtr ptr) {
 
     removeFromList(mlru, idx);
     insertAtLevelHead(mlru, idx, targetLevel);
+    mlruBalanceDown_(mlru, targetLevel);
 }
 
 void multilruUpdateWeight(multilru *mlru, multilruPtr ptr, uint64_t newWeight) {
@@ -1017,6 +1057,7 @@ void multilruDecrease(multilru *mlru, multilruPtr ptr) {
     removeFromList(mlru, idx);
     insertAtLevelHead(mlru, idx, level - 1);
     mlru->statDemotions++;
+    mlruBalanceDown_(mlru, level - 1);
 }
 
 multilruPtr multilruPeekMinimum(const multilru *mlru) {
@@ -1446,6 +1487,14 @@ bool multilruGetAutoEvict(const multilru *mlru) {
     return mlru->autoEvict;
 }
 
+void multilruSetUnboundedLevels(multilru *mlru, bool unbounded) {
+    mlru->unboundedLevels = unbounded;
+}
+
+bool multilruGetUnboundedLevels(const multilru *mlru) {
+    return mlru->unboundedLevels;
+}
+
 void multilruSetEvictCallback(multilru *mlru, multilruEvictFn *callback,
                               void *userData) {
     mlru->evictCallback = callback;
@@ -1847,6 +1896,98 @@ static int mlruTestRepack_(multilru *mlru, size_t *movedOut) {
     }
     err += mlruTestRepackKept_(mlru, order, levels, weights, n, &moves);
     return err;
+}
+
+/* An independent model of S4LRU segments: per level an array of handles,
+ * newest first; each level above 0 holds at most ceil(live / levels) */
+enum { MLRU_MODEL_LEVELS = 4, MLRU_MODEL_MAX = 256 };
+typedef struct mlruModel_ {
+    multilruPtr at[MLRU_MODEL_LEVELS][MLRU_MODEL_MAX];
+    size_t count[MLRU_MODEL_LEVELS];
+    size_t live;
+} mlruModel_;
+
+static void mlruModelPlace_(mlruModel_ *m, size_t level, multilruPtr h) {
+    for (size_t j = m->count[level]; j > 0; j--) {
+        m->at[level][j] = m->at[level][j - 1];
+    }
+    m->at[level][0] = h;
+    m->count[level]++;
+}
+
+/* The level 'h' was at, after taking it out */
+static size_t mlruModelTake_(mlruModel_ *m, multilruPtr h) {
+    for (size_t l = 0; l < MLRU_MODEL_LEVELS; l++) {
+        for (size_t i = 0; i < m->count[l]; i++) {
+            if (m->at[l][i] == h) {
+                for (size_t j = i + 1; j < m->count[l]; j++) {
+                    m->at[l][j - 1] = m->at[l][j];
+                }
+                m->count[l]--;
+                return l;
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+
+static size_t mlruModelLevelOf_(const mlruModel_ *m, multilruPtr h) {
+    for (size_t l = 0; l < MLRU_MODEL_LEVELS; l++) {
+        for (size_t i = 0; i < m->count[l]; i++) {
+            if (m->at[l][i] == h) {
+                return l;
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+
+static void mlruModelMove_(mlruModel_ *m, multilruPtr h, size_t to) {
+    mlruModelTake_(m, h);
+    mlruModelPlace_(m, to, h);
+    const size_t share = dkDivCeil(m->live, (size_t)MLRU_MODEL_LEVELS);
+    while (to > 0 && m->count[to] > share) {
+        const multilruPtr oldest = m->at[to][m->count[to] - 1];
+        m->count[to]--;
+        mlruModelPlace_(m, to - 1, oldest);
+        to--;
+    }
+}
+
+/* Whether the cache's order (CollectLowest) is the model's */
+static bool mlruModelMatches_(const multilru *mlru, const mlruModel_ *m) {
+    multilruPtr got[MLRU_MODEL_MAX];
+    if (multilruCollectLowest(mlru, got, MLRU_MODEL_MAX) != m->live) {
+        return false;
+    }
+
+    size_t k = 0;
+    for (size_t l = 0; l < MLRU_MODEL_LEVELS; l++) {
+        for (size_t i = m->count[l]; i-- > 0;) {
+            if (got[k++] != m->at[l][i]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Counts the first eviction of each of four tracked handles (a handle is
+ * reused only after its entry is evicted) */
+typedef struct mlruAgeEvicted_ {
+    const multilruPtr *old;
+    bool seen[4];
+    size_t evicted;
+} mlruAgeEvicted_;
+
+static void mlruAgeOnEvict_(multilruPtr evicted, void *userData) {
+    mlruAgeEvicted_ *age = userData;
+    for (size_t i = 0; i < 4; i++) {
+        if (age->old[i] == evicted && !age->seen[i]) {
+            age->seen[i] = true;
+            age->evicted++;
+        }
+    }
 }
 
 int multilruTest(int, char *[]) {
@@ -2760,6 +2901,8 @@ int multilruTest(int, char *[]) {
             .maxLevels = 5,
             .startCapacity = 100,
             .enableWeights = true,
+            /* entries stay at the level their uses set */
+            .unboundedLevels = true,
         };
         cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
@@ -5002,6 +5145,8 @@ int multilruTest(int, char *[]) {
             .startCapacity = 100,
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 10,
+            /* every entry reaches the top, so removals demote first */
+            .unboundedLevels = true,
         };
         cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
@@ -5174,6 +5319,138 @@ int multilruTest(int, char *[]) {
         if (multilruTotalWeight(mlru) != 81 ||
             multilruLevelWeight(mlru, 0) != 81) {
             ERR("update to 70: total %" PRIu64, multilruTotalWeight(mlru));
+        }
+    }
+
+    TEST("S4LRU segments: every operation leaves the order an independent "
+         "model of level shares gives") {
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevels(MLRU_MODEL_LEVELS);
+        mlruModel_ model = {};
+        mlruModel_ *m = &model;
+        uint64_t rng = 0x9E3779B97F4A7C15ULL;
+        for (size_t step = 0; step < 4000; step++) {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            const uint32_t op = (uint32_t)(rng % 10);
+            multilruPtr live[MLRU_MODEL_MAX];
+            const size_t n = multilruCollectLowest(mlru, live, MLRU_MODEL_MAX);
+            const multilruPtr pick = n ? live[(rng >> 32) % n] : 0;
+            if (op < 3 || n == 0) {
+                if (m->live < MLRU_MODEL_MAX - 1) {
+                    const multilruPtr h = multilruInsert(mlru);
+                    m->live++;
+                    mlruModelPlace_(m, 0, h);
+                }
+            } else if (op < 7) {
+                const size_t l = mlruModelLevelOf_(m, pick);
+                multilruIncrease(mlru, pick);
+                mlruModelMove_(m, pick, l + 1 < MLRU_MODEL_LEVELS ? l + 1 : l);
+            } else if (op < 8) {
+                const size_t l = mlruModelLevelOf_(m, pick);
+                multilruDecrease(mlru, pick);
+                if (l > 0) {
+                    mlruModelMove_(m, pick, l - 1);
+                }
+            } else if (op < 9) {
+                multilruDelete(mlru, pick);
+                mlruModelTake_(m, pick);
+                m->live--;
+            } else {
+                /* The victim: the oldest of the lowest populated level,
+                 * demoted when above level 0 */
+                const multilruPtr victim = live[0];
+                multilruPtr out = 0;
+                multilruRemoveMinimum(mlru, &out);
+                const size_t l = mlruModelLevelOf_(m, victim);
+                if (l > 0) {
+                    mlruModelMove_(m, victim, l - 1);
+                } else {
+                    mlruModelTake_(m, victim);
+                    m->live--;
+                }
+                if (out != victim) {
+                    ERR("step %zu: victim %" PRIu64 ", model %" PRIu64, step,
+                        (uint64_t)out, (uint64_t)victim);
+                }
+            }
+
+            if (!mlruModelMatches_(mlru, m)) {
+                ERR("step %zu (op %u): order differs from the model", step, op);
+                break;
+            }
+        }
+    }
+
+    TEST("S4LRU segments: entries used once long ago age out; with "
+         "unbounded levels they never do") {
+        for (int unbounded = 0; unbounded < 2; unbounded++) {
+            multilruConfig config = {.maxLevels = 4,
+                                     .maxCount = 16,
+                                     .policy = MLRU_POLICY_COUNT,
+                                     .unboundedLevels = unbounded};
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithConfig(&config);
+            multilruPtr old[4];
+            for (size_t i = 0; i < 16; i++) {
+                const multilruPtr h = multilruInsert(mlru);
+                if (i < 4) {
+                    old[i] = h;
+                }
+            }
+            for (size_t i = 0; i < 4; i++) {
+                for (int up = 0; up < 5; up++) {
+                    multilruIncrease(mlru, old[i]);
+                }
+            }
+
+            /* A new hot set: every entry reaches the top, and the old
+             * entries are never used again */
+            mlruAgeEvicted_ age = {.old = old};
+            multilruSetEvictCallback(mlru, mlruAgeOnEvict_, &age);
+            for (size_t round = 0; round < 200; round++) {
+                const multilruPtr h = multilruInsert(mlru);
+                for (int up = 0; up < 3 && h; up++) {
+                    multilruIncrease(mlru, h);
+                }
+            }
+
+            const size_t want = unbounded ? 0 : 4;
+            if (age.evicted != want) {
+                ERR("unbounded=%d: %zu of the 4 stale entries evicted, want "
+                    "%zu",
+                    unbounded, age.evicted, want);
+            }
+        }
+    }
+
+    TEST("S4LRU segments: weighted policies share by weight, count policies "
+         "by entries") {
+        for (int weighted = 0; weighted < 2; weighted++) {
+            multilruConfig config = {.maxLevels = 2,
+                                     .policy = weighted ? MLRU_POLICY_SIZE
+                                                        : MLRU_POLICY_COUNT,
+                                     .enableWeights = true};
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithConfig(&config);
+            multilruPtr h[3];
+            for (size_t i = 0; i < 3; i++) {
+                h[i] = multilruInsertWeighted(mlru, 10);
+            }
+            for (size_t i = 0; i < 3; i++) {
+                multilruIncrease(mlru, h[i]);
+            }
+
+            /* Weight 30 shares 15 per level: one entry of 10 fits above;
+             * three entries share 2 per level */
+            const size_t wantTop = weighted ? 1 : 2;
+            if (multilruLevelCount(mlru, 1) != wantTop ||
+                multilruGetLevel(mlru, h[2]) != 1 ||
+                multilruGetLevel(mlru, h[0]) != 0) {
+                ERR("weighted=%d: %zu at the top, want %zu", weighted,
+                    multilruLevelCount(mlru, 1), wantTop);
+            }
         }
     }
 

@@ -5440,15 +5440,15 @@ const persistOps persistOpsMultiarray = {
 
 defcleaner(multilru *, multilruFree);
 
-/* Snapshot (one flex, every value exact):
- *   [maxLevels, weights (0/1), policy, evictStrategy, maxCount, maxWeight,
- *    nextFresh, entryCount, freeCount]
- *   entryCount rows [handle, level(, weight when weights)] in recency
- *   order, coldest first (level 0 oldest to newest, then level 1, ...),
- *   so the restored LRU evicts and demotes in the live one's order
- *   freeCount recycled handles in the order inserts reuse them, so the
- *   restored LRU hands out the same handles the live one would (which a
- *   WAL replayed after the snapshot depends on) */
+/* Snapshot (one flex, every value exact), three parts:
+ * - the config: maxLevels; flags (1: weights, 2: unbounded levels); policy;
+ *   evictStrategy; maxCount; maxWeight; nextFresh; entryCount; freeCount
+ * - entryCount rows of handle, level (and weight, with weights), coldest
+ *   first (level 0 oldest to newest, then level 1, ...), so the restored LRU
+ *   evicts and demotes in the live one's order
+ * - freeCount recycled handles in the order inserts reuse them, so the
+ *   restored LRU hands out the same handles the live one would (which a WAL
+ *   replayed after the snapshot depends on) */
 static constexpr int MLRU_PERSIST_CONFIG = 9; /* elements before the entries */
 
 defcleanerName(multilruPtr *, zfree, MultilruPtrs);
@@ -5468,7 +5468,9 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
 
         flexRow row = FLEX_ROW_INIT;
         flexRowUnsigned(&row, stats.maxLevels);
-        flexRowUnsigned(&row, enableWeights ? 1 : 0);
+        /* flags: 1 weights, 2 levels without a share */
+        flexRowUnsigned(&row, (enableWeights ? 1u : 0u) |
+                                  (multilruGetUnboundedLevels(mlru) ? 2u : 0u));
         flexRowUnsigned(&row, multilruGetPolicy(mlru));
         flexRowUnsigned(&row, multilruGetEvictStrategy(mlru));
         flexRowUnsigned(&row, stats.maxCount);
@@ -5543,10 +5545,10 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
     }
 
     flexEntry *fe = flexHead(f);
-    uint64_t maxLevels, weights, policy, strategy, maxCount, maxWeight;
+    uint64_t maxLevels, flags, policy, strategy, maxCount, maxWeight;
     uint64_t nextFresh, entries, freeCount;
     if (!mlruPersistNext_(f, &fe, 64, &maxLevels) || maxLevels == 0 ||
-        !mlruPersistNext_(f, &fe, 1, &weights) ||
+        !mlruPersistNext_(f, &fe, 3, &flags) ||
         !mlruPersistNext_(f, &fe, MLRU_POLICY_HYBRID, &policy) ||
         !mlruPersistNext_(f, &fe, MLRU_EVICT_SIZE_LRU, &strategy) ||
         !mlruPersistNext_(f, &fe, UINT64_MAX, &maxCount) ||
@@ -5559,6 +5561,7 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
 
     /* Every slot after the level heads is an entry or a recycled hole, and
      * the element count is exactly the config, the entries and the holes */
+    const bool weights = flags & 1;
     const uint64_t first = maxLevels + 1;
     const uint64_t fields = weights ? 3 : 2;
     if (nextFresh != first + entries + freeCount ||
@@ -5573,7 +5576,9 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         .maxCount = maxCount,
         .policy = (multilruPolicy)policy,
         .evictStrategy = (multilruEvictStrategy)strategy,
-        .enableWeights = weights != 0,
+        .enableWeights = weights,
+        /* entries placed at their recorded levels; the setting after */
+        .unboundedLevels = true,
     };
     cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
     if (!mlru) {
@@ -5655,6 +5660,7 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         multilruDelete(mlru, holes[i - 1]);
     }
 
+    multilruSetUnboundedLevels(mlru, flags & 2);
     multilruSetAutoEvict(mlru, true);
     /* @own: caller; free=multilruFree */
     multilru *out = mlru;

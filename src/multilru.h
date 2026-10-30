@@ -237,6 +237,10 @@ typedef struct multilruConfig {
     multilruPolicy policy; /* Eviction trigger policy */
     multilruEvictStrategy evictStrategy; /* Victim selection strategy */
     bool enableWeights; /* Allocate weight array for size tracking */
+    /* Levels without a share (S4LRU segments off): an entry stays at the
+     * level its uses reached until every level below empties, so levels
+     * count lifetime uses instead of recent ones (default false) */
+    bool unboundedLevels;
 } multilruConfig;
 
 /* ====================================================================
@@ -556,6 +560,12 @@ void multilruSetAutoEvict(multilru *mlru, bool autoEvict);
 
 /* Get current auto-eviction setting */
 bool multilruGetAutoEvict(const multilru *mlru);
+
+/* Levels with or without their S4LRU share (multilruConfig.unboundedLevels).
+ * Turning shares on moves nothing at once: a level over its share gives up
+ * its oldest entries at its next promotion or demotion. */
+void multilruSetUnboundedLevels(multilru *mlru, bool unbounded);
+bool multilruGetUnboundedLevels(const multilru *mlru);
 
 /* Told of each true eviction (level 0), BEFORE the entry's slot is freed */
 typedef void multilruEvictFn(multilruPtr evicted, void *userData);

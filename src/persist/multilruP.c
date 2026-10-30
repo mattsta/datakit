@@ -1709,10 +1709,11 @@ static int test_multilruP_recency_order(int, char *[]) {
 
     TEST("a restored LRU demotes and evicts in the live one's order")
 
-    for (size_t levels = 1; levels <= 4; levels++) {
+    for (size_t levels = 1; levels <= 6; levels++) {
         const multilruConfig config = {.maxLevels = levels,
                                        .policy = MLRU_POLICY_COUNT,
-                                       .enableWeights = levels % 2 == 0};
+                                       .enableWeights = levels % 2 == 0,
+                                       .unboundedLevels = levels > 4};
         cleaner(multilruFree) multilru *live = multilruNewWithConfig(&config);
 
         /* Entries touched in a scrambled order, some deleted (holes) */
@@ -1741,7 +1742,8 @@ static int test_multilruP_recency_order(int, char *[]) {
         size_t againLen = 0;
         cleanerName(zfree, SnapBytes) uint8_t *again =
             back ? persistOpsMultiLRU.snapshot(back, &againLen) : nullptr;
-        if (!back || againLen != len || memcmp(snap, again, len) != 0) {
+        if (!back || againLen != len || memcmp(snap, again, len) != 0 ||
+            multilruGetUnboundedLevels(back) != config.unboundedLevels) {
             ERR("levels %zu: restore did not reproduce the snapshot", levels);
         }
 

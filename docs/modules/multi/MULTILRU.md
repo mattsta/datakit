@@ -40,6 +40,13 @@ Level 0 (coldest)  ------>  [MRU] <- entries <- [LRU] --> EVICT
 
 - New entries enter at level 0
 - multilruIncrease() promotes an entry to level+1 (capped at maxLevels-1)
+- Each level above 0 holds an equal share of the entries (rounded up; of
+  the total weight under a SIZE or HYBRID policy): a promotion or demotion
+  that overfills a level moves that level's oldest entry to the head of the
+  level below, and so on down (S4LRU segments). An entry used often long ago
+  ages back down as newer ones climb past it.
+  `unboundedLevels` (config, or `multilruSetUnboundedLevels`) turns the
+  shares off: entries then keep the level their uses reached
 - multilruRemoveMinimum() demotes the coldest entry to level-1,
   or truly evicts it when it is already at level 0
 ```
@@ -136,6 +143,7 @@ typedef struct multilruConfig {
     multilruPolicy policy;
     multilruEvictStrategy evictStrategy;
     bool enableWeights;    /* Allocate the weight array */
+    bool unboundedLevels;  /* No per-level share (default false) */
 } multilruConfig;
 ```
 
