@@ -25,145 +25,145 @@ see [CHOOSING_A_CONTAINER.md](CHOOSING_A_CONTAINER.md).
 
 | container         | shape                                |    create |     read |   update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | -------: | -------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.11M |    1.18M |    1.14M |     1.50M |           7.8 |
-| multidict         | key -> value; hashed                 |     4.35M |    15.5M |    10.9M |     8.62M |          10.3 |
-| multiOrderedSet   | member -> score; by score            |      411K |    13.3M |     885K |     1.67M |          30.5 |
-| multilist         | sequence; by index, delete at tail   |     14.1M |    2.04M |    1.89M |     14.9M |           3.9 |
-| multiarray        | fixed-width sequence; by index       |     26.2M |     185M |     198M |     38.2M |           8.0 |
-| intset            | sorted integer set                   |     9.62M |    20.0M |        — |     17.8M |           2.0 |
-| multiroar         | bitmap of positions                  |     2.69M |    58.4M |        — |     9.68M |       **1.0** |
-| multimapAtom      | interned values by id; compact       |     1.87M |    34.8M |        — |     1.53M |          19.2 |
-| multimapAtom fast | interned values by id; slots, direct |     14.4M | **202M** |        — |     25.2M |          47.1 |
-| multilru          | recency per handle                   | **85.4M** |    83.6M | **428M** | **90.9M** |          13.7 |
+| multimap          | key -> value; ordered                |     1.06M |    1.19M |    1.14M |     1.51M |           7.8 |
+| multidict         | key -> value; hashed                 |     4.46M |    16.2M |    11.0M |     9.22M |          10.3 |
+| multiOrderedSet   | member -> score; by score            |      385K |    13.8M |     879K |     1.75M |          30.5 |
+| multilist         | sequence; by index, delete at tail   |     14.1M |    2.07M |    1.97M |     15.7M |           3.9 |
+| multiarray        | fixed-width sequence; by index       |     21.5M |     192M |     200M |     39.5M |           8.0 |
+| intset            | sorted integer set                   |     9.89M |    20.4M |        — |     17.8M |           2.0 |
+| multiroar         | bitmap of positions                  |     2.79M |    60.0M |        — |     9.71M |       **1.0** |
+| multimapAtom      | interned values by id; compact       |     1.96M |    34.8M |        — |     1.56M |          19.2 |
+| multimapAtom fast | interned values by id; slots, direct |     15.0M | **207M** |        — |     25.2M |          47.1 |
+| multilru          | recency per handle                   | **84.2M** |    79.0M | **436M** | **96.0M** |          13.7 |
 
 ### int-small, 100,000 elements
 
 | container         | shape                                |    create |     read |   update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | -------: | -------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.29M |    1.52M |    1.43M |     1.34M |           9.4 |
-| multidict         | key -> value; hashed                 |     4.32M |    10.3M |    7.50M |     7.23M |          11.0 |
-| multiOrderedSet   | member -> score; by score            |      974K |    9.05M |     610K |     1.34M |          31.1 |
-| multilist         | sequence; by index, delete at tail   |     16.7M |    2.05M |    1.93M |     17.3M |           4.7 |
-| multiarray        | fixed-width sequence; by index       |     20.3M |    31.3M |    31.7M |     16.7M |           8.0 |
-| intset            | sorted integer set                   |      728K |    34.9M |        — |      741K |           3.7 |
-| multiroar         | bitmap of positions                  |     7.01M |    37.2M |        — |     14.9M |       **0.3** |
-| multimapAtom      | interned values by id; compact       |     1.82M |    24.3M |        — |     1.06M |          20.5 |
-| multimapAtom fast | interned values by id; slots, direct |     13.3M | **190M** |        — |     14.5M |          49.8 |
-| multilru          | recency per handle                   | **76.5M** |    75.1M | **274M** | **85.4M** |          21.4 |
+| multimap          | key -> value; ordered                |     1.32M |    1.57M |    1.45M |     1.40M |           9.4 |
+| multidict         | key -> value; hashed                 |     4.46M |    11.3M |    7.69M |     7.32M |          11.0 |
+| multiOrderedSet   | member -> score; by score            |     1.00M |    9.99M |     643K |     1.48M |          31.1 |
+| multilist         | sequence; by index, delete at tail   |     17.2M |    2.07M |    1.93M |     17.0M |           4.7 |
+| multiarray        | fixed-width sequence; by index       |     20.4M |    30.4M |    30.9M |     17.2M |           8.0 |
+| intset            | sorted integer set                   |      737K |    34.3M |        — |      751K |           3.7 |
+| multiroar         | bitmap of positions                  |     7.17M |    38.6M |        — |     15.4M |       **0.3** |
+| multimapAtom      | interned values by id; compact       |     1.85M |    26.7M |        — |     1.14M |          20.5 |
+| multimapAtom fast | interned values by id; slots, direct |     12.6M | **175M** |        — |     17.4M |          49.8 |
+| multilru          | recency per handle                   | **79.5M** |    76.4M | **237M** | **91.9M** |          21.4 |
 
 ### int-small, 1,000,000 elements
 
 | container         | shape                                |    create |      read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | --------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.20M |     1.39M |     1.37M |     1.25M |          10.0 |
-| multidict         | key -> value; hashed                 |     2.58M |     6.18M |     4.24M |     4.32M |          12.6 |
-| multiOrderedSet   | member -> score; by score            |      692K |     5.07M |      423K |      887K |          32.6 |
-| multilist         | sequence; by index, delete at tail   |     16.6M |      581K |      574K |     14.6M |           5.0 |
-| multiarray        | fixed-width sequence; by index       |     3.56M |     4.27M |     5.43M |     2.84M |           8.0 |
-| intset            | sorted integer set                   |     44.3K |     23.7M |         — |     44.5K |           4.0 |
-| multiroar         | bitmap of positions                  |     6.66M |     37.7M |         — |     13.7M |       **0.2** |
-| multimapAtom      | interned values by id; compact       |     1.27M |     13.9M |         — |      603K |          21.4 |
-| multimapAtom fast | interned values by id; slots, direct |    10.00M | **79.9M** |         — |     6.85M |          44.0 |
-| multilru          | recency per handle                   | **54.6M** |     33.3M | **50.2M** | **16.0M** |          22.5 |
+| multimap          | key -> value; ordered                |     1.24M |     1.41M |     1.35M |     1.28M |          10.0 |
+| multidict         | key -> value; hashed                 |     2.74M |     6.98M |     5.68M |     5.08M |          12.6 |
+| multiOrderedSet   | member -> score; by score            |      712K |     6.33M |      435K |      917K |          32.6 |
+| multilist         | sequence; by index, delete at tail   |     16.9M |      601K |      591K |     15.1M |           5.0 |
+| multiarray        | fixed-width sequence; by index       |     3.60M |     4.08M |     5.43M |     2.88M |           8.0 |
+| intset            | sorted integer set                   |     45.6K |     24.7M |         — |     47.6K |           4.0 |
+| multiroar         | bitmap of positions                  |     6.79M |     38.5M |         — |     14.0M |       **0.2** |
+| multimapAtom      | interned values by id; compact       |     1.30M |     17.0M |         — |      646K |          21.4 |
+| multimapAtom fast | interned values by id; slots, direct |     10.9M | **85.2M** |         — |     7.67M |          44.0 |
+| multilru          | recency per handle                   | **56.1M** |     31.3M | **50.4M** | **17.8M** |          22.5 |
 
 ### int-wide, 1,000 elements
 
 | container         | shape                                |    create |     read |   update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | -------: | -------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     2.05M |    2.92M |    2.61M |     2.50M |          20.0 |
-| multidict         | key -> value; hashed                 |     3.63M |    13.3M |    9.42M |     7.28M |          22.7 |
-| multiOrderedSet   | member -> score; by score            |      719K |    13.8M |     971K |     1.84M |          42.8 |
-| multilist         | sequence; by index, delete at tail   |     12.3M |    5.04M |    4.46M |     12.6M |          10.0 |
-| multiarray        | fixed-width sequence; by index       | **29.9M** |     180M | **180M** | **38.7M** |       **8.0** |
-| intset            | sorted integer set                   |     11.3M |    68.4M |        — |     13.9M |           8.1 |
-| multiroar         | bitmap of positions                  |     1.90M |    2.64M |        — |     2.25M |          15.9 |
-| multimapAtom      | interned values by id; compact       |     1.92M |    24.3M |        — |     1.51M |          25.3 |
-| multimapAtom fast | interned values by id; slots, direct |     13.0M | **182M** |        — |     22.1M |          47.1 |
+| multimap          | key -> value; ordered                |     1.81M |    2.99M |    2.71M |     2.56M |          20.0 |
+| multidict         | key -> value; hashed                 |     3.74M |    13.8M |    9.46M |     7.41M |          22.7 |
+| multiOrderedSet   | member -> score; by score            |      729K |    14.1M |     996K |     1.87M |          42.8 |
+| multilist         | sequence; by index, delete at tail   |     12.2M |    4.89M |    4.35M |     12.1M |          10.0 |
+| multiarray        | fixed-width sequence; by index       | **29.0M** | **194M** | **170M** | **38.8M** |       **8.0** |
+| intset            | sorted integer set                   |     11.9M |    71.0M |        — |     14.7M |           8.1 |
+| multiroar         | bitmap of positions                  |     1.86M |    2.69M |        — |     2.34M |          15.9 |
+| multimapAtom      | interned values by id; compact       |     1.99M |    25.8M |        — |     1.55M |          25.3 |
+| multimapAtom fast | interned values by id; slots, direct |     13.1M |     186M |        — |     22.8M |          47.1 |
 
 ### int-wide, 100,000 elements
 
 | container         | shape                                |    create |     read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | -------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.86M |    2.48M |     2.20M |     2.05M |          20.0 |
-| multidict         | key -> value; hashed                 |     3.53M |    9.77M |     7.29M |     5.80M |          21.8 |
-| multiOrderedSet   | member -> score; by score            |     1.09M |    8.40M |      690K |     1.47M |          41.8 |
-| multilist         | sequence; by index, delete at tail   |     14.8M |    2.52M |     2.36M |     14.3M |          10.0 |
-| multiarray        | fixed-width sequence; by index       | **19.9M** |    30.4M | **32.5M** | **16.2M** |       **8.0** |
-| intset            | sorted integer set                   |      242K |    31.5M |         — |      246K |       **8.0** |
-| multiroar         | bitmap of positions                  |     1.84M |    2.43M |         — |     1.97M |          15.9 |
-| multimapAtom      | interned values by id; compact       |     1.77M |    19.7M |         — |     1.01M |          25.8 |
-| multimapAtom fast | interned values by id; slots, direct |     10.3M | **166M** |         — |     13.6M |          49.8 |
+| multimap          | key -> value; ordered                |     1.88M |    2.54M |     2.27M |     2.04M |          20.0 |
+| multidict         | key -> value; hashed                 |     3.67M |    10.1M |     7.37M |     6.02M |          21.8 |
+| multiOrderedSet   | member -> score; by score            |     1.12M |    10.7M |      736K |     1.47M |          41.8 |
+| multilist         | sequence; by index, delete at tail   |     14.5M |    2.62M |     2.44M |     14.5M |          10.0 |
+| multiarray        | fixed-width sequence; by index       | **20.2M** |    32.6M | **33.7M** | **16.5M** |       **8.0** |
+| intset            | sorted integer set                   |      251K |    33.1M |         — |      252K |       **8.0** |
+| multiroar         | bitmap of positions                  |     1.83M |    2.45M |         — |     1.99M |          15.9 |
+| multimapAtom      | interned values by id; compact       |     1.75M |    21.9M |         — |     1.08M |          25.8 |
+| multimapAtom fast | interned values by id; slots, direct |     10.9M | **189M** |         — |     15.2M |          49.8 |
 
 ### int-wide, 1,000,000 elements
 
 | container         | shape                                |    create |      read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | --------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.37M |     1.64M |     1.56M |     1.38M |          20.0 |
-| multidict         | key -> value; hashed                 |     2.03M |     5.12M |     3.93M |     3.48M |          22.7 |
-| multiOrderedSet   | member -> score; by score            |      715K |     5.46M |      424K |      818K |          42.8 |
-| multilist         | sequence; by index, delete at tail   | **13.9M** |      364K |      357K | **12.0M** |          10.0 |
-| multiarray        | fixed-width sequence; by index       |     3.53M |     4.26M | **5.53M** |     2.84M |       **8.0** |
-| intset            | sorted integer set                   |     20.3K |     20.6M |         — |     20.0K |       **8.0** |
-| multiroar         | bitmap of positions                  |     1.50M |     1.80M |         — |     1.53M |          15.9 |
-| multimapAtom      | interned values by id; compact       |     1.28M |     14.2M |         — |      594K |          26.4 |
-| multimapAtom fast | interned values by id; slots, direct |     7.90M | **71.3M** |         — |     6.53M |          44.0 |
+| multimap          | key -> value; ordered                |     1.42M |     1.70M |     1.61M |     1.45M |          20.0 |
+| multidict         | key -> value; hashed                 |     2.09M |     5.62M |     4.23M |     3.68M |          22.7 |
+| multiOrderedSet   | member -> score; by score            |      727K |     6.18M |      437K |      868K |          42.8 |
+| multilist         | sequence; by index, delete at tail   | **13.6M** |      369K |      362K | **12.4M** |          10.0 |
+| multiarray        | fixed-width sequence; by index       |     3.58M |     4.43M | **5.61M** |     2.88M |       **8.0** |
+| intset            | sorted integer set                   |     21.3K |     23.2M |         — |     22.4K |       **8.0** |
+| multiroar         | bitmap of positions                  |     1.52M |     1.85M |         — |     1.54M |          15.9 |
+| multimapAtom      | interned values by id; compact       |     1.30M |     15.7M |         — |      624K |          26.4 |
+| multimapAtom fast | interned values by id; slots, direct |     9.30M | **81.5M** |         — |     6.91M |          44.0 |
 
 ### str16, 1,000 elements
 
 | container         | shape                                |    create |      read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | --------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.87M |     2.75M |     2.50M |     2.58M |          36.1 |
-| multidict         | key -> value; hashed                 |     2.54M |     5.17M |     4.50M |     5.19M |          38.8 |
-| multiOrderedSet   | member -> score; by score            |      890K |     7.29M |     1.03M |     1.88M |          58.9 |
-| multilist         | sequence; by index, delete at tail   |     6.71M |     5.79M |     5.41M |     12.5M |          18.0 |
-| multiarray        | fixed-width sequence; by index       | **9.75M** | **14.2M** | **13.7M** | **37.7M** |      **16.0** |
-| multimapAtom      | interned values by id; compact       |     1.72M |     10.3M |         — |     1.51M |          33.3 |
-| multimapAtom fast | interned values by id; slots, direct |     6.77M |     13.8M |         — |     19.9M |          63.1 |
+| multimap          | key -> value; ordered                |     1.82M |     2.71M |     2.44M |     2.53M |          36.1 |
+| multidict         | key -> value; hashed                 |     2.42M |     4.96M |     4.31M |     5.10M |          38.8 |
+| multiOrderedSet   | member -> score; by score            |      922K |     7.31M |     1.05M |     1.98M |          58.9 |
+| multilist         | sequence; by index, delete at tail   |     7.07M |     5.96M |     5.57M |     13.2M |          18.0 |
+| multiarray        | fixed-width sequence; by index       | **10.1M** | **14.7M** | **13.7M** | **39.1M** |      **16.0** |
+| multimapAtom      | interned values by id; compact       |     1.71M |     10.7M |         — |     1.60M |          33.3 |
+| multimapAtom fast | interned values by id; slots, direct |     6.41M |     14.3M |         — |     19.4M |          63.1 |
 
 ### str16, 100,000 elements
 
 | container         | shape                                |    create |      read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | --------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.43M |     1.89M |     1.65M |     1.73M |          36.1 |
-| multidict         | key -> value; hashed                 |     2.17M |     4.03M |     3.45M |     3.80M |          37.8 |
-| multiOrderedSet   | member -> score; by score            |      999K |     4.97M |      660K |     1.20M |          57.8 |
-| multilist         | sequence; by index, delete at tail   |     7.21M |     1.83M |     1.76M |     14.0M |          18.0 |
-| multiarray        | fixed-width sequence; by index       | **8.72M** |     9.53M | **9.65M** | **16.8M** |      **16.0** |
-| multimapAtom      | interned values by id; compact       |     1.48M |     9.68M |         — |     1.09M |          33.8 |
-| multimapAtom fast | interned values by id; slots, direct |     6.14M | **14.2M** |         — |     11.3M |          65.8 |
+| multimap          | key -> value; ordered                |     1.47M |     1.93M |     1.60M |     1.82M |          36.1 |
+| multidict         | key -> value; hashed                 |     2.25M |     4.19M |     3.22M |     3.96M |          37.8 |
+| multiOrderedSet   | member -> score; by score            |      987K |     5.74M |      679K |     1.31M |          57.8 |
+| multilist         | sequence; by index, delete at tail   |     7.38M |     1.93M |     1.78M |     13.4M |          18.0 |
+| multiarray        | fixed-width sequence; by index       | **8.75M** |     9.34M | **9.37M** | **16.6M** |      **16.0** |
+| multimapAtom      | interned values by id; compact       |     1.54M |     9.91M |         — |     1.09M |          33.8 |
+| multimapAtom fast | interned values by id; slots, direct |     6.11M | **14.2M** |         — |     10.4M |          65.8 |
 
 ### str16, 1,000,000 elements
 
 | container         | shape                                |    create |      read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | --------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |      876K |      879K |      837K |      948K |          36.1 |
-| multidict         | key -> value; hashed                 |     1.49M |     2.64M |     2.32M |     2.39M |          38.8 |
-| multiOrderedSet   | member -> score; by score            |      651K |     3.26M |      395K |      719K |          58.9 |
-| multilist         | sequence; by index, delete at tail   | **7.14M** |      165K |      164K | **11.3M** |          18.0 |
-| multiarray        | fixed-width sequence; by index       |     2.90M |     2.84M | **3.18M** |     2.82M |      **16.0** |
-| multimapAtom      | interned values by id; compact       |     1.08M |     6.82M |         — |      583K |          34.4 |
-| multimapAtom fast | interned values by id; slots, direct |     4.01M | **8.59M** |         — |     3.54M |          60.0 |
+| multimap          | key -> value; ordered                |      925K |      911K |      887K |     1.00M |          36.1 |
+| multidict         | key -> value; hashed                 |     1.53M |     2.76M |     2.32M |     2.50M |          38.8 |
+| multiOrderedSet   | member -> score; by score            |      676K |     3.44M |      405K |      747K |          58.9 |
+| multilist         | sequence; by index, delete at tail   | **7.19M** |      167K |      165K | **12.6M** |          18.0 |
+| multiarray        | fixed-width sequence; by index       |     2.93M |     2.84M | **3.14M** |     2.85M |      **16.0** |
+| multimapAtom      | interned values by id; compact       |     1.09M |     6.85M |         — |      633K |          34.4 |
+| multimapAtom fast | interned values by id; slots, direct |     4.07M | **9.81M** |         — |     3.67M |          60.0 |
 
 ### str256, 1,000 elements
 
 | container         | shape                                |    create |      read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | --------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |     1.18M |     1.97M |     1.84M |     1.85M |         521.1 |
-| multidict         | key -> value; hashed                 |      818K |     2.06M |     1.42M |     2.28M |         523.1 |
-| multiOrderedSet   | member -> score; by score            |      900K |     3.40M |      889K |     1.30M |         543.5 |
-| multilist         | sequence; by index, delete at tail   |     3.41M |     3.54M |     3.43M |     7.60M |         260.4 |
-| multiarray        | fixed-width sequence; by index       | **4.53M** | **5.68M** | **5.78M** |     4.10M |     **256.0** |
-| multimapAtom      | interned values by id; compact       |     1.39M |     4.78M |         — |     1.29M |         275.3 |
-| multimapAtom fast | interned values by id; slots, direct |     3.19M |     5.44M |         — | **10.5M** |         303.1 |
+| multimap          | key -> value; ordered                |     1.25M |     2.02M |     1.87M |     1.88M |         521.1 |
+| multidict         | key -> value; hashed                 |      881K |     2.14M |     1.49M |     2.46M |         523.1 |
+| multiOrderedSet   | member -> score; by score            |      896K |     3.61M |     1.02M |     1.37M |         543.5 |
+| multilist         | sequence; by index, delete at tail   |     3.37M |     3.80M |     3.64M |     8.24M |         260.4 |
+| multiarray        | fixed-width sequence; by index       | **4.58M** | **5.75M** | **5.85M** |     5.24M |     **256.0** |
+| multimapAtom      | interned values by id; compact       |     1.46M |     5.09M |         — |     1.37M |         275.3 |
+| multimapAtom fast | interned values by id; slots, direct |     3.19M |     5.70M |         — | **11.9M** |         303.1 |
 
 ### str256, 100,000 elements
 
 | container         | shape                                |    create |      read |    update |    delete | bytes/element |
 | ----------------- | ------------------------------------ | --------: | --------: | --------: | --------: | ------------: |
-| multimap          | key -> value; ordered                |      485K |      838K |      792K |      579K |         521.0 |
-| multidict         | key -> value; hashed                 |      593K |     1.27M |     1.01M |     1.16M |         522.2 |
-| multiOrderedSet   | member -> score; by score            |      511K |     1.85M |      349K |      500K |         542.5 |
-| multilist         | sequence; by index, delete at tail   |     3.32M |     83.6K |     84.1K |     6.78M |         260.4 |
-| multiarray        | fixed-width sequence; by index       | **4.20M** |     3.10M | **3.24M** | **12.6M** |     **256.0** |
-| multimapAtom      | interned values by id; compact       |     1.21M |     4.49M |         — |      778K |         275.8 |
-| multimapAtom fast | interned values by id; slots, direct |     2.01M | **4.97M** |         — |     3.92M |         305.8 |
+| multimap          | key -> value; ordered                |      492K |      888K |      808K |      582K |         521.0 |
+| multidict         | key -> value; hashed                 |      631K |     1.24M |     1.05M |     1.05M |         522.2 |
+| multiOrderedSet   | member -> score; by score            |      528K |     1.88M |      355K |      530K |         542.5 |
+| multilist         | sequence; by index, delete at tail   |     3.36M |     85.1K |     84.8K |     6.67M |         260.4 |
+| multiarray        | fixed-width sequence; by index       | **4.24M** |     3.05M | **3.07M** | **13.8M** |     **256.0** |
+| multimapAtom      | interned values by id; compact       |     1.23M |     4.56M |         — |      787K |         275.8 |
+| multimapAtom fast | interned values by id; slots, direct |     2.21M | **5.13M** |         — |     3.65M |         305.8 |
