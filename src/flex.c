@@ -6318,6 +6318,7 @@ bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
  * count: count of entries inside compressedData
  * compressedBytes: length of compressedData */
 #include "../deps/lz4/lz4.h"
+#include "../deps/lz4/lz4hc.h"
 
 static constexpr int CFLEX_MINIMUM_COMPRESS_BYTES = 64;
 
@@ -6354,6 +6355,11 @@ cflex *cflexDuplicate(const cflex *const c) {
  *       We make no attempt to grow 'cBuffer' here if it isn't big enough.
  */
 bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen) {
+    return flexConvertToCFlexLevel(f, cBuffer, cBufferLen, 0);
+}
+
+bool flexConvertToCFlexLevel(const flex *f, cflex *cBuffer, size_t cBufferLen,
+                             int level) {
     /* Discover current flex metadata. */
     const size_t totalBytes = flexTotalBytes_(f);
     const varintWidth bytesWidth = FLEX_TOTAL_BYTES_WIDTH(f);
@@ -6399,8 +6405,13 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen) {
 
     /* Run compression */
     int compressedLen =
-        LZ4_compress_fast(dataWithoutHeader, (char *)cflexStartCompressPosition,
-                          sizeWithoutHeader, cBufferRemainingLength, 1);
+        level > 0
+            ? LZ4_compress_HC(
+                  dataWithoutHeader, (char *)cflexStartCompressPosition,
+                  (int)sizeWithoutHeader, (int)cBufferRemainingLength, level)
+            : LZ4_compress_fast(dataWithoutHeader,
+                                (char *)cflexStartCompressPosition,
+                                sizeWithoutHeader, cBufferRemainingLength, 1);
 
     /* If compress worked, populate proper encoded length of cflex.
      * else, compress failed, so return failure. */

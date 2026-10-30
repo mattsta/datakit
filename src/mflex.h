@@ -18,6 +18,17 @@ size_t mflexStatePreferredLen(mflexState *state);
 void mflexStateReset(mflexState *state);
 void mflexStateFree(mflexState *state);
 
+/* The compress policy of closes through 'state': a block stays compressed
+ * only when that saves at least minSavingPercent (0-99) of its bytes, so
+ * a block that barely compresses is kept plain and opens without
+ * decompressing; 'level' 0 is LZ4, 1-12 LZ4HC (smaller, slower to
+ * compress).  A new state: 0% (any saving) at level 0.  False, unchanged,
+ * for a value out of range. */
+bool mflexStateSetPolicy(mflexState *state, uint8_t minSavingPercent,
+                         uint8_t level);
+void mflexStateGetPolicy(const mflexState *state, uint8_t *minSavingPercent,
+                         uint8_t *level);
+
 /* mflex creation */
 [[nodiscard]] mflex *mflexNew(void);
 mflex *mflexNewNoCompress(void);

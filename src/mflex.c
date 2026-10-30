@@ -128,6 +128,31 @@ void mflexStateReset(mflexState *state) {
     }
 }
 
+bool mflexStateSetPolicy(mflexState *state, uint8_t minSavingPercent,
+                         uint8_t level) {
+    if (!state || minSavingPercent > 99 || level > 12) {
+        return false;
+    }
+
+    state->minSavingPercent = minSavingPercent;
+    state->level = level;
+    return true;
+}
+
+void mflexStateGetPolicy(const mflexState *state, uint8_t *minSavingPercent,
+                         uint8_t *level) {
+    *minSavingPercent = state->minSavingPercent;
+    *level = state->level;
+}
+
+/* The most bytes a compressed form of a 'totalBytes' flex may take under
+ * the state's policy: strictly smaller, and saving minSavingPercent */
+static size_t mflexCompressBudget_(const mflexState *state, size_t totalBytes) {
+    const size_t policy =
+        totalBytes - totalBytes * state->minSavingPercent / 100;
+    return policy < totalBytes ? policy : totalBytes - 1;
+}
+
 void mflexStateFree(mflexState *state) {
     if (state) {
         zfree(STATE_UNCOMPRESSED_FLEX);
@@ -368,11 +393,13 @@ void mflexCloseGrow(mflex **mm, mflexState *const state, flex *f) {
         STATE_COMPRESSED_SIZE = allocSize;
     }
 
-    /* Keep the compressed form only when it is strictly smaller than the
-     * flex: the scratch buffer can be bigger than 'f' (it is sized up to an
-     * allocator class), so cap the budget LZ4 may fill at one byte under
-     * the flex size, and an incompressible flex stays a flex. */
-    if (flexConvertToCFlex(f, STATE_COMPRESSED, totalBytes - 1)) {
+    /* Keep the compressed form only when it is smaller than the flex by the
+     * policy's saving: the scratch buffer can be bigger than 'f' (it is
+     * sized up to an allocator class), so cap the budget LZ4 may fill, and
+     * a flex that does not compress that far stays a flex. */
+    if (flexConvertToCFlexLevel(f, STATE_COMPRESSED,
+                                mflexCompressBudget_(state, totalBytes),
+                                state->level)) {
         /* Now we need to return STATE_COMPRESSED, but we don't
          * want to waste 'f', so swap f<->STATE_COMPRESSED. */
         if (STATE_UNCOMPRESSED_RETAINED) {
@@ -456,7 +483,9 @@ void mflexCloseShrink(mflex **mm, mflexState *const state, flex *const f) {
 
         /* If compression worked AND compressed size is in a smaller size class,
          * return compressed version. */
-        if (flexConvertToCFlex(f, mfc(*mm), mmSize) &&
+        const size_t budget = mflexCompressBudget_(state, fullSize);
+        if (flexConvertToCFlexLevel(
+                f, mfc(*mm), budget < mmSize ? budget : mmSize, state->level) &&
             jebufUseNewAllocation(fullSize, mflexBytesActual(*mm))) {
             /* conditions matched, so update STATE_UNCOMPRESSED_FLEX because
              * it could have been reallocated in the course of normal user
@@ -846,6 +875,43 @@ int mflexTest(int, char *[]) {
         mflexPushByType(&m, resetState, &box, FLEX_ENDPOINT_TAIL);
         if (mflexCount(m) != 1) {
             ERR("Expected 1 after post-reset push, got %zu", mflexCount(m));
+        }
+    }
+
+    TEST("compress policy: a block keeps its compressed form only when it "
+         "saves the policy's share; LZ4HC is no larger") {
+        size_t stored[3] = {};
+        static const struct {
+            uint8_t minSaving;
+            uint8_t level;
+            bool compressed;
+        } runs[3] = {{0, 0, true}, {99, 0, false}, {0, 9, true}};
+        for (size_t r = 0; r < countof(runs); r++) {
+            cleaner(mflexStateFree) mflexState *ps = mflexStateCreate();
+            if (!mflexStateSetPolicy(ps, runs[r].minSaving, runs[r].level)) {
+                ERR("policy %zu refused", r);
+            }
+            /* @own: container; free=mflexFree */
+            flex *f = flexNew();
+            for (int i = 0; i < 300; i++) {
+                flexPushBytes(&f, "row-of-mostly-repeating-text", 28,
+                              FLEX_ENDPOINT_TAIL);
+                flexPushSigned(&f, i, FLEX_ENDPOINT_TAIL);
+            }
+            cleaner(mflexFree) mflex *m = mflexConvertFromFlex(f, ps);
+            stored[r] = mflexBytesActual(m);
+            if (mflexIsCompressed(m) != runs[r].compressed) {
+                ERR("policy %zu: compressed %d", r, mflexIsCompressed(m));
+            }
+        }
+        cleaner(mflexStateFree) mflexState *ps = mflexStateCreate();
+        uint8_t minSaving = 1;
+        uint8_t level = 1;
+        mflexStateGetPolicy(ps, &minSaving, &level);
+        if (stored[2] > stored[0] || minSaving != 0 || level != 0 ||
+            mflexStateSetPolicy(ps, 100, 0) || mflexStateSetPolicy(ps, 0, 13)) {
+            ERR("LZ4HC %zu vs %zu bytes, or a bad policy taken", stored[2],
+                stored[0]);
         }
     }
 

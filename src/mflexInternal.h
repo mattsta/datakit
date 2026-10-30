@@ -17,4 +17,10 @@ struct mflexState {
     } buf[2];
     void *prevPtr;
     size_t lenPreferred;
+
+    /* Compress policy for closes through this state: keep the compressed
+     * form only when it saves at least minSavingPercent of the block, at
+     * LZ4 level 'level' (0 fast, 1-12 LZ4HC) */
+    uint8_t minSavingPercent;
+    uint8_t level;
 };

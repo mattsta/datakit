@@ -836,6 +836,10 @@ size_t cflexBytesCompressed(const cflex *c);
 size_t cflexBytes(const cflex *c);
 cflex *cflexDuplicate(const cflex *c);
 bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen);
+/* flexConvertToCFlex at an LZ4 level: 0 is LZ4 (fastest), 1-12 LZ4HC at
+ * that level (smaller, slower to compress; decompression is the same) */
+bool flexConvertToCFlexLevel(const flex *f, cflex *cBuffer, size_t cBufferLen,
+                             int level);
 bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen);
 
 #ifdef DATAKIT_TEST
