@@ -52,6 +52,8 @@ defcleaner(mflexState *, mflexStateFree);
 #ifndef XXH_STATIC_LINKING_ONLY
 #define XXH_STATIC_LINKING_ONLY
 #endif
+#include "../deps/lz4/lz4.h"
+#include "../deps/lz4/lz4hc.h"
 #include "../deps/xxHash/xxhash.h"
 
 #include <fcntl.h>
@@ -77,12 +79,15 @@ static_assert(__STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_LITTLE__,
 #define PERSIST_WAL_MAGIC ((uint32_t)0x4C574B44)  /* "DKWL" little-endian */
 
 /* The file framings this build writes and reads */
+/* Snapshot file feature: the body is LZ4 (must understand) */
+#define PERSIST_SNAP_FEATURE_LZ4 (UINT64_C(1) << 0)
+
 const dkFormatSpec persistFormatSnapshotFile = {
     .name = "persist snapshot file",
     .id = DK_FORMAT_ID_PERSIST_SNAPSHOT,
     .version = 1,
     .minReadVersion = 1,
-    .knownFeatures = 0,
+    .knownFeatures = PERSIST_SNAP_FEATURE_LZ4,
 };
 
 const dkFormatSpec persistFormatWALFile = {
@@ -415,12 +420,22 @@ static bool persistChecksumWritable_(persistChecksum t) {
     return false;
 }
 
+/* Whether a configuration names settings a write can use: a writable
+ * checksum, a known compression, and a level LZ4 takes (0, or 1 to
+ * LZ4HC_CLEVEL_MAX for LZ4HC) */
+static bool persistConfigUsable_(const persistConfig *c) {
+    return persistChecksumWritable_(c->checksumType) &&
+           (c->compression == PERSIST_COMPRESS_NONE ||
+            c->compression == PERSIST_COMPRESS_LZ4) &&
+           c->compressionLevel >= 0 && c->compressionLevel <= LZ4HC_CLEVEL_MAX;
+}
+
 persist *persistCreate(const persistOps *ops, const persistConfig *config) {
     /* A descriptor states the format it writes and reads, and the
-     * configuration names a checksum a write can use */
+     * configuration names settings a write can use */
     if (!ops || ops->formatVersion == 0 ||
         ops->minReadVersion > ops->formatVersion ||
-        (config && !persistChecksumWritable_(config->checksumType))) {
+        (config && !persistConfigUsable_(config))) {
         return nullptr;
     }
 
@@ -698,7 +713,7 @@ static bool persistCheckFileFormat(persist *p, const dkFormatSpec *container,
 }
 
 bool persistSetConfig(persist *p, const persistConfig *config) {
-    if (!p || !config || !persistChecksumWritable_(config->checksumType)) {
+    if (!p || !config || !persistConfigUsable_(config)) {
         return false;
     }
 
@@ -834,6 +849,70 @@ static bool persistHeaderRead(persistStore *store, uint32_t magic, void *known,
     return true;
 }
 
+/* A compressed snapshot body: its uncompressed length (8 bytes, little
+ * endian), then the LZ4 block */
+#define PERSIST_SNAP_LZ4_LEN_BYTES ((size_t)8)
+
+/* The LZ4 body for `body` when the configuration compresses and the body
+ * shrinks (caller frees; *outLen its length), else NULL: keep the body */
+static uint8_t *persistSnapCompress_(const persist *p, const uint8_t *body,
+                                     size_t bodyLen, size_t *outLen) {
+    if (p->config.compression != PERSIST_COMPRESS_LZ4 ||
+        bodyLen <= PERSIST_SNAP_LZ4_LEN_BYTES ||
+        bodyLen > (size_t)LZ4_MAX_INPUT_SIZE) {
+        return nullptr;
+    }
+
+    const int bound = LZ4_compressBound((int)bodyLen);
+    /* @own: caller; free=zfree */
+    uint8_t *out = zmalloc(PERSIST_SNAP_LZ4_LEN_BYTES + (size_t)bound);
+    const char *src = (const char *)body;
+    char *dst = (char *)out + PERSIST_SNAP_LZ4_LEN_BYTES;
+    const int packed =
+        p->config.compressionLevel > 0
+            ? LZ4_compress_HC(src, dst, (int)bodyLen, bound,
+                              p->config.compressionLevel)
+            : LZ4_compress_default(src, dst, (int)bodyLen, bound);
+    if (packed <= 0 || PERSIST_SNAP_LZ4_LEN_BYTES + (size_t)packed >= bodyLen) {
+        zfree(out);
+        return nullptr; /* no smaller: store the body as it is */
+    }
+
+    dkStoreLe64(out, (uint64_t)bodyLen);
+    *outLen = PERSIST_SNAP_LZ4_LEN_BYTES + (size_t)packed;
+    return out;
+}
+
+/* The body a compressed snapshot payload holds (caller frees; *outLen its
+ * length); NULL when the payload is not an LZ4 body of the length it
+ * states, within the envelope's payload bound */
+static uint8_t *persistSnapDecompress_(const uint8_t *payload,
+                                       size_t payloadLen, size_t *outLen) {
+    if (payloadLen <= PERSIST_SNAP_LZ4_LEN_BYTES) {
+        return nullptr;
+    }
+
+    const uint64_t bodyLen = dkLoadLe64(payload);
+    if (bodyLen == 0 || bodyLen > FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD ||
+        bodyLen > (uint64_t)LZ4_MAX_INPUT_SIZE ||
+        payloadLen - PERSIST_SNAP_LZ4_LEN_BYTES > (size_t)INT32_MAX) {
+        return nullptr;
+    }
+
+    /* @own: caller; free=zfree */
+    uint8_t *body = zmalloc((size_t)bodyLen);
+    const int got = LZ4_decompress_safe(
+        (const char *)payload + PERSIST_SNAP_LZ4_LEN_BYTES, (char *)body,
+        (int)(payloadLen - PERSIST_SNAP_LZ4_LEN_BYTES), (int)bodyLen);
+    if (got < 0 || (uint64_t)got != bodyLen) {
+        zfree(body);
+        return nullptr;
+    }
+
+    *outLen = (size_t)bodyLen;
+    return body;
+}
+
 bool persistSnapshot(persist *p, const void *structure) {
     if (!p || !structure || !p->snapshotStore || !p->ops->snapshot) {
         return false;
@@ -851,6 +930,14 @@ bool persistSnapshot(persist *p, const void *structure) {
     uint8_t *payload = p->ops->snapshot(structure, &payloadLen);
     if (!payload) {
         return false;
+    }
+
+    size_t packedLen = 0;
+    uint8_t *packed = persistSnapCompress_(p, payload, payloadLen, &packedLen);
+    if (packed) {
+        zfree(payload);
+        payload = packed;
+        payloadLen = packedLen;
     }
 
     const size_t envelopeLen =
@@ -875,7 +962,7 @@ bool persistSnapshot(persist *p, const void *structure) {
         .magic = PERSIST_SNAP_MAGIC,
         .headerLen = (uint32_t)sizeof(persistSnapHeader),
         .containerVersion = persistFormatSnapshotFile.version,
-        .containerFeatures = 0,
+        .containerFeatures = packed ? PERSIST_SNAP_FEATURE_LZ4 : 0,
         .formatId = (uint32_t)p->ops->type,
         .formatVersion = p->ops->formatVersion,
         .formatFeatures = 0,
@@ -1048,7 +1135,17 @@ void *persistRestore(persist *p) {
          * malloc'd envelope buffer (after the varint framing). ops->restore
          * implementations must read multi-byte fields with memcpy rather than
          * casting the pointer — they do not get an aligned buffer. */
-        structure = p->ops->restore(payload, (size_t)payloadLen);
+        if (header.containerFeatures & PERSIST_SNAP_FEATURE_LZ4) {
+            size_t bodyLen = 0;
+            cleanerName(zfree, Bytes) uint8_t *body =
+                persistSnapDecompress_(payload, (size_t)payloadLen, &bodyLen);
+            if (!body) {
+                return nullptr;
+            }
+            structure = p->ops->restore(body, bodyLen);
+        } else {
+            structure = p->ops->restore(payload, (size_t)payloadLen);
+        }
     }
 
     if (structure && p->ops->validate && !p->ops->validate(structure)) {
@@ -6600,6 +6697,97 @@ int persistTest(int, char *[]) {
             ERR("set took a checksum no write can use");
         }
         persistClose(p);
+    }
+
+    TEST("compression: an unknown mode or a level LZ4 does not take is "
+         "refused; LZ4 at 0 and 1-12 configures") {
+        static const struct {
+            int compression;
+            int level;
+            bool usable;
+        } cases[] = {{0, 0, true},  {1, 0, true},   {1, 1, true},
+                     {1, 12, true}, {1, 13, false}, {1, -1, false},
+                     {2, 0, false}, {3, 0, false}};
+        for (size_t i = 0; i < countof(cases); i++) {
+            persistConfig config = persistDefaultConfig();
+            config.compression = (persistCompression)cases[i].compression;
+            config.compressionLevel = cases[i].level;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            if ((p != nullptr) != cases[i].usable) {
+                ERR("compression %d level %d: created %d", cases[i].compression,
+                    cases[i].level, p != nullptr);
+            }
+            persistClose(p);
+        }
+    }
+
+    TEST("compression: snapshots shrink, restore exactly, and a body that "
+         "does not decode as it states is refused") {
+        /* A flex of repeated rows compresses; the restored flex is the same
+         * bytes */
+        cleaner(flexFree) flex *f = flexNew();
+        for (int i = 0; i < 2000; i++) {
+            flexPushBytes(&f, "the same repeated row", 21, FLEX_ENDPOINT_TAIL);
+        }
+
+        size_t plainLen = 0;
+        size_t packedLen = 0;
+        for (int compress = 0; compress < 2; compress++) {
+            persistConfig config = persistDefaultConfig();
+            config.compression =
+                compress ? PERSIST_COMPRESS_LZ4 : PERSIST_COMPRESS_NONE;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *store = persistStoreMemory(0);
+            persistAttachSnapshot(p, store);
+            cleaner(flexFree) flex *back =
+                persistSnapshot(p, f) ? persistRestore(p) : nullptr;
+            size_t fileLen = 0;
+            (void)persistStoreMemoryBuffer(store, &fileLen);
+            *(compress ? &packedLen : &plainLen) = fileLen;
+            if (!back || flexBytes(back) != flexBytes(f) ||
+                memcmp(back, f, flexBytes(f)) != 0) {
+                ERR("compress %d: the restored flex differs", compress);
+            }
+            persistClose(p);
+        }
+        if (packedLen * 4 > plainLen) {
+            ERR("LZ4 kept %zu of %zu bytes", packedLen, plainLen);
+        }
+
+        /* The decoder refuses a body that is cut, states another length,
+         * states none or states more than an envelope holds */
+        uint8_t packed[128];
+        const uint8_t body[64] = {7};
+        persist *p = persistCreate(&persistOpsFlex, nullptr);
+        p->config.compression = PERSIST_COMPRESS_LZ4;
+        size_t len = 0;
+        cleanerName(zfree, Bytes) uint8_t *made =
+            persistSnapCompress_(p, body, sizeof(body), &len);
+        persistClose(p);
+        size_t outLen = 0;
+        cleanerName(zfree, Bytes) uint8_t *ok =
+            made ? persistSnapDecompress_(made, len, &outLen) : nullptr;
+        if (!made || len > sizeof(packed) || !ok || outLen != sizeof(body) ||
+            memcmp(ok, body, sizeof(body))) {
+            ERR("a compressed body did not decode to itself");
+        } else {
+            const uint64_t states[] = {sizeof(body) + 1, sizeof(body) - 1, 0,
+                                       FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD + 1};
+            for (size_t i = 0; i < countof(states); i++) {
+                memcpy(packed, made, len);
+                dkStoreLe64(packed, states[i]);
+                uint8_t *bad = persistSnapDecompress_(packed, len, &outLen);
+                if (bad) {
+                    ERR("a body stating %" PRIu64 " bytes decoded", states[i]);
+                    zfree(bad);
+                }
+            }
+            uint8_t *cut = persistSnapDecompress_(made, len - 1, &outLen);
+            if (cut) {
+                ERR("a cut body decoded");
+                zfree(cut);
+            }
+        }
     }
 
     TEST("only REPLACE and OPAQUE_SET rows carry a whole value") {

@@ -63,6 +63,8 @@ persistCtxConfig persistCtxDefaultConfig(void) {
         .compactAfterBytes = 64 * 1024 * 1024, /* Or after 64MB WAL */
         .walBufferSize = 64 * 1024,            /* 64KB buffer */
         .strictRecovery = false,
+        .compression = PERSIST_COMPRESS_NONE,
+        .compressionLevel = 0,
     };
 }
 
@@ -189,6 +191,8 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
     persistConfig pconfig = persistDefaultConfig();
     pconfig.walBufferSize = ctx->config.walBufferSize;
     pconfig.strictRecovery = ctx->config.strictRecovery;
+    pconfig.compression = ctx->config.compression;
+    pconfig.compressionLevel = ctx->config.compressionLevel;
 
     switch (ctx->config.syncMode) {
     case PERSIST_CTX_SYNC_NONE:

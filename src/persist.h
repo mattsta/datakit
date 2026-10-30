@@ -603,11 +603,13 @@ struct persistStore {
  * Configuration
  * ============================================================================
  */
+/* Snapshot body compression.  LZ4 compresses each snapshot body before it
+ * is wrapped (the envelope's digest covers the bytes on disk); a body that
+ * would not shrink is stored as it is.  WAL records are never compressed:
+ * they are small and each is written on its own. */
 typedef enum persistCompression {
     PERSIST_COMPRESS_NONE = 0,
-    PERSIST_COMPRESS_LZ4 = 1,   /* Fast compression */
-    PERSIST_COMPRESS_ZSTD = 2,  /* High ratio compression */
-    PERSIST_COMPRESS_CFLEX = 3, /* Use built-in cflex compression */
+    PERSIST_COMPRESS_LZ4 = 1,
 } persistCompression;
 
 typedef enum persistSyncMode {
@@ -619,7 +621,8 @@ typedef enum persistSyncMode {
 struct persistConfig {
     /* Compression settings */
     persistCompression compression;
-    int compressionLevel; /* 0 = default, higher = more compression */
+    int compressionLevel; /* 0: LZ4 (fastest); 1-12: LZ4HC at that level
+                             (smaller, slower to write; reads the same) */
 
     /* Checksum settings */
     persistChecksum checksumType;

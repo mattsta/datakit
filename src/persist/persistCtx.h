@@ -52,6 +52,11 @@ typedef struct persistCtxConfig {
 
     /* Recovery mode */
     bool strictRecovery; /* Fail on any WAL corruption vs skip bad entries */
+
+    /* Snapshot body compression (persistConfig.compression and
+     * compressionLevel; off by default) */
+    persistCompression compression;
+    int compressionLevel;
 } persistCtxConfig;
 
 /* Default configuration */

@@ -182,6 +182,15 @@ out-parameter; pass NULL when you do not need it:
   (0 disables that trigger). `*CompactP` compacts now.
 - `walBufferSize`: the WAL write buffer.
 - `strictRecovery`: see below.
+- `compression`, `compressionLevel`: snapshot body compression (off by
+  default). `PERSIST_COMPRESS_LZ4` compresses each snapshot body before it
+  is wrapped, so the envelope's digest covers the bytes on disk; level 0 is
+  LZ4 (fastest), levels 1-12 are LZ4HC at that level (smaller, slower to
+  write, as fast to read). A body that would not shrink is stored as it is,
+  and the file says which (a must-understand feature bit of the snapshot
+  file). WAL records are never compressed: each is small and written on
+  its own. `persistCreate` and `persistSetConfig` refuse an unknown mode or
+  a level outside 0-12. The same fields are in `persistConfig` for the core.
 
 A compaction writes a new snapshot that records the WAL sequence it includes,
 then starts the WAL over. The file backend publishes the snapshot
@@ -308,9 +317,28 @@ if (r != DK_FORMAT_OK) {
 }
 ```
 
+Bytes that are kept on their own (not inside a persist file or an envelope)
+should be sealed: the prefix, the payload, then an 8-byte XXH3-64 over both,
+so a changed byte is refused rather than read as other content.
+`multiroarSerialize` writes this form.
+
+```c
+const size_t total = dkFormatSealedSize(&stamp, payloadLen);
+uint8_t *at = dkFormatSealBegin(&stamp, out, cap, payloadLen); /* NULL: short */
+memcpy(at, payload, payloadLen);
+dkFormatSealEnd(out, total);
+
+const uint8_t *body;
+size_t bodyLen;
+if (dkFormatOpen(&mySpec, buf, len, &found, &body, &bodyLen) != DK_FORMAT_OK) {
+    /* DK_FORMAT_DIGEST_MISMATCH: the bytes changed since they were sealed */
+}
+```
+
 `dkFormatCheck(&spec, &stamp)` checks a stamp read some other way (a file
 header). The results are `DK_FORMAT_OK`, `_MALFORMED`, `_WRONG_ID`,
-`_VERSION_TOO_NEW`, `_VERSION_TOO_OLD` and `_FEATURE_UNKNOWN`.
+`_VERSION_TOO_NEW`, `_VERSION_TOO_OLD`, `_FEATURE_UNKNOWN` and
+`_DIGEST_MISMATCH` (sealed bytes only).
 `dkFormatManifest` lists every format this build writes and reads.
 
 ### Reading files by path (operators)

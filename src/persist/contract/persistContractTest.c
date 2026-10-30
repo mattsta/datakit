@@ -692,6 +692,54 @@ static void pcHolds(pcRow *row, const persistContractType *t, const void *s,
     }
 }
 
+/* Through the persist framework, plain and with snapshot compression (LZ4,
+ * and LZ4HC at level 9): the structure persistRestore gives snapshots as
+ * a direct restore of the live structure's snapshot does ('level' -1 below
+ * is no compression).  The expectation is taken now: a snapshot can leave
+ * caches in the live structure (persistSnapshot counts it). */
+static void pcCompressed(pcRow *row, const persistOps *ops, const void *live) {
+    size_t freshLen = 0;
+    cleanerName(zfree, Bytes) uint8_t *fresh = ops->snapshot(live, &freshLen);
+    void *direct = fresh ? pcRestore(ops, fresh, freshLen) : nullptr;
+    size_t snapLen = 0;
+    cleanerName(zfree, Bytes) uint8_t *snap =
+        direct ? ops->snapshot(direct, &snapLen) : nullptr;
+    if (direct) {
+        ops->free(direct);
+    }
+    if (!snap) {
+        PC_FAIL(row, ops, "%s", "no direct restore to compare with");
+        return;
+    }
+
+    static const int levels[] = {-1, 0, 9};
+    for (size_t i = 0; i < countof(levels); i++) {
+        persistConfig config = persistDefaultConfig();
+        config.compression =
+            levels[i] < 0 ? PERSIST_COMPRESS_NONE : PERSIST_COMPRESS_LZ4;
+        config.compressionLevel = levels[i] < 0 ? 0 : levels[i];
+        persist *p = persistCreate(ops, &config);
+        if (!p) {
+            PC_FAIL(row, ops, "LZ4 level %d: no persist", levels[i]);
+            continue;
+        }
+
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        void *back = persistSnapshot(p, live) ? persistRestore(p) : nullptr;
+        size_t againLen = 0;
+        cleanerName(zfree, Bytes) uint8_t *again =
+            back ? ops->snapshot(back, &againLen) : nullptr;
+        if (!back || !pcSame(again, againLen, snap, snapLen)) {
+            PC_FAIL(row, ops, "LZ4 level %d: the restored structure differs",
+                    levels[i]);
+        }
+        if (back) {
+            ops->free(back);
+        }
+        persistClose(p);
+    }
+}
+
 /* One build: contracts 1 and 2 (and 4 when `strings`), returning the
  * live snapshot for contract 3 when `snapOut`. */
 static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
@@ -717,6 +765,7 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
     size_t snapLen = 0;
     if (pcRoundTrip(row, ops, live, "round trip", &snap, &snapLen)) {
         pcSeeds(ops, live, snap, snapLen, &log);
+        pcCompressed(row, ops, live);
 
         /* The restored structure has the settings the live one was built
          * with (a setting the snapshot does not carry leaves both
