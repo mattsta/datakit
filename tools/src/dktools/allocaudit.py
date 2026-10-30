@@ -107,6 +107,7 @@ CONSTRUCTORS = {
     "multilruNewWithConfig": "multilruFree",
     "multimapAtomNew": "multimapAtomFree",
     "multimapAtomNewConfig": "multimapAtomFree",
+    "multimapAtomCopy": "multimapAtomFree",
     "timerWheelNew": "timerWheelFree",
     "multiTimerNew": "multiTimerFree",
     "multiFenwickNew": "multiFenwickFree",

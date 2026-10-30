@@ -18,17 +18,17 @@ of magnitude and as ratios between containers, not as guarantees.
 
 Throughput spans 1K to 1M elements and every element kind measured.
 
-| You need                                      | Use             | Operations per second                                     | Bytes per element                             |
-| --------------------------------------------- | --------------- | --------------------------------------------------------- | --------------------------------------------- |
-| Values by position, fixed width               | multiarray      | 3-30M; reads to 190M while small                          | exactly the width                             |
-| A queue or log: append, pop, iterate          | multilist       | 3-17M appends and pops                                    | 4-5 for small integers, width + 2 for strings |
-| Key -> value, lookups only                    | multidict       | 1.2-16M reads, 0.6-4.5M writes                            | key + value + 6-11                            |
-| Key -> value in key order (ranges, iteration) | multimap        | 0.5-3M, every operation                                   | key + value + 4-9 (the densest map)           |
-| Members ranked by score                       | multiOrderedSet | 1.8-14M reads, 0.3-2M writes                              | member twice + score + ~20                    |
-| Integer membership, read-mostly               | intset          | 20-72M reads                                              | 2, 4 or 8, by the widest value                |
-| Integer membership, write-heavy or large      | multiroar       | 2.7-7M sets, 37-56M reads (clustered values)              | under 1 when values cluster                   |
-| Many copies of the same values (interning)    | multimapAtom    | 1-2M interns (compact), 2-14M (fast); reads by id to 200M | value + 11-19 (compact), + 36-50 (fast)       |
-| Recency for a cache stored elsewhere          | multilru        | 16-92M                                                    | 14-23 per entry, no values                    |
+| You need                                      | Use             | Operations per second                                     | Bytes per element                                    |
+| --------------------------------------------- | --------------- | --------------------------------------------------------- | ---------------------------------------------------- |
+| Values by position, fixed width               | multiarray      | 3-30M; reads to 190M while small                          | exactly the width                                    |
+| A queue or log: append, pop, iterate          | multilist       | 3-17M appends and pops                                    | 4-5 for small integers, width + 2 for strings        |
+| Key -> value, lookups only                    | multidict       | 1.2-16M reads, 0.6-4.5M writes                            | key + value + 6-11                                   |
+| Key -> value in key order (ranges, iteration) | multimap        | 0.5-3M, every operation                                   | key + value + 4-9 (the densest map)                  |
+| Members ranked by score                       | multiOrderedSet | 1.8-14M reads, 0.3-2M writes                              | member twice + score + ~20; over 40 bytes once + ~60 |
+| Integer membership, read-mostly               | intset          | 20-72M reads                                              | 2, 4 or 8, by the widest value                       |
+| Integer membership, write-heavy or large      | multiroar       | 2.7-7M sets, 37-56M reads (clustered values)              | under 1 when values cluster                          |
+| Many copies of the same values (interning)    | multimapAtom    | 1-2M interns (compact), 2-14M (fast); reads by id to 200M | value + 11-19 (compact), + 36-50 (fast)              |
+| Recency for a cache stored elsewhere          | multilru        | 16-92M                                                    | 14-23 per entry, no values                           |
 
 ## What the measurements show
 
@@ -77,9 +77,11 @@ the knob for this trade; `dktools tune` measures it per machine
 
 Looking up a member's score runs at 1.8-14M/s. Adding a member, or
 changing its score, keeps two orders in step and runs at 0.3-2M/s. The
-set keeps each member in both orders, by score and by member, so a
-member's bytes count twice: a 16-byte member takes about 58 bytes, and a
-256-byte one about 540.
+set keeps each member in both orders, by score and by member. A member of
+40 bytes or less is stored in both, so its bytes count twice (a 16-byte
+member takes about 58 bytes); a longer one is stored once, in the set's
+atom table, with a reference in each order (a 256-byte member takes about
+315 bytes).
 
 ### Integer sets: intset and multiroar
 

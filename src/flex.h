@@ -413,6 +413,15 @@ bool flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
     const databox *boxInsertKey, flexEntry **middleEntry,
     const struct multimapAtom *referenceContainer, flexEntry **foundEntry,
     flexWhenAbsent *whenAbsent, void *whenAbsentCtx);
+/* Insert 'storeRow' where 'compareRow' sorts, every element compared and
+ * stored references resolved through 'referenceContainer': a row holding
+ * references (or any stand-ins) goes where the values they stand for sort.
+ * Full-width, duplicates allowed, as flexInsertByTypeSortedWithMiddleMulti-
+ * Direct. */
+void flexInsertByTypeSortedWithMiddleMultiWithReferenceStoring(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **compareRow,
+    const databox **storeRow, flexEntry **middleEntry,
+    const struct multimapAtom *referenceContainer);
 bool flexInsertByTypeSortedWithMiddleMultiDirect(flex **ff,
                                                  uint_fast32_t elementsPerEntry,
                                                  const databox *box[],

@@ -119,6 +119,9 @@ typedef struct multimapAtomConfig {
 multimapAtom *multimapAtomNew(void);
 /* A table with 'config's settings; NULL for an unknown index, ids or store */
 multimapAtom *multimapAtomNewConfig(const multimapAtomConfig *config);
+/* A copy of 'ma': its settings, every atom at the same id with the same
+ * count, the same next id (so references into 'ma' read the same in it) */
+multimapAtom *multimapAtomCopy(const multimapAtom *ma);
 multimapAtomIds multimapAtomGetIds(const multimapAtom *ma);
 multimapAtomIndex multimapAtomGetIndex(const multimapAtom *ma);
 multimapAtomStore multimapAtomGetStore(const multimapAtom *ma);

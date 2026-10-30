@@ -54,6 +54,19 @@ split at their middle row when they outgrow their size, whatever the scores:
 a run of members with one score (ties) spreads over as many sub-maps as it
 needs, so ties cost what distinct scores do.
 
+The Full tier stores each member's bytes once when that is smaller. A
+byte-string member longer than 40 bytes goes into the set's own atom table
+(made with the first such member; [Interning](ATOMS.md)): its row holds a
+reference to it, and its score is kept by its atom id. Shorter members, and
+members of other types, are stored in the row and keyed by themselves.
+Measured at the allocator, a member stored in the row costs about
+13 + 2.2 bytes per member byte, and an interned one about 59 + 1.0, so the two
+meet near 40 bytes: a 256-byte member takes about 315 bytes instead of 540.
+Comparisons read a reference as its member, so the order, the results and the
+snapshot format are the same whichever way a member is stored. A Full set made
+with an atom table (`multiOrderedSetFullNewWithPool`, owned or shared with
+other sets) keeps every member in it.
+
 A drained set moves back down its tiers, well below the growth points (L,
 the size limit's cutoff, and 3L), so it never flips at a boundary: Full
 holding three sub-maps or fewer becomes Medium at 1.5L or less (Small at
@@ -224,8 +237,8 @@ Best practices:
 
 - Prefer `IncrBy` over a GetScore-then-Add: it is one member search, and it
   keeps a row in place when the new score does not change its position.
-- Keep members short or intern them ([Interning](ATOMS.md)): the Full tier
-  holds each member twice (in the member index and in the ordered rows).
+- Short members (40 bytes or less) are held twice in the Full tier, in the
+  member index and in the ordered rows; longer ones once, in its atom table.
 - Pass `&set` to every writer and keep using the pointer it leaves: a write
   may move the set to another tier.
 

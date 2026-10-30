@@ -2039,6 +2039,16 @@ static void multimapAtomPersistFree_(void *structure) {
     multimapAtomFree(structure);
 }
 
+multimapAtom *multimapAtomCopy(const multimapAtom *ma) {
+    /* Its own snapshot restored: the same settings, every atom at its id
+     * with its count, the same next id */
+    size_t len = 0;
+    cleanerName(zfree, Void) void *snap =
+        multimapAtomPersistSnapshot_(ma, &len);
+    /* @own: caller; free=multimapAtomFree */
+    return multimapAtomPersistRestore_(snap, len);
+}
+
 const persistOps persistOpsMultimapAtom = {
     .type = PERSIST_TYPE_MULTIMAP_ATOM,
     .name = "multimapAtom",

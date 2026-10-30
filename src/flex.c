@@ -5011,7 +5011,13 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
     const bool newKeysBecomeShared, void **keyAsAllocation,
     const bool keepFound, databox *const replacedOut,
     flexEntry **const foundOut, flexWhenAbsent *const whenAbsent,
-    void *const whenAbsentCtx, const bool foundLowest) {
+    void *const whenAbsentCtx, const bool foundLowest,
+    const databox *const *const storeRow) {
+    /* 'storeRow', when not NULL, is what a new row stores in place of
+     * 'box' (which only positions it): a row of references inserts where
+     * the values they stand for sort.  A surrogate key replaces element 0
+     * of either. */
+    const databox *const *const stored = storeRow ? storeRow : box;
     /* 'foundLowest': a key found is reported at its first row (a set's
      * rows can share a key), so a caller needs no second search for it.
      * When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
@@ -5139,7 +5145,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
             insertContentsFromBox(&copyBox[0], &content[0],
                                   CONVERSION_OVERRIDE_NONE, 0, bigBuffer);
         } else if (newKeysBecomeShared) {
-            copyBox[0] = *box[0];
+            copyBox[0] = *stored[0];
             /* A shared key over 12 bytes becomes an allocation the row
              * holds a pointer to; a shorter key is stored in place */
             if (insertContentsFromBox(
@@ -5148,7 +5154,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
                 *keyAsAllocation = copyBox[0].data.ptr;
             }
         } else {
-            copyBox[0] = *box[0];
+            copyBox[0] = *stored[0];
             insertContentsFromBox(&copyBox[0], &content[0],
                                   CONVERSION_OVERRIDE_NONE, 0, bigBuffer);
         }
@@ -5162,7 +5168,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
      * empty one adds nothing */
     contents[0] = &content[0];
     for (int_fast32_t i = 1; i < elementsPerEntry; i++) {
-        copyBox[i] = *box[i];
+        copyBox[i] = *stored[i];
         insertContentsFromBox(&copyBox[i], &content[i],
                               CONVERSION_OVERRIDE_NONE, i, bigBuffer);
         contents[i] = &content[i];
@@ -5290,7 +5296,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
         useReference, referenceContainer, useSurrogateKeyForInsert,
         surrogateKey, newKeysBecomeShared, keyAsAllocation, keepFound,
-        replacedOut, nullptr, nullptr, nullptr, false);
+        replacedOut, nullptr, nullptr, nullptr, false, nullptr);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
@@ -5336,11 +5342,11 @@ bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
                ? abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
                      ff, elementsPerEntry, box, middleEntry, true, false,
                      nullptr, false, nullptr, false, nullptr, true, nullptr,
-                     foundEntry, nullptr, nullptr, true)
+                     foundEntry, nullptr, nullptr, true, nullptr)
                : abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
                      ff, elementsPerEntry, box, middleEntry, true, false,
                      nullptr, false, nullptr, false, nullptr, true, nullptr,
-                     foundEntry, nullptr, nullptr, false);
+                     foundEntry, nullptr, nullptr, false, nullptr);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
@@ -5412,7 +5418,18 @@ bool flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
     return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
         ff, elementsPerEntry, box, middleEntry, true, true, referenceContainer,
         true, boxInsertKey, false, nullptr, true, nullptr, foundEntry,
-        whenAbsent, whenAbsentCtx, false);
+        whenAbsent, whenAbsentCtx, false, nullptr);
+}
+
+void flexInsertByTypeSortedWithMiddleMultiWithReferenceStoring(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const compareRow, const databox **const storeRow,
+    flexEntry **const middleEntry,
+    const struct multimapAtom *const referenceContainer) {
+    abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
+        ff, elementsPerEntry, compareRow, middleEntry, false, true,
+        referenceContainer, false, nullptr, false, nullptr, false, nullptr,
+        nullptr, nullptr, nullptr, false, storeRow);
 }
 
 void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,
