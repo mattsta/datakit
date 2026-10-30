@@ -103,6 +103,15 @@ bool coldmapInsertMany(coldmap *cm, const flex *rows, size_t *replaced);
  * decompression and one compression.  'deleted' (may be NULL): rows
  * deleted.  False, nothing changed, when the keys do not ascend. */
 bool coldmapDeleteMany(coldmap *cm, const flex *keys, size_t *deleted);
+/* Remove every row 'remove' says to (it sees each row, key first, in key
+ * order, and may tally the rows it keeps): each block holding one is
+ * rewritten once, with what remains; blocks that shrink merge as a
+ * delete's do.  The removed rows are appended to '*removed' (NULL: not
+ * kept), in key order.  Returns the rows removed.  'remove' must not
+ * change the coldmap. */
+typedef bool coldmapRowFn(void *ctx, const databox *const row[]);
+size_t coldmapRemoveIf(coldmap *cm, coldmapRowFn *remove, void *ctx,
+                       flex **removed);
 /* Remove block 'index' (0 .. coldmapBlockCount - 1) whole: its rows, in
  * key order as a dump-form flex the caller frees; NULL past the end */
 [[nodiscard]] flex *coldmapRemoveBlock(coldmap *cm, size_t index);
