@@ -1,6 +1,7 @@
 #include "coldmap.h"
 
 #include "cleaner.h"
+#include "dkTierLimit.h"
 
 defcleaner(flex *, flexFree);
 defcleanerName(void *, zfree, Void);
@@ -203,8 +204,9 @@ coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
     coldmap *cm = zcalloc(1, sizeof(*cm));
     cm->elementsPerEntry = elementsPerEntry;
     cm->rawCap =
-        flexOptimizationSizeLimit[c->rawLimit ? c->rawLimit
-                                              : COLDMAP_RAW_LIMIT_DEFAULT];
+        flexOptimizationSizeLimit[c->rawLimit
+                                      ? c->rawLimit
+                                      : dkTierDefaultLimit(DK_TIER_COLDMAP)];
     cm->storedTarget = c->storedTarget ? c->storedTarget : cm->rawCap / 4;
     /* @own: container; free=mflexStateFree */
     cm->state = mflexStateCreate();
@@ -654,6 +656,8 @@ void coldmapGetStats(const coldmap *cm, coldmapStats *stats) {
         .compressedBlocks = cm->compressedBlocks,
         .rawBytes = cm->rawBytes,
         .storedBytes = cm->storedBytes,
+        .rawLimit = cm->rawCap,
+        .storedTarget = cm->storedTarget,
     };
 }
 

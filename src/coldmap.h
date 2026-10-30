@@ -32,7 +32,8 @@ typedef struct coldmap coldmap;
 
 typedef struct coldmapConfig {
     /* The most raw (decompressed) bytes a block holds: the cost of one
-     * read.  FLEX_CAP_LEVEL_0: COLDMAP_RAW_LIMIT_DEFAULT. */
+     * read.  FLEX_CAP_LEVEL_0: the DK_TIER_COLDMAP default (dkTierLimit.h,
+     * 8 KB until set). */
     flexCapSizeLimit rawLimit;
     /* The stored bytes a block aims for (0: a quarter of the raw limit) */
     uint32_t storedTarget;
@@ -41,8 +42,6 @@ typedef struct coldmapConfig {
     /* LZ4 level: 0 fast, 1-12 LZ4HC (smaller, slower to build) */
     uint8_t level;
 } coldmapConfig;
-
-#define COLDMAP_RAW_LIMIT_DEFAULT FLEX_CAP_LEVEL_8192
 
 /* A coldmap of the rows of 'rows' (a flex of whole rows of
  * 'elementsPerEntry' elements in strictly ascending key order, as
@@ -117,8 +116,10 @@ typedef struct coldmapStats {
     uint64_t rows;
     uint64_t blocks;
     uint64_t compressedBlocks;
-    uint64_t rawBytes;    /* the rows as flex */
-    uint64_t storedBytes; /* the blocks as kept */
+    uint64_t rawBytes;     /* the rows as flex */
+    uint64_t storedBytes;  /* the blocks as kept */
+    uint32_t rawLimit;     /* bytes a block holds at most, open */
+    uint32_t storedTarget; /* bytes a block aims to store */
 } coldmapStats;
 void coldmapGetStats(const coldmap *cm, coldmapStats *stats);
 

@@ -433,6 +433,11 @@ class Report(unittest.TestCase):
             f"FLEX_CAP_LEVEL_{tune.DEFAULT_BASELINES['multimapAtom']}",
             header,
         )
+        self.assertIn(
+            "#define DK_TIER_LIMIT_COLDMAP_COMPILED "
+            f"FLEX_CAP_LEVEL_{tune.DEFAULT_BASELINES['coldmap']}",
+            header,
+        )
         flexHeader = (REPO / "src" / "flex.h").read_text()
         self.assertIn(
             "#define FLEX_GROWTH_SLACK_PERCENT "
@@ -532,6 +537,13 @@ class Mixes(unittest.TestCase):
         self.assertIsNotNone(names)
         rows["multidict"] = set(re.findall(r'"(\w+)"', names.group(1)))
         self.assertIn('emitRow("multidictLimits"', source)
+        # so does coldmap's
+        cold = re.search(
+            r"perfColdmapOpNames\[PERF_COLDMAP_OP_COUNT\] = \{([^}]*)\}", source
+        )
+        self.assertIsNotNone(cold)
+        rows["coldmap"] = set(re.findall(r'"(\w+)"', cold.group(1)))
+        self.assertIn('emitRow("coldmapLimits"', source)
         # so does the flex growth slack's
         slack = re.search(
             r"flexSlackOpNames\[FLEX_SLACK_OP_COUNT\] = \{([^}]*)\}", source

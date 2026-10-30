@@ -9,11 +9,18 @@ static _Atomic uint8_t dkTierDefaultLimit_[DK_TIER_FAMILY_COUNT] = {
     [DK_TIER_MULTIORDEREDSET] = DK_TIER_LIMIT_COMPILED,
     [DK_TIER_MULTILIST] = DK_TIER_LIMIT_COMPILED,
     [DK_TIER_MULTIMAP_ATOM] = DK_TIER_LIMIT_ATOM_COMPILED,
+    [DK_TIER_COLDMAP] = DK_TIER_LIMIT_COLDMAP_COMPILED,
 };
 
 flexCapSizeLimit dkTierCompiledLimit(dkTierFamily family) {
-    return family == DK_TIER_MULTIMAP_ATOM ? DK_TIER_LIMIT_ATOM_COMPILED
-                                           : DK_TIER_LIMIT_COMPILED;
+    switch (family) {
+    case DK_TIER_MULTIMAP_ATOM:
+        return DK_TIER_LIMIT_ATOM_COMPILED;
+    case DK_TIER_COLDMAP:
+        return DK_TIER_LIMIT_COLDMAP_COMPILED;
+    default:
+        return DK_TIER_LIMIT_COMPILED;
+    }
 }
 
 flexCapSizeLimit dkTierDefaultLimit(dkTierFamily family) {
@@ -47,11 +54,13 @@ dkTierLimitResult dkTierSetDefaultLimit(dkTierFamily family,
 #include "cleaner.h"
 #include "ctest.h"
 
+#include "coldmap.h"
 #include "multiOrderedSet.h"
 #include "multilist.h"
 #include "multimap.h"
 #include "multimapAtom.h"
 
+defcleaner(coldmap *, coldmapFree);
 defcleaner(multimap *, multimapFree);
 defcleaner(multimapAtom *, multimapAtomFree);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);
@@ -87,6 +96,14 @@ static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
         multimapAtomGetStats(ma, &as);
         return as.unitLimit;
     }
+    case DK_TIER_COLDMAP: {
+        /* @own: container; free=coldmapFree */
+        flex *rows = flexNew();
+        cleaner(coldmapFree) coldmap *cm = coldmapNewFromDump(2, nullptr, rows);
+        coldmapStats cs;
+        coldmapGetStats(cm, &cs);
+        return cs.rawLimit;
+    }
     default:
         break;
     }
@@ -109,9 +126,10 @@ int dkTierLimitTest(int, char *[]) {
     TEST("every family starts at its compiled default") {
         for (uint32_t f = 0; f < DK_TIER_FAMILY_COUNT; f++) {
             const dkTierFamily family = (dkTierFamily)f;
-            const flexCapSizeLimit want = f == DK_TIER_MULTIMAP_ATOM
-                                              ? DK_TIER_LIMIT_ATOM_COMPILED
-                                              : DK_TIER_LIMIT_COMPILED;
+            const flexCapSizeLimit want =
+                f == DK_TIER_MULTIMAP_ATOM ? DK_TIER_LIMIT_ATOM_COMPILED
+                : f == DK_TIER_COLDMAP     ? DK_TIER_LIMIT_COLDMAP_COMPILED
+                                           : DK_TIER_LIMIT_COMPILED;
             if (dkTierDefaultLimit(family) != want ||
                 dkTierCompiledLimit(family) != want ||
                 dkTierLimitTestNewLimit_(family) !=

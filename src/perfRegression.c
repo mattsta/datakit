@@ -15,6 +15,7 @@
 #include "chacha20poly1305.h"
 #include "cleaner.h"
 #include "clusterMailbox.h"
+#include "coldmap.h"
 #include "ctest.h"
 #include "datakit.h"
 #include "dj.h"
@@ -2342,6 +2343,154 @@ static void benchMultilist(void) {
 defcleanerName(multilist **, zfree, PerfLists);
 defcleanerName(multimap **, zfree, PerfMaps);
 
+defcleaner(coldmap *, coldmapFree);
+defcleaner(flex *, flexFree);
+
+/* coldmap's rows: "user:NNNNNNNN" -> a small JSON-like record (sorted
+ * keys sharing prefixes, the shape a cold store holds), PERF_CONTAINER_N
+ * rows in key order as a multimap dump */
+static flex *perfColdmapRows(void) {
+    static const char *const plans[4] = {"basic", "team", "pro", "enterprise"};
+    cleaner(multimapFree) multimap *m = multimapNew(2);
+    char key[32];
+    char value[96];
+    for (uint32_t i = 0; i < PERF_CONTAINER_N; i++) {
+        const int kn = snprintf(key, sizeof(key), "user:%08" PRIu32, i);
+        const int vn = snprintf(value, sizeof(value),
+                                "{\"plan\":\"%s\",\"seats\":%" PRIu32
+                                ",\"region\":\"r%" PRIu32 "\"}",
+                                plans[i % 4], i % 50, i % 7);
+        const databox k = databoxNewBytes(key, (size_t)kn);
+        const databox v = databoxNewBytes(value, (size_t)vn);
+        const databox *row[2] = {&k, &v};
+        multimapInsert(&m, row);
+    }
+
+    /* @own: caller; free=flexFree */
+    return multimapDump(m);
+}
+
+/* Row i's key ('miss': one sorting just after it, never present) */
+static databox perfColdmapKey(char *buf, size_t len, uint32_t i, bool miss) {
+    const int n =
+        snprintf(buf, len, miss ? "user:%08" PRIu32 "~" : "user:%08" PRIu32, i);
+    return databoxNewBytes(buf, (size_t)n);
+}
+
+typedef enum perfColdmapOp {
+    PERF_COLDMAP_BUILD = 0,
+    PERF_COLDMAP_LOOKUP,
+    PERF_COLDMAP_MISS,
+    PERF_COLDMAP_SCAN,
+    PERF_COLDMAP_OP_COUNT
+} perfColdmapOp;
+
+static const char *const perfColdmapOpNames[PERF_COLDMAP_OP_COUNT] = {
+    "build", "lookup", "lookupMiss", "scan"};
+
+/* One coldmap at raw limit 'limit' (FLEX_CAP_LEVEL_0: the default): ns
+ * per row to build it, per scattered lookup of a present and an absent
+ * key, per row of a full scan; and the bytes it holds */
+static void perfColdmapRun(const flex *rows, flexCapSizeLimit limit,
+                           double secs[PERF_COLDMAP_OP_COUNT], size_t *bytes) {
+    const uint32_t n = PERF_CONTAINER_N;
+    const coldmapConfig config = {.rawLimit = limit};
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+    char key[32];
+    databox value;
+    databox *values[1] = {&value};
+
+    double t0 = timeUtilMonotonicSec();
+    /* @own: container; free=coldmapFree */
+    flex *copy = flexDuplicate(rows);
+    cleaner(coldmapFree) coldmap *cm = coldmapNewFromDump(2, &config, copy);
+    secs[PERF_COLDMAP_BUILD] = timeUtilMonotonicSec() - t0;
+    *bytes = coldmapBytes(cm);
+
+    for (int miss = 0; miss < 2; miss++) {
+        t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k =
+                perfColdmapKey(key, sizeof(key), perfScatter(i), miss);
+            perfContainerSink += coldmapLookup(cm, state, &k, values);
+        }
+        secs[miss ? PERF_COLDMAP_MISS : PERF_COLDMAP_LOOKUP] =
+            timeUtilMonotonicSec() - t0;
+    }
+
+    t0 = timeUtilMonotonicSec();
+    coldmapIterator it;
+    databox k;
+    databox *row[2] = {&k, &value};
+    coldmapIteratorInit(cm, state, &it, true);
+    while (coldmapIteratorNext(&it, row)) {
+        perfContainerSink += value.len;
+    }
+    secs[PERF_COLDMAP_SCAN] = timeUtilMonotonicSec() - t0;
+}
+
+/* The default coldmap's rows: build, lookups, scan (bytes: the coldmap),
+ * then single-row inserts of new keys and their deletes (each rewrites a
+ * block) */
+static void benchColdmap(void) {
+    cleaner(flexFree) flex *rows = perfColdmapRows();
+    double secs[PERF_COLDMAP_OP_COUNT];
+    size_t bytes = 0;
+    perfColdmapRun(rows, FLEX_CAP_LEVEL_0, secs, &bytes);
+    for (int op = 0; op < PERF_COLDMAP_OP_COUNT; op++) {
+        emitRow("coldmap", perfColdmapOpNames[op],
+                op == PERF_COLDMAP_BUILD ? bytes : 0, PERF_CONTAINER_N,
+                secs[op]);
+    }
+
+    constexpr uint32_t writes = 5000;
+    /* @own: container; free=coldmapFree */
+    flex *copy = flexDuplicate(rows);
+    cleaner(coldmapFree) coldmap *cm = coldmapNewFromDump(2, nullptr, copy);
+    char key[32];
+    const databox v = databoxNewBytes("{\"plan\":\"new\"}", 14);
+    double t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < writes; i++) {
+        const databox k =
+            perfColdmapKey(key, sizeof(key), perfScatter(i), true);
+        const databox *row[2] = {&k, &v};
+        perfContainerSink += coldmapInsert(cm, row);
+    }
+    emitRow("coldmap", "insert", 0, writes, timeUtilMonotonicSec() - t0);
+
+    t0 = timeUtilMonotonicSec();
+    for (uint32_t i = 0; i < writes; i++) {
+        const databox k =
+            perfColdmapKey(key, sizeof(key), perfScatter(i), true);
+        perfContainerSink += coldmapDelete(cm, &k);
+    }
+    emitRow("coldmap", "delete", 0, writes, timeUtilMonotonicSec() - t0);
+}
+
+/* The sweep `dktools tune --families coldmap` reads (run by name): the
+ * coldmap rows at raw limits from 1 KB to 64 KB, rows "<op><limit>" (the
+ * build row's bytes: the coldmap) */
+static void benchColdmapLimits(void) {
+    static const flexCapSizeLimit limits[] = {
+        FLEX_CAP_LEVEL_1024,  FLEX_CAP_LEVEL_2048,  FLEX_CAP_LEVEL_4096,
+        FLEX_CAP_LEVEL_8192,  FLEX_CAP_LEVEL_16384, FLEX_CAP_LEVEL_32768,
+        FLEX_CAP_LEVEL_65536,
+    };
+    cleaner(flexFree) flex *rows = perfColdmapRows();
+    for (size_t l = 0; l < countof(limits); l++) {
+        double secs[PERF_COLDMAP_OP_COUNT];
+        size_t bytes = 0;
+        perfColdmapRun(rows, limits[l], secs, &bytes);
+        for (int op = 0; op < PERF_COLDMAP_OP_COUNT; op++) {
+            char name[48];
+            snprintf(name, sizeof(name), "%s%" PRIu32, perfColdmapOpNames[op],
+                     flexOptimizationSizeLimit[limits[l]]);
+            emitRow("coldmapLimits", name, op == PERF_COLDMAP_BUILD ? bytes : 0,
+                    PERF_CONTAINER_N, secs[op]);
+        }
+    }
+}
+
 /* Compressibility of map-shaped blocks, as a sorted container's inner flex
  * holds them: rows in key order packed into flexes of 512 B, 2 KB, 8 KB
  * and 64 KB, three row shapes (integer -> integer; integer -> a short
@@ -3348,6 +3497,10 @@ int perfRegressionTest(int, char *[]) {
             benchPersistChecks();
         }
 
+        if (perfNamed("coldmapLimits")) {
+            benchColdmapLimits();
+        }
+
         if (perfNamed("multimapLimits")) {
             benchMultimapLimits();
         }
@@ -3443,6 +3596,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("persistSnapshot")) {
             benchPersistSnapshot();
+        }
+
+        if (perfWanted("coldmap")) {
+            benchColdmap();
         }
 
         if (perfWanted("mapBlockCompress")) {

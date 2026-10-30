@@ -5,14 +5,17 @@
 /* The size limit a family's plain constructor gives each new container:
  * multimapNew and multimapSetNew read DK_TIER_MULTIMAP's,
  * multiOrderedSetNew reads DK_TIER_MULTIORDEREDSET's, multilistNew reads
- * DK_TIER_MULTILIST's, and every multimapAtom constructor reads
- * DK_TIER_MULTIMAP_ATOM's for its multimap index.  Constructors that
- * take a limit ignore these defaults.
+ * DK_TIER_MULTILIST's, every multimapAtom constructor reads
+ * DK_TIER_MULTIMAP_ATOM's for its multimap index, and a coldmap built
+ * without a raw limit reads DK_TIER_COLDMAP's for its blocks.
+ * Constructors that take a limit ignore these defaults.
  *
  * Each family starts at its compiled default (dkTierCompiledLimit):
- * DK_TIER_LIMIT_COMPILED, and DK_TIER_LIMIT_ATOM_COMPILED for the atom
- * table, whose reads by id favour smaller nodes.  `dktools tune` measures
- * each family's speed and memory per limit on the machine it runs on; an
+ * DK_TIER_LIMIT_COMPILED; DK_TIER_LIMIT_ATOM_COMPILED for the atom table,
+ * whose reads by id favour smaller nodes; DK_TIER_LIMIT_COLDMAP_COMPILED
+ * for coldmap blocks, whose compression improves with their size.
+ * `dktools tune` measures each family's speed and memory per limit on the
+ * machine it runs on; an
  * operator sets the limit it recommends once at startup.  A change
  * applies to containers made after it: existing containers keep the limit
  * they were made with.  Reads and writes are safe from any thread; a
@@ -20,12 +23,14 @@
 
 #define DK_TIER_LIMIT_COMPILED FLEX_CAP_LEVEL_2048
 #define DK_TIER_LIMIT_ATOM_COMPILED FLEX_CAP_LEVEL_512
+#define DK_TIER_LIMIT_COLDMAP_COMPILED FLEX_CAP_LEVEL_8192
 
 typedef enum dkTierFamily {
     DK_TIER_MULTIMAP = 0,
     DK_TIER_MULTIORDEREDSET = 1,
     DK_TIER_MULTILIST = 2,
     DK_TIER_MULTIMAP_ATOM = 3,
+    DK_TIER_COLDMAP = 4,
     DK_TIER_FAMILY_COUNT
 } dkTierFamily;
 

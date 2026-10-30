@@ -19,7 +19,8 @@ built under ``ROOT/tune/NAME`` with the compiler's perf preset (gcc15:
 its release preset), ``datakit-test`` only.  ``datakit-test test
 perfRegression`` then runs ``--runs`` times with ``DK_PERF_MODULES``
 naming the families' size-limit sweeps (``<family>Limits``: every
-operation at every limit from 256 bytes to 8 KB, rows named
+operation at every limit from 256 bytes to 8 KB, coldmap's from 1 KB to
+64 KB, rows named
 ``<op><limit>``).
 
 Everything is read against the baseline, the limit the plain
@@ -62,7 +63,13 @@ from . import gitutil, perfcompare, perfdiff, procs, steps, toolchain
 from .gitutil import ToolError
 
 #: The families whose setting is a dkTierFamily size limit (dkTierLimit.h)
-TIER_FAMILIES = ("multimap", "multiOrderedSet", "multilist", "multimapAtom")
+TIER_FAMILIES = (
+    "multimap",
+    "multiOrderedSet",
+    "multilist",
+    "multimapAtom",
+    "coldmap",
+)
 #: Every tuned family: the tier families, and multidict, whose setting is
 #: its count-based load factor (percent; multidictSetDefaultLoadFactors)
 FAMILIES = (*TIER_FAMILIES, "multidict", "flexSlack")
@@ -72,10 +79,12 @@ DEFAULT_BASELINE = 2048
 #: Per family, the setting its plain constructors use until changed
 #: (multidict: MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR in multidict.c)
 #: (multimapAtom: DK_TIER_LIMIT_ATOM_COMPILED in dkTierLimit.h)
+#: (coldmap: DK_TIER_LIMIT_COLDMAP_COMPILED in dkTierLimit.h)
 #: (flexSlack: FLEX_GROWTH_SLACK_PERCENT in flex.h, a percent of growth)
 DEFAULT_BASELINES = {
     **dict.fromkeys(TIER_FAMILIES, DEFAULT_BASELINE),
     "multimapAtom": 512,
+    "coldmap": 8192,
     "multidict": 800,
     "flexSlack": 0,
 }
@@ -99,6 +108,7 @@ DEFAULT_SETTERS = {
     "multiOrderedSet": "DK_TIER_MULTIORDEREDSET",
     "multilist": "DK_TIER_MULTILIST",
     "multimapAtom": "DK_TIER_MULTIMAP_ATOM",
+    "coldmap": "DK_TIER_COLDMAP",
 }
 
 #: Each family's sweep operations, as reads or writes
@@ -127,6 +137,12 @@ OP_CLASS = {
         "find": "read",
         "findScattered": "read",
         "delete": "write",
+    },
+    "coldmap": {
+        "build": "write",
+        "lookup": "read",
+        "lookupMiss": "read",
+        "scan": "read",
     },
     "flexSlack": {
         "dictAdd": "write",
