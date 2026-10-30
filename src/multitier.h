@@ -60,6 +60,8 @@ bool multitierPeek(multitier *t, const databox *key, databox *value);
 bool multitierDelete(multitier *t, const databox *key);
 /* Rows at every level */
 size_t multitierCount(const multitier *t);
+/* Memory held at every level, overhead included */
+size_t multitierBytes(const multitier *t);
 /* The rows waiting for the cold level, put into it now */
 void multitierFlush(multitier *t);
 

@@ -210,6 +210,11 @@ size_t multitierCount(const multitier *t) {
            coldmapCount(t->cold);
 }
 
+size_t multitierBytes(const multitier *t) {
+    return sizeof(*t) + multidictBytes(t->hot) + multimapBytes(t->pending) +
+           coldmapBytes(t->cold);
+}
+
 void multitierGetStats(const multitier *t, multitierStats *stats) {
     coldmapStats cs;
     coldmapGetStats(t->cold, &cs);

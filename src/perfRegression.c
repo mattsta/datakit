@@ -39,6 +39,7 @@
 #include "multilist.h"
 #include "multilru.h"
 #include "multimapAtom.h"
+#include "multitier.h"
 #include "persist/intsetP.h"
 #include "persist/multiOrderedSetP.h"
 #include "persist/multidictP.h"
@@ -2467,6 +2468,56 @@ static void benchColdmap(void) {
     emitRow("coldmap", "delete", 0, writes, timeUtilMonotonicSec() - t0);
 }
 
+defcleaner(multitier *, multitierFree);
+
+/* multitier over the coldmap rows ("user:NNNNNNNN" -> a record), keys set
+ * in a scattered order: all in the hot level ("hot"), or with the hot
+ * level limited to about a quarter of the rows' bytes ("tiered", the rest
+ * compressed in the cold level).  Rows: "set/<kind>" per Set (bytes: the
+ * multitier's memory once filled), "get/<kind>/skewed" per Get with nine
+ * in ten on a tenth of the keys, "get/<kind>/uniform" per Get of any key */
+static void benchMultitier(void) {
+    static const char *const plans[4] = {"basic", "team", "pro", "enterprise"};
+    const uint32_t n = PERF_CONTAINER_N;
+    char key[32];
+    char value[96];
+    for (int tiered = 0; tiered < 2; tiered++) {
+        const char *kind = tiered ? "tiered" : "hot";
+        const multitierConfig config = {.hotMaxBytes =
+                                            tiered ? n * 64u / 4 : 0};
+        cleaner(multitierFree) multitier *t = multitierNew(&config);
+        double t0 = timeUtilMonotonicSec();
+        for (uint32_t i = 0; i < n; i++) {
+            const uint32_t id = perfScatter(i);
+            const databox k = perfColdmapKey(key, sizeof(key), id, false);
+            const int vn = snprintf(value, sizeof(value),
+                                    "{\"plan\":\"%s\",\"seats\":%" PRIu32
+                                    ",\"region\":\"r%" PRIu32 "\"}",
+                                    plans[id % 4], id % 50, id % 7);
+            const databox v = databoxNewBytes(value, (size_t)vn);
+            perfContainerSink += multitierSet(t, &k, &v);
+        }
+        char name[48];
+        snprintf(name, sizeof(name), "set/%s", kind);
+        emitRow("multitier", name, multitierBytes(t), n,
+                timeUtilMonotonicSec() - t0);
+
+        for (int skewed = 1; skewed >= 0; skewed--) {
+            t0 = timeUtilMonotonicSec();
+            for (uint32_t i = 0; i < n; i++) {
+                const uint32_t id = skewed && i % 10 ? perfScatter(i) % (n / 10)
+                                                     : perfScatter(i);
+                const databox k = perfColdmapKey(key, sizeof(key), id, false);
+                databox got = {};
+                perfContainerSink += multitierGet(t, &k, &got);
+            }
+            snprintf(name, sizeof(name), "get/%s/%s", kind,
+                     skewed ? "skewed" : "uniform");
+            emitRow("multitier", name, 0, n, timeUtilMonotonicSec() - t0);
+        }
+    }
+}
+
 /* The sweep `dktools tune --families coldmap` reads (run by name): the
  * coldmap rows at raw limits from 1 KB to 64 KB, rows "<op><limit>" (the
  * build row's bytes: the coldmap) */
@@ -3600,6 +3651,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("coldmap")) {
             benchColdmap();
+        }
+
+        if (perfWanted("multitier")) {
+            benchMultitier();
         }
 
         if (perfWanted("mapBlockCompress")) {
