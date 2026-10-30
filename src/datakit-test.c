@@ -99,6 +99,7 @@
 #include "ownedState.h"
 #include "perfRegression.h"
 #include "persist.h"
+#include "persist/coldmapP.h"
 #include "persist/contract/persistContract.h"
 #include "persist/flexP.h"
 #include "persist/intsetP.h"
@@ -12414,7 +12415,7 @@ static const TestEntry testRegistry[] = {
     T_A(persistContract, "pcontract"), T_A(multimapP, "mmP"),
     T_A(multilistP, "mlP"), T_A(multidictP, "mdP"), T_A(flexP, "fP"),
     T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"), T_A(multiroarP, "mrP"),
-    T_A(multilruP, "mlruP"),
+    T_A(coldmapP, "cmP"), T_A(multilruP, "mlruP"),
 
     /* Distributed / Cluster */
     T_A_ADJ(clusterRing, "ring,cluster,chr"),

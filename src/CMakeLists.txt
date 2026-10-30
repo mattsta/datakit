@@ -649,6 +649,7 @@ add_library(${PROJECT_NAME} OBJECT
     persist/multiOrderedSetP.c
     persist/multilruP.c
     persist/multiroarP.c
+    persist/coldmapP.c
 )
 
 # Test drivers, benchmarks and the persistence contract are written for
