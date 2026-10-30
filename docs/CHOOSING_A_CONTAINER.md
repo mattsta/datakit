@@ -29,7 +29,7 @@ Throughput spans 1K to 1M elements and every element kind measured.
 | Integer membership, write-heavy or large              | multiroar       | 2.7-7M sets, 37-56M reads (clustered values)              | under 1 when values cluster                          |
 | Many copies of the same values (interning)            | multimapAtom    | 1-2M interns (compact), 2-14M (fast); reads by id to 200M | value + 11-19 (compact), + 36-50 (fast)              |
 | Recency for a cache stored elsewhere                  | multilru        | 16-92M                                                    | 14-23 per entry, no values                           |
-| A sorted map read far more than written               | coldmap         | 0.5-2M lookups, 50M rows scanned                          | records at a quarter to a sixth of a multimap's      |
+| A sorted map read far more than written               | coldmap         | 0.5-2M lookups, 50M rows scanned                          | records at about a fifth of a multimap's             |
 | A cache that keeps cold rows instead of dropping them | multitier       | the hot path is multidict's; a cold read about 0.1M       | hot rows as multidict, the rest as coldmap           |
 
 ## What the measurements show

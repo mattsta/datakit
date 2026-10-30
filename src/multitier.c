@@ -160,6 +160,9 @@ multitier *multitierNew(const multitierConfig *config) {
     const multitierConfig defaults = {};
     const multitierConfig *c = config ? config : &defaults;
     /* @own: container; free=coldmapFree */
+    if (c->hotLevels > 64) {
+        return nullptr; /* multilru holds at most 64 levels */
+    }
     coldmap *cold = coldmapNew(2, &c->cold);
     if (!cold) {
         return nullptr; /* a cold config out of range */
@@ -187,7 +190,8 @@ multitier *multitierNew(const multitierConfig *config) {
     /* @own: container; free=multimapFree */
     t->shadowed = multimapSetNew(1);
     /* @own: container; free=mflexStateFree */
-    t->state = mflexStateCreate();
+    t->state = mflexStateNew(
+        flexOptimizationSizeLimit[t->config.cold.rawLimit]); /* one block */
     return t;
 }
 
@@ -298,7 +302,8 @@ size_t multitierCount(const multitier *t) {
 
 size_t multitierBytes(const multitier *t) {
     return sizeof(*t) + multidictBytes(t->hot) + multimapBytes(t->pending) +
-           multimapBytes(t->shadowed) + coldmapBytes(t->cold);
+           multimapBytes(t->shadowed) + coldmapBytes(t->cold) +
+           mflexStateBytes(t->state);
 }
 
 void multitierGetStats(const multitier *t, multitierStats *stats) {
@@ -628,11 +633,7 @@ static void multitierPersistFree_(void *structure) {
     multitierFree(structure);
 }
 
-static void *multitierPersistNewEmpty_(void) {
-    /* @own: caller; free=multitierFree */
-    return multitierNew(nullptr);
-}
-
+/* The limits are fixed at creation, so there is no newEmpty */
 const persistOps persistOpsMultitier = {
     .type = PERSIST_TYPE_MULTITIER,
     .name = "multitier",
@@ -640,7 +641,6 @@ const persistOps persistOpsMultitier = {
     .minReadVersion = 1,
     .snapshot = multitierPersistSnapshot_,
     .restore = multitierPersistRestore_,
-    .newEmpty = multitierPersistNewEmpty_,
     .count = multitierPersistCount_,
     .estimateSize = multitierPersistBytes_,
     .encodeOp = multitierPersistEncodeOp_,
@@ -762,6 +762,15 @@ int multitierTest(int argc, char *argv[]) {
                     " promoted, %" PRIu64 " sunk",
                     l, st.demotions, st.coldHits, st.sunkRows);
             }
+        }
+    }
+
+    TEST("a config a snapshot could not restore is refused") {
+        const multitierConfig tooMany = {.hotLevels = 65};
+        const multitierConfig most = {.hotLevels = 64};
+        cleaner(multitierFree) multitier *ok = multitierNew(&most);
+        if (multitierNew(&tooMany) || !ok) {
+            ERR("%s", "65 levels taken or 64 refused");
         }
     }
 

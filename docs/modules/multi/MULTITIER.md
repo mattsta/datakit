@@ -30,7 +30,7 @@ losing them silently. With no limits it is a multidict with LRU tracking.
 | `multitierSetSink` / `multitierGetConfig`                 | the sink (a restored multitier has none until set) / the config in force |
 
 `multitierConfig`: `hotMaxBytes` (0: no limit, nothing leaves the hot level), `hotLevels` (LRU
-levels, 0: 4), `demoteBatch` (rows waiting before they go cold, at least; 0: 64), `coldMaxBytes`
+levels, 1-64, 0: 4), `demoteBatch` (rows waiting before they go cold, at least; 0: 64), `coldMaxBytes`
 (0: no limit, nothing reaches the sink), `cold` (the cold level's `coldmapConfig`), `sink` and
 `sinkCtx`.
 
@@ -75,6 +75,10 @@ Rules worth knowing:
   leave the cold level the same way.
 - **The cold level sheds whole blocks**: over `coldMaxBytes`, a block chosen at random leaves
   and its rows go to the sink.
+- **A sink must not call back into the multitier**: it runs in the middle of the call that
+  pushed the rows out.
+- **A config out of range is refused**: `multitierNew` returns NULL for `hotLevels` past 64 or a
+  cold config coldmap refuses.
 - **Not thread-safe.**
 
 ## Costs
@@ -99,4 +103,9 @@ rest cold, with no use history (the first Gets warm rows again). A move between 
 no row and is never logged. WAL ops: INSERT `[key, value]`, DELETE `[key]`, and BULK_DELETE of
 the keys a sink took. `multitierP` (`persist/multitierP.h`) logs a Set before making it, a
 Delete only of a present key, and the rows its sink takes as they leave, whichever call pushed
-them out; `multitierOpenP` takes the sink, which the files cannot hold.
+them out; `multitierOpenP` (or `multitierSetSinkP`) takes the sink, which the files cannot
+hold. The sink receives rows before their record is written, so a crash between the two, or a
+refused record (`multitierSinkLogRefusedP` counts them), leaves the rows in the files as well:
+they come back on the next open, held twice and never lost. A restored cold level is packed
+afresh and holds what the batch held too, so it can stand over its limit until the first write
+sheds blocks.

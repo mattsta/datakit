@@ -34,9 +34,17 @@ persistLogResult coldmapInsertP(coldmapP *c, const databox *elements[],
                                 bool *replaced);
 /* As coldmapDelete: a key with no row logs nothing */
 persistLogResult coldmapDeleteP(coldmapP *c, const databox *key);
-/* As coldmapInsertMany, one op: rows that do not ascend are refused */
-persistLogResult coldmapInsertManyP(coldmapP *c, const flex *rows);
-/* As coldmapDeleteRange, one op; 'deleted' (may be NULL): rows deleted */
+/* As coldmapInsertMany, one op: rows that do not ascend are refused;
+ * 'replaced' (may be NULL): rows that replaced one */
+persistLogResult coldmapInsertManyP(coldmapP *c, const flex *rows,
+                                    size_t *replaced);
+/* As coldmapDeleteMany, one op: keys that do not ascend are refused; the
+ * batch is logged as given (a key with no row is skipped on replay), and
+ * an empty batch or coldmap logs nothing.  'deleted' (may be NULL). */
+persistLogResult coldmapDeleteManyP(coldmapP *c, const flex *keys,
+                                    size_t *deleted);
+/* As coldmapDeleteRange, one op (a range holding no row logs nothing);
+ * 'deleted' (may be NULL): rows deleted */
 persistLogResult coldmapDeleteRangeP(coldmapP *c, const databox *lo,
                                      const databox *hi, size_t *deleted);
 

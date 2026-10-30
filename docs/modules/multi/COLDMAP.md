@@ -5,8 +5,8 @@
 
 coldmap holds rows `[key, values...]` in key order, as a multimap map does, in blocks that are
 LZ4-compressed when that saves enough. Sorted keys share prefixes with their neighbours, so
-record-like rows ("user:00001234" -> a small JSON value) store at a quarter to a sixth of their
-flex size. A read decompresses one block. A write decompresses a block and compresses it again,
+record-like rows ("user:00001234" -> a small JSON value) store at 16-46% of their
+flex size (about a quarter at the default 8 KB blocks). A read decompresses one block. A write decompresses a block and compresses it again,
 so coldmap suits rows that are read far more than written, or that arrive in sorted batches: a
 cache's cold level (see [MULTITIER.md](MULTITIER.md)), an archive, a reference table.
 
@@ -29,12 +29,12 @@ cache's cold level (see [MULTITIER.md](MULTITIER.md)), an archive, a reference t
 
 `coldmapConfig`:
 
-| Field              | Means                                                           | Default                            |
-| ------------------ | --------------------------------------------------------------- | ---------------------------------- |
-| `rawLimit`         | the most decompressed bytes a block holds: the cost of one read | `DK_TIER_COLDMAP` (8 KB until set) |
-| `storedTarget`     | the stored bytes a block aims for                               | a quarter of `rawLimit`            |
-| `minSavingPercent` | a block stays compressed only when that saves this share        | 0 (any saving)                     |
-| `level`            | LZ4 level: 0 fast, 1-12 LZ4HC (smaller blocks, slower writes)   | 0                                  |
+| Field              | Means                                                                                                         | Default                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `rawLimit`         | a size level (`FLEX_CAP_LEVEL_*`, not bytes): the most decompressed bytes a block holds, the cost of one read | `DK_TIER_COLDMAP` (`FLEX_CAP_LEVEL_8192` until set) |
+| `storedTarget`     | the stored bytes a block aims for                                                                             | a quarter of `rawLimit`                             |
+| `minSavingPercent` | a block stays compressed only when that saves this share                                                      | 0 (any saving)                                      |
+| `level`            | LZ4 level: 0 fast, 1-12 LZ4HC (smaller blocks, slower writes)                                                 | 0                                                   |
 
 ```c
 #include "coldmap.h"
@@ -70,10 +70,19 @@ Rules worth knowing:
   valid until the next read through that state or the next change to the coldmap.
 - **Boxes are filled as multimap's are**: zero them, and a 96/128-bit value comes back by type
   alone; `DATABOX_BIG_INIT` a `databoxBig` to get it whole.
+- **An iterator ends at the next read through its state or the next change**: it holds its
+  open block in the state and a place among the blocks; Init again to continue.
+- **Writes take boxes that do not point into the coldmap**: a value read from it points into
+  the block a write changes, so copy it before writing it back.
+- **Bad input is refused, not repaired**: `coldmapNewFromDump` returns NULL (and frees the rows)
+  for rows that are not whole or not strictly ascending, a row width of 0 or past 65535, or a
+  config out of range; `InsertMany` and `DeleteMany` return false and change nothing for an
+  unsorted batch.
 - **Batches are cheap, single rows are not**: a sorted batch (`InsertMany`, `DeleteMany`, a range)
   pays one recompression per block it touches; a single-row write pays one per row.
 - **Rows that do not compress stay plain**: a block whose compressed form does not save
-  `minSavingPercent` is kept as a flex, so integer rows (already dense) cost nothing to read.
+  `minSavingPercent` is kept as a flex. Integer rows (already dense) save 8-13%: set
+  `minSavingPercent` to 20 and they stay plain, read with no decompression.
 
 ## Layout
 
@@ -105,6 +114,7 @@ Apple M1 Max, clang 22, `perf` preset; 100,000 rows of `"user:NNNNNNNN"` ->
 | 4 KB       | 1.51 MB | 1.2 us  | 1.2 us      | 19 ns         |
 | 8 KB       | 1.27 MB | 2.0 us  | 2.0 us      | 19 ns         |
 | 16 KB      | 1.02 MB | 3.3 us  | 3.3 us      | 18 ns         |
+| 32 KB      | 0.88 MB | 5.9 us  | 6.0 us      | 17 ns         |
 | 64 KB      | 0.83 MB | 11.5 us | 11.5 us     | 17 ns         |
 
 A build costs about 100 ns a row; a single-row insert or delete about 5 us at 8 KB blocks. A
@@ -121,7 +131,8 @@ that), short repeated phrases at 52-70%, records at 16-46% (perfRegression `mapB
 
 A snapshot is one flex: the config (row width, raw limit, stored target, required saving, LZ4
 level, defaults resolved) and every row in key order. A restore checks the rows (whole, keys
-strictly ascending) and packs them as a build does. WAL ops: INSERT a row, DELETE a key,
+strictly ascending) and packs them as a build does. WAL ops: INSERT a row, DELETE a key or a sorted batch of keys,
 BULK_INSERT a sorted batch, BULK_DELETE a key range. `coldmapP` (`persist/coldmapP.h`) logs
 each change before making it: a refused log changes nothing, and a change that would change
-nothing (a missing key, an empty batch) logs nothing.
+nothing (a missing key, an empty batch, a range holding no row) logs nothing; a batch of
+deletes is logged as given (a key with no row is skipped on replay).

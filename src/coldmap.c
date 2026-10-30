@@ -198,8 +198,9 @@ coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
                             const coldmapConfig *config, flex *rows) {
     const coldmapConfig defaults = {};
     const coldmapConfig *c = config ? config : &defaults;
-    if (c->rawLimit > FLEX_CAP_LEVEL_65536 || c->minSavingPercent > 99 ||
-        c->level > 12 || !coldmapRowsAscend_(rows, elementsPerEntry)) {
+    if (elementsPerEntry > UINT16_MAX || c->rawLimit > FLEX_CAP_LEVEL_65536 ||
+        c->minSavingPercent > 99 || c->level > 12 ||
+        !coldmapRowsAscend_(rows, elementsPerEntry)) {
         flexFree(rows);
         return nullptr;
     }
@@ -215,7 +216,7 @@ coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
         c->storedTarget ? c->storedTarget : cm->rawCap / 4;
     cm->storedTarget = cm->config.storedTarget;
     /* @own: container; free=mflexStateFree */
-    cm->state = mflexStateCreate();
+    cm->state = mflexStateNew(cm->rawCap); /* sized to one block */
     (void)mflexStateSetPolicy(cm->state, c->minSavingPercent, c->level);
 
     /* Cut blocks tail first (each cut only shortens 'rows'), each sized to
@@ -592,7 +593,7 @@ size_t coldmapCount(const coldmap *cm) {
 
 size_t coldmapBytes(const coldmap *cm) {
     return sizeof(*cm) + cm->blockCap * sizeof(*cm->blocks) + cm->storedBytes +
-           cm->keyBytes;
+           cm->keyBytes + mflexStateBytes(cm->state);
 }
 
 multimapElements coldmapElementsPerEntry(const coldmap *cm) {
@@ -680,9 +681,9 @@ bool coldmapIteratorInitAt(const coldmap *cm, mflexState *state,
         return true;
     }
 
-    databox found = {};
-    flexGetByType(row, &found);
-    if (databoxCompare(&found, key) == 0) {
+    databoxBig found = {}; /* a 96/128-bit key compares whole */
+    flexGetByTypeBig(row, &found);
+    if (databoxCompare((const databox *)&found, key) == 0) {
         for (multimapElements e = 1; e < cm->elementsPerEntry; e++) {
             row = flexNext(it->f, row);
         }
@@ -740,8 +741,8 @@ void coldmapGetStats(const coldmap *cm, coldmapStats *stats) {
         .compressedBlocks = cm->compressedBlocks,
         .rawBytes = cm->rawBytes,
         .storedBytes = cm->storedBytes,
-        .rawLimit = cm->rawCap,
-        .storedTarget = cm->storedTarget,
+        .rawLimitBytes = cm->rawCap,
+        .storedTargetBytes = cm->storedTarget,
     };
 }
 
@@ -839,7 +840,8 @@ static uint8_t *coldmapPersistEncodeOp_(persistOp op, const void *args,
     case PERSIST_OP_INSERT:
         return argc >= 1 ? persistOpEncodeBoxes(args, argc, len) : nullptr;
     case PERSIST_OP_DELETE:
-        return argc == 1 ? persistOpEncodeBoxes(args, argc, len) : nullptr;
+        /* one key, or a sorted batch (coldmapDeleteMany) */
+        return argc >= 1 ? persistOpEncodeBoxes(args, argc, len) : nullptr;
     case PERSIST_OP_BULK_INSERT: {
         /* args: the rows flex itself */
         const flex *rows = args;
@@ -897,8 +899,14 @@ static bool coldmapPersistApplyOp_(void *structure, persistOp op,
     coldmap *cm = *(coldmap **)structure;
     const multimapElements epe = cm->elementsPerEntry;
     switch (op) {
-    case PERSIST_OP_INSERT:
-    case PERSIST_OP_DELETE: {
+    case PERSIST_OP_DELETE:
+        /* A batch of keys: as coldmapDeleteMany takes them (ascending) */
+        if (flexValidateBufferDeep(data, len) &&
+            flexCount((const flex *)data) > 1) {
+            return coldmapDeleteMany(cm, (const flex *)data, nullptr);
+        }
+        [[fallthrough]];
+    case PERSIST_OP_INSERT: {
         const size_t want = op == PERSIST_OP_INSERT ? epe : 1;
         cleanerName(zfree, Void) void *storage =
             zcalloc(want, sizeof(databoxBig) + sizeof(databox *));
@@ -1228,6 +1236,55 @@ int coldmapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("128-bit keys: lookups and iterators from every key and gap, both "
+         "ways") {
+        const __uint128_t base = (__uint128_t)1 << 64;
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        for (uint64_t i = 0; i < 200; i++) {
+            __uint128_t wide = base + i * 10;
+            const databox k = {
+                .type = DATABOX_UNSIGNED_128, .data.u128 = &wide, .big = 1};
+            const databox v = databoxNewSigned((int64_t)i);
+            const databox *row[2] = {&k, &v};
+            multimapInsert(&m, row);
+        }
+        const coldmapConfig small = {.rawLimit = FLEX_CAP_LEVEL_512,
+                                     .storedTarget = 128};
+        cleaner(coldmapFree) coldmap *cm =
+            coldmapNewFromDump(2, &small, multimapDump(m));
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        for (uint64_t j = 0; j < 2000 + 15; j++) {
+            __uint128_t probe = base + j;
+            const databox key = {
+                .type = DATABOX_UNSIGNED_128, .data.u128 = &probe, .big = 1};
+            databox got = {};
+            databox *values[1] = {&got};
+            const bool has = coldmapLookup(cm, state, &key, values);
+            if (has != (j % 10 == 0 && j < 2000) ||
+                (has && got.data.i64 != (int64_t)(j / 10))) {
+                ERR("lookup %" PRIu64, j);
+            }
+
+            for (int forward = 0; forward < 2; forward++) {
+                const uint64_t first = (j + 9) / 10;
+                const uint64_t last = j / 10 < 200 ? j / 10 : 199;
+                coldmapIterator it;
+                coldmapIteratorInitAt(cm, state, &it, forward, &key);
+                databoxBig k;
+                DATABOX_BIG_INIT(&k);
+                databox v = {};
+                databox *row[2] = {(databox *)&k, &v};
+                const bool next = coldmapIteratorNext(&it, row);
+                const uint64_t want = forward ? first : last;
+                if (next != (forward ? first < 200 : true) ||
+                    (next && (k.type != DATABOX_UNSIGNED_128 ||
+                              *k.data.u128 != base + want * 10))) {
+                    ERR("iterator from %" PRIu64 " forward %d", j, forward);
+                }
+            }
+        }
+    }
+
     TEST("records compress and pack to the stored target; integers that do "
          "not save the policy's share stay plain") {
         cleaner(multimapFree) multimap *records =
@@ -1487,6 +1544,11 @@ int coldmapTest(int argc, char *argv[]) {
         if (coldmapNewFromDump(2, nullptr, partial) ||
             coldmapNewFromDump(2, &bad, empty)) {
             ERR("%s", "a partial row or a bad config taken");
+        }
+
+        /* A row width a snapshot could not restore */
+        if (coldmapNew(UINT16_MAX + 1u, nullptr)) {
+            ERR("%s", "a 65536-element row width taken");
         }
     }
 

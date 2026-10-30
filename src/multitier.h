@@ -27,14 +27,15 @@
 typedef struct multitier multitier;
 
 /* Rows leaving the cold level: a dump-form flex of [key, value] rows in
- * key order, borrowed for the call */
+ * key order, borrowed for the call.  A sink must not call back into the
+ * multitier: it runs in the middle of the call that pushed the rows out */
 typedef void multitierSinkFn(void *ctx, const flex *rows);
 
 typedef struct multitierConfig {
     /* The hot level's limit of key and value bytes (0: no limit, so no
      * key ever leaves it) */
     uint64_t hotMaxBytes;
-    /* The hot level's LRU levels (0: 4) */
+    /* The hot level's LRU levels, 1-64 (0: 4) */
     uint32_t hotLevels;
     /* Rows waiting for the cold level before they go in together: at
      * least this many (0: 64), and at least 4 per cold block, so each
@@ -48,7 +49,9 @@ typedef struct multitierConfig {
     void *sinkCtx;
 } multitierConfig;
 
-/* NULL config: the defaults (no limits: a multidict with LRU tracking) */
+/* NULL config: the defaults (no limits: a multidict with LRU tracking).
+ * NULL when the config is out of range (hotLevels past 64, a cold config
+ * coldmapNew refuses) */
 [[nodiscard]] multitier *multitierNew(const multitierConfig *config);
 void multitierFree(multitier *t);
 /* The sink rows leaving the cold level go to (NULL: dropped); a restored
@@ -62,7 +65,9 @@ void multitierGetConfig(const multitier *t, multitierConfig *config);
  * the hot level in key order up to its limit with the rest cold, with no
  * use history (each row's first Gets warm it again).  A move between
  * levels changes no row, so it is never logged; a row leaving for the
- * sink is (multitierP logs it as the sink takes it). */
+ * sink is (multitierP logs it as the sink takes it).  A restored cold
+ * level is packed afresh and holds what the batch held too, so it can
+ * stand over its limit until the first write sheds blocks. */
 
 /* Set 'key' to 'value' in the hot level (a copy at any lower level goes);
  * true when the key was new to the multitier */

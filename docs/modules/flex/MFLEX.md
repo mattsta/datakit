@@ -312,8 +312,9 @@ void mflexCloseShrink(mflex **mm, mflexState *state, flex *f);
 /* Close without compression attempt */
 void mflexCloseNoCompress(mflex **mm, mflexState *state, const flex *f);
 
-/* A read-only open for blocks from outside the process (restored,
- * received): NULL when the block does not decompress whole */
+/* A read-only open for compressed blocks from outside the process
+ * (restored, received): NULL when the stated size is past what LZ4 can
+ * expand to, or the block does not decompress whole into a valid flex */
 const flex *mflexOpenChecked(const mflex *m, mflexState *state);
 ```
 
@@ -321,7 +322,10 @@ A compressed block this process made always decompresses to the size its
 header states; one that does not means memory is corrupt, and `mflexOpen`,
 `mflexOpenReadOnly` and every write path stop the process with
 `DK_DIAG_MFLEX_UNREADABLE` (DIAGNOSTICS.md). `mflexOpenChecked` is the form
-for bytes that came from outside: it reports nothing and returns NULL.
+for bytes that came from outside: it reports nothing and returns NULL, and
+checks the decompressed entries as `flexValidateBufferDeep` does. A plain
+block comes back as it is: its bytes are a flex the caller checked when they
+arrived.
 
 ### Example: Manual Operations
 
@@ -514,7 +518,8 @@ if (flexConvertToCFlexLevel(f, mfc(*mm),
 **Key insight**: on the shrink path, compression must move the value into a
 smaller allocator size class to be worthwhile — saving a few bytes inside
 the same size class frees no memory. The grow path skips that test because
-it is already paying for a new allocation either way.
+it is already paying for a new allocation either way. A shrink of a flex
+opened from a plain block (no separate scratch copy) takes the grow path.
 
 Both paths recycle buffers rather than freeing them: whichever allocation
 the caller stops using becomes the state's scratch space for next time.

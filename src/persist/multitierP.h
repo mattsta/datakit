@@ -5,9 +5,13 @@
  * What the multitier holds is logged, not where: a Set is logged before it
  * is made (a refused log changes nothing), a Delete of a present key
  * likewise, and rows a sink takes are logged as they leave (by any call:
- * a Get or a Set can push rows out of the cold level).  Moves between
- * levels log nothing.  Open replays the WAL over the last snapshot, with
- * no use history: the first Gets warm rows again. */
+ * a Get or a Set can push rows out of the cold level).  The caller's sink
+ * receives those rows before their log record is written: a crash between
+ * the two, or a refused record (multitierSinkLogRefusedP counts them),
+ * leaves the rows in the files too, so they come back on the next open -
+ * held twice, never lost.  Moves between levels log nothing.  Open
+ * replays the WAL over the last snapshot, with no use history: the first
+ * Gets warm rows again. */
 
 #include "../multitier.h"
 #include "persistCtx.h"
@@ -15,19 +19,24 @@
 /* @handle: fixed: its address holds from creation to free */
 typedef struct multitierP multitierP;
 
-/* config NULL: the defaults; its sink receives rows after they are logged */
+/* config NULL: the defaults; its sink receives the rows leaving */
 multitierP *multitierNewP(persistCtx *ctx, const multitierConfig *config);
 /* The multitier the context's files hold; 'sink' as the config's */
 multitierP *multitierOpenP(persistCtx *ctx, multitierSinkFn *sink,
                            void *sinkCtx);
 void multitierCloseP(multitierP *t);
+/* The caller's sink (NULL: rows leaving are logged and dropped) */
+void multitierSetSinkP(multitierP *t, multitierSinkFn *sink, void *sinkCtx);
 
-/* The multitier itself, for stats (changes through it are not logged) */
-multitier *multitierGetRawP(multitierP *t);
+/* The multitier itself, for its stats and counts */
+const multitier *multitierGetRawP(const multitierP *t);
 size_t multitierCountP(const multitierP *t);
+/* Sink records the WAL refused (each leaves its rows in the files) */
+uint64_t multitierSinkLogRefusedP(const multitierP *t);
 
+/* As multitierSet; 'isNew' (may be NULL): whether the key was new */
 persistLogResult multitierSetP(multitierP *t, const databox *key,
-                               const databox *value);
+                               const databox *value, bool *isNew);
 /* As multitierDelete: a key with no row logs nothing */
 persistLogResult multitierDeleteP(multitierP *t, const databox *key);
 /* Reads: as multitierGet / multitierPeek (a Get logs the rows it pushes

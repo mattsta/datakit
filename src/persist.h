@@ -1308,7 +1308,8 @@ extern const persistOps persistOpsIdRows;
  *   WAL:
  *     INSERT      [row elements...]       coldmapInsert (args: const
  *                                         databox *const *)
- *     DELETE      [key]                   coldmapDelete
+ *     DELETE      [key] or [keys...]      coldmapDelete, or coldmapDeleteMany
+ *                                         of a sorted batch
  *     BULK_INSERT the rows flex itself    coldmapInsertMany (args: the
  *                                         const flex *, argc 1)
  *     BULK_DELETE [bounds given (1 lo, 2 hi), lo?, hi?]
@@ -1329,8 +1330,10 @@ extern const persistOps persistOpsColdmap;
  *     INSERT      [key, value]   multitierSet
  *     DELETE      [key]          multitierDelete
  *     BULK_DELETE [keys...]      the rows a sink took, each deleted
- *   Replay moves rows between levels as the live multitier would, but
- *   sends none to the sink: only BULK_DELETE removes rows. */
+ *   Replay keeps the live multitier's rows (not their levels: it starts
+ *   from the restore's placement) and
+ *   sends none to the sink: only BULK_DELETE removes rows.  The limits
+ *   are fixed at creation, so there is no newEmpty. */
 extern const persistOps persistOpsMultitier;
 
 /* Identity-verified POP fold observability (see the apply-arm

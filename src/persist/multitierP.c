@@ -8,8 +8,9 @@
 struct multitierP {
     multitier *t;
     persistCtx *ctx;
-    multitierSinkFn *sink; /* the caller's, after the log */
+    multitierSinkFn *sink; /* the caller's, before the log */
     void *sinkCtx;
+    uint64_t sinkLogRefused; /* sink records the WAL refused */
 };
 
 defcleanerName(void *, zfree, Void);
@@ -30,13 +31,16 @@ static void multitierLogSinkP(void *ctx, const flex *rows) {
         fe = flexNext(rows, fe);
     }
 
-    /* The rows are gone either way: a refused log leaves them in the
-     * files, and they come back on the next open */
-    if (n) {
-        (void)persistCtxLogOp(p->ctx, PERSIST_OP_BULK_DELETE, args, n);
-    }
+    /* The caller's sink has the rows before the log says they left: a
+     * crash between the two, or a refused log, leaves them in the files
+     * as well, so they come back on the next open (held twice, never
+     * lost); refusals are counted */
     if (p->sink) {
         p->sink(p->sinkCtx, rows);
+    }
+    if (n && persistCtxLogOp(p->ctx, PERSIST_OP_BULK_DELETE, args, n) ==
+                 PERSIST_LOG_REFUSED) {
+        p->sinkLogRefused++;
     }
 }
 
@@ -94,7 +98,7 @@ void multitierCloseP(multitierP *p) {
     zfree(p);
 }
 
-multitier *multitierGetRawP(multitierP *p) {
+const multitier *multitierGetRawP(const multitierP *p) {
     return p ? p->t : nullptr;
 }
 
@@ -108,7 +112,10 @@ size_t multitierCountP(const multitierP *p) {
  */
 
 persistLogResult multitierSetP(multitierP *p, const databox *key,
-                               const databox *value) {
+                               const databox *value, bool *isNew) {
+    if (isNew) {
+        *isNew = false;
+    }
     if (!p || !p->t || !key || !value) {
         return PERSIST_LOG_REFUSED;
     }
@@ -120,7 +127,10 @@ persistLogResult multitierSetP(multitierP *p, const databox *key,
         return logged;
     }
 
-    multitierSet(p->t, key, value);
+    const bool added = multitierSet(p->t, key, value);
+    if (isNew) {
+        *isNew = added;
+    }
     persistCtxMaybeCompact(p->ctx, p->t, &persistOpsMultitier);
     return logged;
 }
@@ -148,7 +158,23 @@ persistLogResult multitierDeleteP(multitierP *p, const databox *key) {
 }
 
 bool multitierGetP(multitierP *p, const databox *key, databox *value) {
-    return p && p->t && multitierGet(p->t, key, value);
+    if (!p || !p->t || !multitierGet(p->t, key, value)) {
+        return false;
+    }
+    /* A Get can push rows to the sink, which logs them */
+    persistCtxMaybeCompact(p->ctx, p->t, &persistOpsMultitier);
+    return multitierPeek(p->t, key, value); /* the value after compaction */
+}
+
+void multitierSetSinkP(multitierP *p, multitierSinkFn *sink, void *sinkCtx) {
+    if (p) {
+        p->sink = sink;
+        p->sinkCtx = sinkCtx;
+    }
+}
+
+uint64_t multitierSinkLogRefusedP(const multitierP *p) {
+    return p ? p->sinkLogRefused : 0;
 }
 
 bool multitierPeekP(multitierP *p, const databox *key, databox *value) {
@@ -158,6 +184,7 @@ bool multitierPeekP(multitierP *p, const databox *key, databox *value) {
 void multitierFlushP(multitierP *p) {
     if (p && p->t) {
         multitierFlush(p->t);
+        persistCtxMaybeCompact(p->ctx, p->t, &persistOpsMultitier);
     }
 }
 
@@ -268,7 +295,7 @@ int multitierPTest(int argc, char *argv[]) {
                 const databox v = databoxNewBytes(value, (size_t)vn);
                 const databox *row[2] = {&k, &v};
                 multimapInsert(&model, row);
-                PTEST_LOGGED(multitierSetP(p, &k, &v));
+                PTEST_LOGGED(multitierSetP(p, &k, &v, nullptr));
             } else if (r % 10 < 8) {
                 databox got = {};
                 (void)multitierGetP(p, &k, &got);
@@ -285,7 +312,7 @@ int multitierPTest(int argc, char *argv[]) {
         }
 
         multitierStats st = {};
-        multitierGetStats(multitierGetRawP(p), &st);
+        multitierGetStats(p->t, &st);
         if (!p || !multitierPTestSame(p, model)) {
             ERR("%s", "the live rows differ from the model");
         }
@@ -298,7 +325,7 @@ int multitierPTest(int argc, char *argv[]) {
         /* A crash: the context goes without a close */
         persistCtxFree(ctx);
         if (p) {
-            multitierFree(multitierGetRawP(p));
+            multitierFree(p->t);
             zfree(p);
         }
 
@@ -313,7 +340,7 @@ int multitierPTest(int argc, char *argv[]) {
         const databox v = databoxNewBytes("after", 5);
         const databox *row[2] = {&k, &v};
         multimapInsert(&model, row);
-        PTEST_LOGGED(multitierSetP(p, &k, &v));
+        PTEST_LOGGED(multitierSetP(p, &k, &v, nullptr));
         multitierCloseP(p);
         persistCtxFree(ctx);
 

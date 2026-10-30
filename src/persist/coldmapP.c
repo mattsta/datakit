@@ -12,6 +12,7 @@ struct coldmapP {
 };
 
 defcleanerName(coldmapP *, zfree, ColdmapP);
+defcleanerName(void *, zfree, Void);
 
 /* ============================================================================
  * Lifecycle
@@ -147,7 +148,11 @@ persistLogResult coldmapDeleteP(coldmapP *c, const databox *key) {
     return coldmapLoggedP(c, logged);
 }
 
-persistLogResult coldmapInsertManyP(coldmapP *c, const flex *rows) {
+persistLogResult coldmapInsertManyP(coldmapP *c, const flex *rows,
+                                    size_t *replaced) {
+    if (replaced) {
+        *replaced = 0;
+    }
     if (!c || !c->cm || !rows ||
         !coldmapRowsAscend(rows, coldmapElementsPerEntry(c->cm))) {
         return PERSIST_LOG_REFUSED;
@@ -162,7 +167,43 @@ persistLogResult coldmapInsertManyP(coldmapP *c, const flex *rows) {
         return logged;
     }
 
-    coldmapInsertMany(c->cm, rows, nullptr);
+    coldmapInsertMany(c->cm, rows, replaced);
+    return coldmapLoggedP(c, logged);
+}
+
+persistLogResult coldmapDeleteManyP(coldmapP *c, const flex *keys,
+                                    size_t *deleted) {
+    if (deleted) {
+        *deleted = 0;
+    }
+    if (!c || !c->cm || !keys || !coldmapRowsAscend(keys, 1)) {
+        return PERSIST_LOG_REFUSED;
+    }
+
+    /* One DELETE of the batch as given (checking each key would read a
+     * block per key; replay skips a key with no row) */
+    const size_t n = flexCount(keys);
+    if (!n || !coldmapCount(c->cm)) {
+        return PERSIST_LOG_UNCHANGED;
+    }
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(n, sizeof(databoxBig) + sizeof(databox *));
+    databoxBig *boxes = storage;
+    const databox **args = (const databox **)(boxes + n);
+    flexEntry *fe = flexHead(keys);
+    for (size_t i = 0; i < n; i++) {
+        flexGetByTypeBig(fe, &boxes[i]);
+        args[i] = (const databox *)&boxes[i];
+        fe = flexNext(keys, fe);
+    }
+
+    const persistLogResult logged =
+        persistCtxLogOp(c->ctx, PERSIST_OP_DELETE, args, n);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
+    }
+
+    coldmapDeleteMany(c->cm, keys, deleted);
     return coldmapLoggedP(c, logged);
 }
 
@@ -175,6 +216,27 @@ persistLogResult coldmapDeleteRangeP(coldmapP *c, const databox *lo,
         return PERSIST_LOG_REFUSED;
     }
     if (!coldmapCount(c->cm) || (lo && hi && databoxCompare(lo, hi) > 0)) {
+        return PERSIST_LOG_UNCHANGED;
+    }
+
+    /* A range holding no row changes nothing: its first row past 'lo' is
+     * past 'hi' (one block read) */
+    const multimapElements epe = coldmapElementsPerEntry(c->cm);
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(epe, sizeof(databox) + sizeof(databox *));
+    databox *boxes = storage;
+    databox **row = (databox **)(boxes + epe);
+    for (multimapElements e = 0; e < epe; e++) {
+        row[e] = &boxes[e];
+    }
+    coldmapIterator it;
+    if (lo) {
+        coldmapIteratorInitAt(c->cm, c->state, &it, true, lo);
+    } else {
+        coldmapIteratorInit(c->cm, c->state, &it, true);
+    }
+    if (!coldmapIteratorNext(&it, row) ||
+        (hi && databoxCompare(row[0], hi) > 0)) {
         return PERSIST_LOG_UNCHANGED;
     }
 
@@ -304,7 +366,30 @@ int coldmapPTest(int argc, char *argv[]) {
                     multimapInsert(&m, row);
                 }
                 cleaner(flexFree) flex *dump = multimapDump(batch);
-                PTEST_LOGGED(coldmapInsertManyP(c, dump));
+                PTEST_LOGGED(coldmapInsertManyP(c, dump, nullptr));
+
+                /* A sorted batch of deletes, present and absent keys */
+                cleaner(flexFree) flex *gone = flexNew();
+                size_t wantGone = 0;
+                for (uint64_t i = 0; i < 60; i++) {
+                    const databox gk =
+                        coldmapPTestKey(key, sizeof(key), 1990 + i);
+                    flexPushByTypeExact(&gone, &gk, FLEX_ENDPOINT_TAIL);
+                    wantGone += multimapDelete(&m, &gk);
+                }
+                size_t gotGone = 0;
+                PTEST_LOGGED(coldmapDeleteManyP(c, gone, &gotGone));
+                if (gotGone != wantGone) {
+                    ERR("batch deleted %zu, want %zu", gotGone, wantGone);
+                }
+
+                /* A range past every key logs nothing */
+                const databox past = coldmapPTestKey(key, sizeof(key), 5000);
+                const databox far = coldmapPTestKey(hiKey, sizeof(hiKey), 6000);
+                if (coldmapDeleteRangeP(c, &past, &far, nullptr) !=
+                    PERSIST_LOG_UNCHANGED) {
+                    ERR("%s", "an empty range was logged");
+                }
                 if (!coldmapCompactP(c)) {
                     ERR("%s", "compaction failed");
                 }
@@ -345,7 +430,7 @@ int coldmapPTest(int argc, char *argv[]) {
             flexPushByTypeExact(&unsorted, &one, FLEX_ENDPOINT_TAIL);
         }
         if (coldmapDeleteP(c, &absent) != PERSIST_LOG_UNCHANGED ||
-            coldmapInsertManyP(c, unsorted) != PERSIST_LOG_REFUSED) {
+            coldmapInsertManyP(c, unsorted, nullptr) != PERSIST_LOG_REFUSED) {
             ERR("%s", "a no-op was logged or unsorted rows were taken");
         }
 

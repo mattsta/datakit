@@ -102,7 +102,7 @@ static uint32_t dkTierLimitTestNewLimit_(dkTierFamily family) {
         cleaner(coldmapFree) coldmap *cm = coldmapNewFromDump(2, nullptr, rows);
         coldmapStats cs;
         coldmapGetStats(cm, &cs);
-        return cs.rawLimit;
+        return cs.rawLimitBytes;
     }
     default:
         break;

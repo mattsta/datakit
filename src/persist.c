@@ -5445,7 +5445,8 @@ const persistOps persistOpsMultiarray = {
 defcleaner(multilru *, multilruFree);
 
 /* Snapshot (one flex, every value exact), three parts:
- * - the config: maxLevels; flags (1: weights, 2: unbounded levels); policy;
+ * - the config: maxLevels; flags (1: weights, 2: unbounded levels, 4: no
+ *   auto-eviction); policy;
  *   evictStrategy; maxCount; maxWeight; nextFresh; entryCount; freeCount
  * - entryCount rows of handle, level (and weight, with weights), coldest
  *   first (level 0 oldest to newest, then level 1, ...), so the restored LRU
@@ -5472,9 +5473,10 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
 
         flexRow row = FLEX_ROW_INIT;
         flexRowUnsigned(&row, stats.maxLevels);
-        /* flags: 1 weights, 2 levels without a share */
+        /* flags: 1 weights, 2 levels without a share, 4 no auto-eviction */
         flexRowUnsigned(&row, (enableWeights ? 1u : 0u) |
-                                  (multilruGetUnboundedLevels(mlru) ? 2u : 0u));
+                                  (multilruGetUnboundedLevels(mlru) ? 2u : 0u) |
+                                  (multilruGetAutoEvict(mlru) ? 0u : 4u));
         flexRowUnsigned(&row, multilruGetPolicy(mlru));
         flexRowUnsigned(&row, multilruGetEvictStrategy(mlru));
         flexRowUnsigned(&row, stats.maxCount);
@@ -5552,7 +5554,7 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
     uint64_t maxLevels, flags, policy, strategy, maxCount, maxWeight;
     uint64_t nextFresh, entries, freeCount;
     if (!mlruPersistNext_(f, &fe, 64, &maxLevels) || maxLevels == 0 ||
-        !mlruPersistNext_(f, &fe, 3, &flags) ||
+        !mlruPersistNext_(f, &fe, 7, &flags) ||
         !mlruPersistNext_(f, &fe, MLRU_POLICY_HYBRID, &policy) ||
         !mlruPersistNext_(f, &fe, MLRU_EVICT_SIZE_LRU, &strategy) ||
         !mlruPersistNext_(f, &fe, UINT64_MAX, &maxCount) ||
@@ -5665,7 +5667,7 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
     }
 
     multilruSetUnboundedLevels(mlru, flags & 2);
-    multilruSetAutoEvict(mlru, true);
+    multilruSetAutoEvict(mlru, !(flags & 4));
     /* @own: caller; free=multilruFree */
     multilru *out = mlru;
     mlru = nullptr;

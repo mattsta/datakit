@@ -17,6 +17,8 @@ void mflexStatePreferredLenUpdate(mflexState *state, size_t len);
 size_t mflexStatePreferredLen(mflexState *state);
 void mflexStateReset(mflexState *state);
 void mflexStateFree(mflexState *state);
+/* Memory a state holds: its two scratch buffers and itself */
+size_t mflexStateBytes(const mflexState *state);
 
 /* The compress policy of closes through 'state': a block stays compressed
  * only when that saves at least minSavingPercent (0-99) of its bytes, so
@@ -95,8 +97,11 @@ void mflexDeleteOffsetCount(mflex **mm, mflexState *state, int32_t offset,
  * (DK_DIAG_MFLEX_UNREADABLE). */
 flex *mflexOpen(const mflex *m, mflexState *state);
 const flex *mflexOpenReadOnly(const mflex *m, mflexState *state);
-/* A read-only open for blocks from outside (restored, received): NULL
- * when the block does not decompress whole */
+/* A read-only open for compressed blocks from outside (restored,
+ * received): NULL when the stated size is past what LZ4 can expand to,
+ * or the block does not decompress whole into a valid flex (entries
+ * checked as flexValidateBufferDeep does).  A plain block is returned as
+ * it is: its bytes are a flex the caller checked on arrival. */
 const flex *mflexOpenChecked(const mflex *m, mflexState *state);
 
 /* mflex re-compression */

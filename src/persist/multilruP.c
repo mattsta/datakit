@@ -1715,6 +1715,7 @@ static int test_multilruP_recency_order(int, char *[]) {
                                        .enableWeights = levels % 2 == 0,
                                        .unboundedLevels = levels > 4};
         cleaner(multilruFree) multilru *live = multilruNewWithConfig(&config);
+        multilruSetAutoEvict(live, levels != 3);
 
         /* Entries touched in a scrambled order, some deleted (holes) */
         multilruPtr handles[200];
@@ -1743,7 +1744,8 @@ static int test_multilruP_recency_order(int, char *[]) {
         cleanerName(zfree, SnapBytes) uint8_t *again =
             back ? persistOpsMultiLRU.snapshot(back, &againLen) : nullptr;
         if (!back || againLen != len || memcmp(snap, again, len) != 0 ||
-            multilruGetUnboundedLevels(back) != config.unboundedLevels) {
+            multilruGetUnboundedLevels(back) != config.unboundedLevels ||
+            multilruGetAutoEvict(back) != (levels != 3)) {
             ERR("levels %zu: restore did not reproduce the snapshot", levels);
         }
 

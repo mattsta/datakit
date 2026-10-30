@@ -171,6 +171,10 @@ static size_t mflexCompressBudget_(const mflexState *state, size_t totalBytes) {
     return policy < totalBytes ? policy : totalBytes - 1;
 }
 
+size_t mflexStateBytes(const mflexState *state) {
+    return sizeof(*state) + state->buf[0].len + state->buf[1].len;
+}
+
 void mflexStateFree(mflexState *state) {
     if (state) {
         zfree(STATE_UNCOMPRESSED_FLEX);
@@ -375,8 +379,14 @@ const flex *mflexOpenChecked(const mflex *m, mflexState *state) {
         return mff(m);
     }
 
-    if (!cflexConvertToFlex(mfc(m), &STATE_UNCOMPRESSED_FLEX,
-                            &STATE_UNCOMPRESSED_SIZE)) {
+    /* The header states the flex's size: LZ4 expands a byte at most 255
+     * times, so a larger claim is refused before it sizes any buffer */
+    const cflex *c = mfc(m);
+    if (flexBytes(c) > (uint64_t)cflexBytesCompressed(c) * 255 + 64 ||
+        !cflexConvertToFlex(c, &STATE_UNCOMPRESSED_FLEX,
+                            &STATE_UNCOMPRESSED_SIZE) ||
+        !flexValidateBufferDeep(STATE_UNCOMPRESSED_FLEX,
+                                flexBytes(STATE_UNCOMPRESSED_FLEX))) {
         return nullptr;
     }
 

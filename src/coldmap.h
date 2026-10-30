@@ -16,10 +16,12 @@
  * share prefixes with their neighbours, so record-like rows compress to a
  * fraction of their flex size; rows that do not compress stay plain.
  *
- * Blocks are packed by STORED size: each block takes rows until it is
- * expected to store about 'storedTarget' bytes (from the ratio of the
- * block before it), up to a raw size of 'rawLimit' (the most one read
- * decompresses).
+ * A build (and a restore) packs blocks by STORED size: cutting from the
+ * last row back, each block takes rows until it is expected to store
+ * about 'storedTarget' bytes (from the ratio of the block cut before it,
+ * the next in key order), up to a raw size of 'rawLimit' (the most one
+ * read decompresses).  Writes split a block only at 'rawLimit' and merge
+ * small ones.
  *
  * Reads take the caller's mflexState: a read decompresses its block into
  * that state, so readers with their own states may share one coldmap.
@@ -37,8 +39,9 @@ typedef struct coldmap coldmap;
 
 typedef struct coldmapConfig {
     /* The most raw (decompressed) bytes a block holds: the cost of one
-     * read.  FLEX_CAP_LEVEL_0: the DK_TIER_COLDMAP default (dkTierLimit.h,
-     * 8 KB until set). */
+     * read, as a size level (FLEX_CAP_LEVEL_1024, ...; not a byte count).
+     * FLEX_CAP_LEVEL_0: the DK_TIER_COLDMAP default (dkTierLimit.h,
+     * FLEX_CAP_LEVEL_8192 until set). */
     flexCapSizeLimit rawLimit;
     /* The stored bytes a block aims for (0: a quarter of the raw limit) */
     uint32_t storedTarget;
@@ -51,8 +54,8 @@ typedef struct coldmapConfig {
 /* A coldmap of the rows of 'rows' (a flex of whole rows of
  * 'elementsPerEntry' elements in strictly ascending key order, as
  * multimapDump gives; consumed).  'config' NULL: the defaults.  NULL, with
- * 'rows' freed, when the rows do not ascend or the config is out of
- * range. */
+ * 'rows' freed, when the rows do not ascend, 'elementsPerEntry' is 0 or
+ * past 65535, or the config is out of range. */
 [[nodiscard]] coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
                                           const coldmapConfig *config,
                                           flex *rows);
@@ -82,7 +85,9 @@ bool coldmapExists(const coldmap *cm, mflexState *state, const databox *key);
  * microseconds a block): a coldmap suits rows that change rarely, or
  * arrive in batches.  A block past the raw limit splits in two; one that
  * stores under half the target merges with a neighbour when the two fit
- * the raw limit. */
+ * the raw limit.  A write's boxes must not point into the coldmap's own
+ * rows (values read from it): the block they point into is the one the
+ * write changes, so copy such values first. */
 
 /* Insert the row elements[0 .. elementsPerEntry - 1], replacing the row
  * with its key; true when it replaced one */
@@ -111,7 +116,10 @@ size_t coldmapDeleteRange(coldmap *cm, const databox *lo, const databox *hi);
 
 /* Rows in key order (forward) or reverse.  Next fills elements[0 ..
  * elementsPerEntry - 1] (key first) and opens blocks through 'state' as it
- * reaches them; a row's bytes stay valid until the next Next. */
+ * reaches them; a row's bytes stay valid until the next Next.  The
+ * iterator holds its open block in 'state' and a place in the coldmap's
+ * blocks: another read through 'state', or any change to the coldmap,
+ * ends it (Init again to continue). */
 typedef struct coldmapIterator {
     const coldmap *cm;
     mflexState *state;
@@ -139,10 +147,10 @@ typedef struct coldmapStats {
     uint64_t rows;
     uint64_t blocks;
     uint64_t compressedBlocks;
-    uint64_t rawBytes;     /* the rows as flex */
-    uint64_t storedBytes;  /* the blocks as kept */
-    uint32_t rawLimit;     /* bytes a block holds at most, open */
-    uint32_t storedTarget; /* bytes a block aims to store */
+    uint64_t rawBytes;          /* the rows as flex */
+    uint64_t storedBytes;       /* the blocks as kept */
+    uint32_t rawLimitBytes;     /* the most a block holds, open */
+    uint32_t storedTargetBytes; /* what a block aims to store */
 } coldmapStats;
 void coldmapGetStats(const coldmap *cm, coldmapStats *stats);
 

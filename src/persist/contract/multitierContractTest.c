@@ -71,8 +71,10 @@ static void *pcMultitierBuild(const persistContractBuild *b) {
             databoxBig value;
             persistContractValue(&rng, &value, valueBuf, sizeof(valueBuf));
             const databox *row[2] = {&k, (const databox *)&value};
-            multitierSet(t, &k, (const databox *)&value);
+            /* Logged before it is made, as multitierSetP does: rows the
+             * Set pushes to the sink are recorded after it */
             persistContractRecord(b->log, PERSIST_OP_INSERT, row, 2);
+            multitierSet(t, &k, (const databox *)&value);
         }
     }
 
@@ -80,8 +82,8 @@ static void *pcMultitierBuild(const persistContractBuild *b) {
     for (size_t i = 0; i < b->stringCount; i++) {
         const databox k = pcMultitierKey(key, sizeof(key), space + i);
         const databox *row[2] = {&k, &b->strings[i]};
-        multitierSet(t, &k, &b->strings[i]);
         persistContractRecord(b->log, PERSIST_OP_INSERT, row, 2);
+        multitierSet(t, &k, &b->strings[i]);
     }
 
     /* The contract's own snapshots and frees follow: no sink after this */

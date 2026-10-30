@@ -6507,6 +6507,9 @@ static bool cflexDecompressEntriesIntoBuffer(const cflex *c, void *buffer,
 bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
     const size_t totalSize = flexTotalBytes_((flex *)c);
     const uint_fast32_t headerWidth = FLEX_HEADER_SIZE(c);
+    if (totalSize < headerWidth) {
+        return false; /* a header no flex has: nothing to decompress into */
+    }
 
     /* Check if provided buffer can fit expanded contents */
     if (*fBufferLen < totalSize) {
