@@ -65,6 +65,29 @@ bool coldmapLookup(const coldmap *cm, mflexState *state, const databox *key,
                    databox *elements[]);
 bool coldmapExists(const coldmap *cm, mflexState *state, const databox *key);
 
+/* Rows in key order (forward) or reverse.  Next fills elements[0 ..
+ * elementsPerEntry - 1] (key first) and opens blocks through 'state' as it
+ * reaches them; a row's bytes stay valid until the next Next. */
+typedef struct coldmapIterator {
+    const coldmap *cm;
+    mflexState *state;
+    const flex *f;    /* the open block */
+    flexEntry *entry; /* the next row's key (forward) or last element */
+    size_t block;
+    bool forward;
+    bool done;
+} coldmapIterator;
+
+/* From the first row (forward) or the last; false when there is none */
+bool coldmapIteratorInit(const coldmap *cm, mflexState *state,
+                         coldmapIterator *it, bool forward);
+/* From the first row whose key is at least 'key' (forward), or the last
+ * row whose key is at most 'key' (reverse); false when there is none */
+bool coldmapIteratorInitAt(const coldmap *cm, mflexState *state,
+                           coldmapIterator *it, bool forward,
+                           const databox *key);
+bool coldmapIteratorNext(coldmapIterator *it, databox *elements[]);
+
 /* Every row, in key order, as one flex (the multimapDump form) */
 [[nodiscard]] flex *coldmapDump(const coldmap *cm, mflexState *state);
 

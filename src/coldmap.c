@@ -257,6 +257,111 @@ bool coldmapExists(const coldmap *cm, mflexState *state, const databox *key) {
     return coldmapFind_(cm, state, key, &f) != nullptr;
 }
 
+/* Open block 'block' with the iterator at its first row (forward) or its
+ * last row's last element; false past either end */
+static bool coldmapIteratorOpen_(coldmapIterator *it, size_t block) {
+    if (block >= it->cm->blockCount) {
+        it->done = true;
+        return false;
+    }
+
+    it->block = block;
+    it->f = mflexOpenReadOnly(it->cm->blocks[block].rows, it->state);
+    it->entry = it->forward ? flexHead(it->f) : flexTail(it->f);
+    return true;
+}
+
+static void coldmapIteratorStart_(const coldmap *cm, mflexState *state,
+                                  coldmapIterator *it, bool forward) {
+    *it = (coldmapIterator){
+        .cm = cm, .state = state, .forward = forward, .done = true};
+}
+
+bool coldmapIteratorInit(const coldmap *cm, mflexState *state,
+                         coldmapIterator *it, bool forward) {
+    coldmapIteratorStart_(cm, state, it, forward);
+    if (!cm->blockCount) {
+        return false;
+    }
+
+    it->done = false;
+    return coldmapIteratorOpen_(it, forward ? 0 : cm->blockCount - 1);
+}
+
+bool coldmapIteratorInitAt(const coldmap *cm, mflexState *state,
+                           coldmapIterator *it, bool forward,
+                           const databox *key) {
+    coldmapIteratorStart_(cm, state, it, forward);
+    size_t at;
+    if (!coldmapRoute_(cm, key, &at)) {
+        /* Below every key: forward starts at the first row; reverse has
+         * none */
+        return forward && coldmapIteratorInit(cm, state, it, true);
+    }
+
+    it->done = false;
+    coldmapIteratorOpen_(it, at);
+    const coldmapBlock *b = &cm->blocks[at];
+    flexEntry *row = flexFindByTypeSortedWithMiddleGetEntry(
+        it->f, cm->elementsPerEntry, key, (flexEntry *)it->f + b->middle);
+    const bool pastAll = row == (flexEntry *)it->f + flexBytes(it->f);
+    if (forward) {
+        /* Past every row of this block: the next block's first row */
+        it->entry = pastAll ? nullptr : row;
+        return !pastAll || at + 1 < cm->blockCount;
+    }
+
+    /* Reverse: the row at 'key', else the row before the insert position
+     * (the block's first key is at most 'key', so there is one) */
+    if (pastAll) {
+        it->entry = flexTail(it->f);
+        return true;
+    }
+
+    databox found = {};
+    flexGetByType(row, &found);
+    if (databoxCompare(&found, key) == 0) {
+        for (multimapElements e = 1; e < cm->elementsPerEntry; e++) {
+            row = flexNext(it->f, row);
+        }
+        it->entry = row;
+    } else {
+        it->entry = flexPrev(it->f, row);
+    }
+    return true;
+}
+
+bool coldmapIteratorNext(coldmapIterator *it, databox *elements[]) {
+    if (it->done) {
+        return false;
+    }
+
+    /* A block is opened when its first row is read, so the last row read
+     * from the one before stays valid until now */
+    if (!it->entry) {
+        const size_t next = it->forward ? it->block + 1 : it->block - 1;
+        if ((!it->forward && it->block == 0) ||
+            !coldmapIteratorOpen_(it, next)) {
+            it->done = true;
+            return false;
+        }
+    }
+
+    const multimapElements epe = it->cm->elementsPerEntry;
+    flexEntry *fe = it->entry;
+    for (multimapElements i = 0; i < epe; i++) {
+        if (it->forward) {
+            flexGetByType(fe, elements[i]);
+            fe = flexNext(it->f, fe);
+        } else {
+            flexGetByType(fe, elements[epe - 1 - i]);
+            fe = flexPrev(it->f, fe);
+        }
+    }
+    it->entry = fe;
+    return true;
+}
+
 flex *coldmapDump(const coldmap *cm, mflexState *state) {
     /* @own: caller; free=flexFree */
     flex *out = flexNew();
@@ -287,6 +392,7 @@ defcleaner(coldmap *, coldmapFree);
 defcleaner(flex *, flexFree);
 defcleaner(mflexState *, mflexStateFree);
 defcleaner(multimap *, multimapFree);
+defcleanerName(databox *, zfree, Boxes);
 
 /* Row shapes: record-like rows (sorted keys share prefixes; values repeat
  * structure) and integer rows (already dense in flex) */
@@ -388,6 +494,114 @@ int coldmapTest(int argc, char *argv[]) {
                     }
                 }
             }
+        }
+    }
+
+    TEST("iterators walk the dump's rows in order and reverse, from either "
+         "end and from every key and every gap") {
+        static const coldmapConfig configs[] = {
+            {}, {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128}};
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        for (size_t s = 0; s < 2; s++) {
+            const size_t n = 2000;
+            cleaner(multimapFree) multimap *m =
+                coldmapTestRows_((coldmapShape_)s, n);
+            /* The reference: the dump's rows, decoded in place */
+            cleaner(flexFree) flex *ref = multimapDump(m);
+            cleanerName(zfree, Boxes) databox *refRows =
+                zcalloc(n * 2, sizeof(databox));
+            flexEntry *fe = flexHead(ref);
+            for (size_t i = 0; i < n * 2; i++) {
+                flexGetByType(fe, &refRows[i]);
+                fe = flexNext(ref, fe);
+            }
+
+            for (size_t c = 0; c < countof(configs); c++) {
+                cleaner(coldmapFree) coldmap *cm =
+                    coldmapNewFromDump(2, &configs[c], multimapDump(m));
+                databox k;
+                databox v;
+                databox *row[2] = {&k, &v};
+                for (int forward = 0; forward < 2; forward++) {
+                    coldmapIterator it;
+                    size_t seen = 0;
+                    coldmapIteratorInit(cm, state, &it, forward);
+                    while (coldmapIteratorNext(&it, row)) {
+                        const size_t at = forward ? seen : n - 1 - seen;
+                        if (seen >= n || databoxCompare(&k, &refRows[at * 2]) ||
+                            databoxCompare(&v, &refRows[at * 2 + 1])) {
+                            ERR("shape %zu config %zu forward %d: row %zu", s,
+                                c, forward, seen);
+                            break;
+                        }
+                        seen++;
+                    }
+                    if (seen != n) {
+                        ERR("shape %zu config %zu forward %d: %zu rows", s, c,
+                            forward, seen);
+                    }
+                }
+
+                char buf[32];
+                for (size_t i = 0; i < n * 2 + 2; i++) {
+                    const databox key =
+                        coldmapTestKey_((coldmapShape_)s, i, buf, sizeof(buf));
+                    for (int forward = 0; forward < 2; forward++) {
+                        /* Keys are 2 * row: the first row at least i, or the
+                         * last at most i */
+                        const size_t first = (i + 1) / 2;
+                        const size_t last = i / 2 < n ? i / 2 : n - 1;
+                        coldmapIterator it;
+                        const bool any = coldmapIteratorInitAt(cm, state, &it,
+                                                               forward, &key);
+                        if (any != (forward ? first < n : true)) {
+                            ERR("shape %zu config %zu: at %zu any %d", s, c, i,
+                                any);
+                        }
+                        for (size_t step = 0; step < 3; step++) {
+                            const bool has = coldmapIteratorNext(&it, row);
+                            const bool want =
+                                forward ? first + step < n : step <= last;
+                            const size_t at =
+                                forward ? first + step : last - step;
+                            if (has != want ||
+                                (has &&
+                                 (databoxCompare(&k, &refRows[at * 2]) ||
+                                  databoxCompare(&v, &refRows[at * 2 + 1])))) {
+                                ERR("shape %zu config %zu forward %d: at %zu "
+                                    "step %zu",
+                                    s, c, forward, i, step);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Below every key, and an empty coldmap */
+        cleaner(multimapFree) multimap *ints =
+            coldmapTestRows_(COLDMAP_SHAPE_INTS, 10);
+        cleaner(coldmapFree) coldmap *cm =
+            coldmapNewFromDump(2, nullptr, multimapDump(ints));
+        /* @own: container; free=coldmapFree */
+        flex *noRows = flexNew();
+        cleaner(coldmapFree) coldmap *empty =
+            coldmapNewFromDump(2, nullptr, noRows);
+        const databox below = databoxNewSigned(-1);
+        coldmapIterator it;
+        databox k;
+        databox v;
+        databox *row[2] = {&k, &v};
+        const bool fromBelow =
+            coldmapIteratorInitAt(cm, state, &it, true, &below) &&
+            coldmapIteratorNext(&it, row) && k.data.i64 == 0;
+        if (!fromBelow ||
+            coldmapIteratorInitAt(cm, state, &it, false, &below) ||
+            coldmapIteratorNext(&it, row) ||
+            coldmapIteratorInit(empty, state, &it, true) ||
+            coldmapIteratorNext(&it, row)) {
+            ERR("%s", "below every key, or an empty coldmap, iterated");
         }
     }
 
