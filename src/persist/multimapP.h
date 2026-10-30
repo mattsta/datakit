@@ -43,8 +43,7 @@ multimapP *multimapNewP(persistCtx *ctx, uint32_t elementsPerEntry);
 
 /* Create new persistent multimap with custom configuration */
 multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
-                                 bool isSet, bool compress,
-                                 flexCapSizeLimit limit);
+                                 bool isSet, flexCapSizeLimit limit);
 
 /* Open existing persistent multimap (recover from files) */
 multimapP *multimapOpenP(persistCtx *ctx);

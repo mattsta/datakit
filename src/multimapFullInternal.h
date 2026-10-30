@@ -25,7 +25,7 @@ struct multimapFull {
     multimapElements elementsPerEntry; /* max 4 billion "columns" per row. */
     uint32_t maxSize : 17;             /* max 65536 cutoff for splitting */
     uint32_t mapIsSet : 1;             /* bool; set mode dedupes WHOLE rows */
-    uint32_t compress : 1;             /* bool; true if compression enabled */
+    uint32_t spare : 1;                /* free flag */
     uint32_t isSurrogate : 1;          /* bool; true if all keys need refs */
     uint32_t unused : 12; /* more free flags! tiny flags for everybody! */
 };

@@ -10,7 +10,7 @@ struct multimapSmall {
     flex *map;                              /* single map */
     uint32_t middle;                        /* offset to middle of sorted map */
     multimapElements elementsPerEntry : 16; /* max 64k "columns" per row */
-    multimapElements compress : 1;    /* bool; true if compression enabled */
+    multimapElements spare : 1;             /* free flag */
     multimapElements mapIsSet : 1;    /* bool; set mode dedupes WHOLE rows */
     multimapElements isSurrogate : 1; /* bool; true if all keys need refs */
     multimapElements unused : 13;     /* free flags! */

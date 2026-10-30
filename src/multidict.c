@@ -3585,7 +3585,7 @@ DK_STATIC void mmFlexSettle_(multidictSlot **slot, const multimapSmall *view) {
     }
 
     /* @own: container; free=mmSlotFree */
-    *slot = multimapNewFromDump(2, false, false, limit, view->map);
+    *slot = multimapNewFromDump(2, false, limit, view->map);
 }
 
 DK_STATIC int64_t mmSlotInsert(multidictClass *, multidictSlot **slot,

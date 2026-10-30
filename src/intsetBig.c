@@ -498,7 +498,7 @@ intsetBig *intsetBigNewFromMembers(const flex *members) {
     /* The rows ascend by key (checked above), so this never refuses.  The
      * index's own limit, as intsetBigNew's has. */
     /* @own: container; free=multimapFree */
-    isb->i = multimapNewFromDump(2, false, false, INTSET_BIG_INDEX_LIMIT, rows);
+    isb->i = multimapNewFromDump(2, false, INTSET_BIG_INDEX_LIMIT, rows);
     isb->count = total;
     return isb;
 

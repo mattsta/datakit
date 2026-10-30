@@ -87,10 +87,8 @@ better locality; smaller nodes mean cheaper individual updates:
 /* multimap with 4 KB nodes instead of the 2 KB default. */
 multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
 
-/* Same idea, plus transparent node compression. */
-multimap *cold = multimapNewCompress(2, FLEX_CAP_LEVEL_8192);
-
-/* multilist: (node size limit, uncompressed-nodes-at-each-end depth). */
+/* multilist: (node size limit, uncompressed-nodes-at-each-end depth);
+ * a nonzero depth LZ4-compresses the nodes between the ends. */
 multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 
 /* multiarray: (element size, elements per row). */

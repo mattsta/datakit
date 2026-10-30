@@ -508,7 +508,7 @@ static void atomInit_(multimapAtom *ma, const multimapAtomConfig *settings) {
         break;
     case MULTIMAP_ATOM_INDEX_HASHED:
         /* @own: container; free=multimapAtomFree */
-        ma->mapAtomReverse = multimapNewConfigure(2, true, false, limit);
+        ma->mapAtomReverse = multimapNewConfigure(2, true, limit);
         break;
     case MULTIMAP_ATOM_INDEX_SLOTS:
         ma->slotsAtomReverse = nullptr;
@@ -1782,7 +1782,7 @@ static multimap *atomPersistHashedIndex_(const databoxBig *values,
     }
 
     /* @own: caller; free=multimapFree */
-    return multimapNewFromDump(2, true, false,
+    return multimapNewFromDump(2, true,
                                dkTierDefaultLimit(DK_TIER_MULTIMAP_ATOM), f);
 }
 

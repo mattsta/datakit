@@ -10,7 +10,7 @@ struct multimapMedium {
     flex *map[2];       /* maps stored in low->high order */
     uint32_t middle[2]; /* offsets to middle of sorted maps */
     multimapElements elementsPerEntry : 16; /* max 64k "columns" per row */
-    multimapElements compress : 1;    /* bool; true if compression enabled */
+    multimapElements spare : 1;             /* free flag */
     multimapElements mapIsSet : 1;    /* bool; set mode dedupes WHOLE rows */
     multimapElements isSurrogate : 1; /* bool; true if all keys need refs */
     multimapElements unused : 13;     /* free flags! */

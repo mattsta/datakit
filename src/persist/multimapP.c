@@ -25,13 +25,12 @@ defcleanerName(multimapP *, zfree, MultimapP);
  */
 
 multimapP *multimapNewP(persistCtx *ctx, uint32_t elementsPerEntry) {
-    return multimapNewConfigureP(ctx, elementsPerEntry, false, false,
+    return multimapNewConfigureP(ctx, elementsPerEntry, false,
                                  FLEX_CAP_LEVEL_2048);
 }
 
 multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
-                                 bool isSet, bool compress,
-                                 flexCapSizeLimit limit) {
+                                 bool isSet, flexCapSizeLimit limit) {
     if (!ctx) {
         return nullptr;
     }
@@ -42,7 +41,7 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
 
     /* Create underlying multimap */
     /* @own: container; free=multimapFree */
-    mp->m = multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
+    mp->m = multimapNewConfigure(elementsPerEntry, isSet, limit);
     if (!mp->m) {
         return nullptr;
     }
@@ -380,14 +379,13 @@ int multimapPTest(int, char *[]) {
         return err;
     }
 
-    TEST("multimapP keeps its size limit and compression across reopens") {
-        /* Configured with the 512-byte limit and compression: a reopen
+    TEST("multimapP keeps its size limit across reopens") {
+        /* Configured with the 512-byte limit: a reopen
          * through the WAL, and one after a compaction (a Full snapshot),
          * both come back with that configuration and every row */
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, nullptr);
-        multimapP *m =
-            multimapNewConfigureP(ctx, 2, false, true, FLEX_CAP_LEVEL_512);
+        multimapP *m = multimapNewConfigureP(ctx, 2, false, FLEX_CAP_LEVEL_512);
         for (int64_t k = 0; m && k < 1500; k++) {
             const databox key = databoxNewSigned(k);
             const databox val = databoxNewSigned(k);
@@ -401,7 +399,7 @@ int multimapPTest(int, char *[]) {
             m = multimapOpenP(ctx);
             const multimap *raw = m ? multimapGetP(m) : nullptr;
             if (!raw || multimapLimit(raw) != FLEX_CAP_LEVEL_512 ||
-                !multimapCompresses(raw) || multimapCountP(m) != 1500) {
+                multimapCountP(m) != 1500) {
                 ERR("reopen %d lost the configuration or rows", compacted);
             }
             if (m && !compacted && !multimapCompactP(m)) {
@@ -1113,8 +1111,7 @@ int multimapPTest(int, char *[]) {
          * not the key's first row */
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, nullptr);
-        multimapP *m =
-            multimapNewConfigureP(ctx, 2, true, false, FLEX_CAP_LEVEL_2048);
+        multimapP *m = multimapNewConfigureP(ctx, 2, true, FLEX_CAP_LEVEL_2048);
         static constexpr int64_t rows[][2] = {
             {1, 10}, {1, 11}, {1, 12}, {2, 20}};
         for (size_t i = 0; i < 4; i++) {

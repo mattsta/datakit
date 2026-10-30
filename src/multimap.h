@@ -14,10 +14,8 @@ typedef struct multimap multimap;
 [[nodiscard]] multimap *multimapNew(multimapElements elementsPerEntry);
 [[nodiscard]] multimap *multimapNewLimit(multimapElements elementsPerEntry,
                                          const flexCapSizeLimit limit);
-[[nodiscard]] multimap *multimapNewCompress(multimapElements elementsPerEntry,
-                                            const flexCapSizeLimit limit);
 [[nodiscard]] multimap *multimapNewConfigure(multimapElements elementsPerEntry,
-                                             bool isSet, bool compress,
+                                             bool isSet,
                                              flexCapSizeLimit sizeLimit);
 [[nodiscard]] multimap *multimapSetNew(multimapElements elementsPerEntry);
 [[nodiscard]] multimap *multimapCopy(const multimap *m);
@@ -46,22 +44,19 @@ multimapType multimapGetType(const multimap *m);
  * maps split. */
 void multimapStats(const multimap *m, dkTierStats *out);
 /* A multimap holding `rows` (full-width rows, as multimapDump writes them),
- * configured as multimapNewConfigure configures one (`isSet`, `compress`,
- * `limit`): a dump larger than the Medium tier holds under `limit` is cut
+ * configured as multimapNewConfigure configures one (`isSet`, `limit`): a
+ * dump larger than the Medium tier holds under `limit` is cut
  * straight into Full's inner maps of about `limit` bytes in O(rows), with
  * no per-row insert, and later inserts split at `limit` too.  Takes `rows`.
  * NULL, with `rows` freed, when the rows are not whole or not in the
  * multimap's row order (ascending by whole row; a set's rows strictly
  * ascending). */
 multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
-                              bool compress, flexCapSizeLimit limit,
-                              flex *rows);
+                              flexCapSizeLimit limit, flex *rows);
 
-/* The configuration a multimap was made with, in every tier: its size
- * limit (when a tier grows, and the size of Full's inner maps) and whether
- * it compresses */
+/* The size limit a multimap was made with, in every tier (when a tier
+ * grows, and the size of Full's inner maps) */
 flexCapSizeLimit multimapLimit(const multimap *m);
-bool multimapCompresses(const multimap *m);
 /* The elements in each row (key first) */
 multimapElements multimapElementsPerEntry(const multimap *m);
 
@@ -253,8 +248,8 @@ bool multimapFieldIncrEntry(multimap **m, const multimapEntry *row,
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 
-/* Empty the map: an empty Small with the same row width, set mode, limit
- * and compression, freeing a larger tier's structures (a Small keeps its
+/* Empty the map: an empty Small with the same row width, set mode and
+ * limit, freeing a larger tier's structures (a Small keeps its
  * allocation).  Rewrites '*m'. */
 void multimapReset(multimap **m);
 /* Pack the rows into the densest layout they allow: each of Full's inner

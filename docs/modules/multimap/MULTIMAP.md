@@ -30,11 +30,10 @@ sorted at all times, so lookups are binary searches and iteration is ordered.
 Examples below use `PRId64` / `PRIu64` from `<inttypes.h>`. 64-bit values are
 always `int64_t` / `uint64_t` and are always printed through those macros.
 
-> **Compression note**: `multimapNewCompress()` and the `compress` argument of
-> `multimapNewConfigure()` record a compression flag in the tagged pointer and
-> in each variant's struct, but no variant currently reads it. Today those
-> constructors behave exactly like `multimapNewLimit()`. Do not size capacity
-> planning around compression.
+A multimap is held uncompressed in memory, so every read is a direct flex
+search. To compress a persisted multimap, turn on snapshot compression in
+its persist configuration (`compression` in `persistCtxConfig`, see
+[PERSIST.md](../persist/PERSIST.md)).
 
 ## Architecture
 
@@ -44,7 +43,7 @@ implementations behind one opaque `multimap *`:
 ```
 ┌─────────────┐
 │  multimap*  │  low 2 bits: variant tag; high 16 bits: 2 x 8-bit metadata
-└──────┬──────┘  (compress flag, flexCapSizeLimit level)
+└──────┬──────┘  (flexCapSizeLimit level)
        │
        ├──[tag=1]──> multimapSmall  (16 bytes, 1 flex)
        ├──[tag=2]──> multimapMedium (28 bytes, 2 flex arrays)
@@ -52,8 +51,8 @@ implementations behind one opaque `multimap *`:
 ```
 
 `multimap.c` sets `PTRLIB_BITS_LOW 2` and `PTRLIB_BITS_HIGH 16`, so the
-size-limit level and compression flag ride in the unused high bits of the
-pointer instead of costing struct space in every variant.
+size-limit level rides in the unused high bits of the pointer instead of
+costing struct space in every variant.
 
 When you call `multimapInsert()`, the implementation:
 
@@ -194,15 +193,11 @@ multimap *multimapNew(multimapElements elementsPerEntry);
 multimap *multimapNewLimit(multimapElements elementsPerEntry,
                            const uint32_t limit);
 
-/* Records a compression flag that no variant currently consumes */
-multimap *multimapNewCompress(multimapElements elementsPerEntry,
-                              const uint32_t limit);
-
 /* Set mode: entire rows are unique (see "Insertion Semantics") */
 multimap *multimapSetNew(multimapElements elementsPerEntry);
 
 multimap *multimapNewConfigure(multimapElements elementsPerEntry, bool isSet,
-                               bool compress, flexCapSizeLimit sizeLimit);
+                               flexCapSizeLimit sizeLimit);
 ```
 
 Usage:
@@ -917,8 +912,8 @@ void multimapReset(multimap **m); /* drop all rows: an empty Small */
 void multimapFree(multimap *m);   /* destroy; NULL-safe */
 ```
 
-`multimapReset()` leaves an empty Small with the same row width, set mode,
-limit and compression. A Small keeps its allocation; a Medium or Full is
+`multimapReset()` leaves an empty Small with the same row width, set mode and
+limit. A Small keeps its allocation; a Medium or Full is
 freed, so a reset map holds no larger tier's structures. It rewrites `*m`.
 `multimapFree(NULL)` is a no-op.
 
@@ -1245,15 +1240,15 @@ released.
 
 ## More calls by job
 
-| Job                           | Calls                                                                                                                                                                                                                                                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| What a map is                 | `multimapGetType` (the tier holding the rows now), `multimapIsSet` (rows deduplicated whole; one key may hold several rows), `multimapElementsPerEntry` (row width, key first), `multimapLimit` / `multimapCompresses` (its size limit and compression)                                                            |
-| Build from sorted rows        | `multimapNewFromDump(width, isSet, compress, limit, rows)`: takes a flex of whole rows in the map's order and cuts it straight into the tier the size needs, O(rows) with no per-row insert; NULL (rows freed) when rows are not whole or out of order. `multimapNewFromDumpWithReference` for atom-reference keys |
-| By position                   | `multimapLookupByPosition(m, i, elements)` / `multimapDeleteByPosition(&m, i)`: the i-th row from the head (negative: from the tail, -1 last), found through maintained counts and anchors, so a walk covers at most a quarter of one inner map                                                                    |
-| Delete and keep the value     | `multimapDeleteTaking(&m, key, takenOut)`: one search; the deleted row's values come back owned (release each with `databoxFreeData`). `multimapDeleteReporting` reports them without owning (bytes point into the rewritten map: types and lengths only)                                                          |
-| Change a found row            | after `multimapGetUnderlyingEntry` (no change to the map since): `multimapFieldIncrEntry` (an increment with no second search), `multimapDeleteEntry` / `multimapDeleteEntryWithReference`                                                                                                                         |
-| Rewrite a row's values        | `multimapEntryReplace(&m, key, values)`: every value field of the row with `key` (which must exist), the key kept, in one search (a set refuses it, as every in-place set rewrite); `multimapEntryResize(&m, key, n)`: the row's first value becomes `n` bytes (bytes past the old length are unspecified)         |
-| Keys that are atom references | `multimapLookupWithReference` and `multimapInsertWithSurrogateKeyIfAbsent` find a key by the value its reference resolves to (see [VARIANTS](VARIANTS.md#multimapatom))                                                                                                                                            |
+| Job                           | Calls                                                                                                                                                                                                                                                                                                      |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What a map is                 | `multimapGetType` (the tier holding the rows now), `multimapIsSet` (rows deduplicated whole; one key may hold several rows), `multimapElementsPerEntry` (row width, key first), `multimapLimit` (its size limit)                                                                                           |
+| Build from sorted rows        | `multimapNewFromDump(width, isSet, limit, rows)`: takes a flex of whole rows in the map's order and cuts it straight into the tier the size needs, O(rows) with no per-row insert; NULL (rows freed) when rows are not whole or out of order. `multimapNewFromDumpWithReference` for atom-reference keys   |
+| By position                   | `multimapLookupByPosition(m, i, elements)` / `multimapDeleteByPosition(&m, i)`: the i-th row from the head (negative: from the tail, -1 last), found through maintained counts and anchors, so a walk covers at most a quarter of one inner map                                                            |
+| Delete and keep the value     | `multimapDeleteTaking(&m, key, takenOut)`: one search; the deleted row's values come back owned (release each with `databoxFreeData`). `multimapDeleteReporting` reports them without owning (bytes point into the rewritten map: types and lengths only)                                                  |
+| Change a found row            | after `multimapGetUnderlyingEntry` (no change to the map since): `multimapFieldIncrEntry` (an increment with no second search), `multimapDeleteEntry` / `multimapDeleteEntryWithReference`                                                                                                                 |
+| Rewrite a row's values        | `multimapEntryReplace(&m, key, values)`: every value field of the row with `key` (which must exist), the key kept, in one search (a set refuses it, as every in-place set rewrite); `multimapEntryResize(&m, key, n)`: the row's first value becomes `n` bytes (bytes past the old length are unspecified) |
+| Keys that are atom references | `multimapLookupWithReference` and `multimapInsertWithSurrogateKeyIfAbsent` find a key by the value its reference resolves to (see [VARIANTS](VARIANTS.md#multimapatom))                                                                                                                                    |
 
 Best practices:
 

@@ -4213,11 +4213,9 @@ const persistOps persistOpsHyperloglog = {
 defcleaner(multimap *, multimapFree);
 
 /* A snapshot's shape word: elementsPerEntry (at most 1024) in bits 0-15,
- * the size limit (a flexCapSizeLimit) in bits 16-19, and flags for a set
- * (bit 31) and a compressing multimap (bit 30), so a restore is configured
- * as the multimap was made */
+ * the size limit (a flexCapSizeLimit) in bits 16-19, and a flag for a set
+ * (bit 31), so a restore is configured as the multimap was made */
 #define MULTIMAP_PERSIST_SET (UINT32_C(1) << 31)
-#define MULTIMAP_PERSIST_COMPRESS (UINT32_C(1) << 30)
 static constexpr int MULTIMAP_PERSIST_LIMIT_SHIFT = 16;
 #define MULTIMAP_PERSIST_LIMIT_MASK                                            \
     (UINT32_C(0xF) << MULTIMAP_PERSIST_LIMIT_SHIFT)
@@ -4249,7 +4247,6 @@ static uint8_t *multimapPersistSnapshot(const void *structure, size_t *len) {
     /* Snapshot format: [shape: 4 bytes][flex data: N bytes] */
     const uint32_t shape =
         elementsPerEntry | (multimapIsSet(m) ? MULTIMAP_PERSIST_SET : 0) |
-        (multimapCompresses(m) ? MULTIMAP_PERSIST_COMPRESS : 0) |
         ((uint32_t)multimapLimit(m) << MULTIMAP_PERSIST_LIMIT_SHIFT);
     size_t flexLen = flexBytes(f);
     *len = sizeof(uint32_t) + flexLen;
@@ -4272,12 +4269,10 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     uint32_t shape;
     memcpy(&shape, data, sizeof(uint32_t));
     const bool isSet = shape & MULTIMAP_PERSIST_SET;
-    const bool compress = shape & MULTIMAP_PERSIST_COMPRESS;
     const uint32_t limit =
         (shape & MULTIMAP_PERSIST_LIMIT_MASK) >> MULTIMAP_PERSIST_LIMIT_SHIFT;
     const uint32_t elementsPerEntry = shape & MULTIMAP_PERSIST_ELEMENTS_MASK;
-    const uint32_t known = MULTIMAP_PERSIST_SET | MULTIMAP_PERSIST_COMPRESS |
-                           MULTIMAP_PERSIST_LIMIT_MASK |
+    const uint32_t known = MULTIMAP_PERSIST_SET | MULTIMAP_PERSIST_LIMIT_MASK |
                            MULTIMAP_PERSIST_ELEMENTS_MASK;
     if (elementsPerEntry == 0 || elementsPerEntry > 1024 ||
         limit > FLEX_CAP_LEVEL_65536 || (shape & ~known)) {
@@ -4297,8 +4292,8 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     memcpy(rows, data + sizeof(uint32_t), flexLen);
 
     /* @own: caller; free=multimapFree */
-    return multimapNewFromDump(elementsPerEntry, isSet, compress,
-                               (flexCapSizeLimit)limit, rows);
+    return multimapNewFromDump(elementsPerEntry, isSet, (flexCapSizeLimit)limit,
+                               rows);
 }
 
 static size_t multimapPersistCount(const void *structure) {

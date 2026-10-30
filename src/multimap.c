@@ -60,22 +60,18 @@ static constexpr int MULTIMAP_STACK_THRESHOLD = 8;
 #define mmm(m) ((multimapMedium *)MULTIMAP_USE_(m))
 #define mmf(m) ((multimapFull *)MULTIMAP_USE_(m))
 
-/* The limit and compress setting of any map */
+/* The size limit of any map */
 DK_INLINE_ALWAYS flexCapSizeLimit mmLimit_(const multimap *m) {
     return (flexCapSizeLimit)(MULTIMAP_IS_BARE(m) ? multimapBareLimit(m)
                                                   : COMPRESS_LIMIT(m));
 }
 
-DK_INLINE_ALWAYS uint32_t mmDepth_(const multimap *m) {
-    return MULTIMAP_IS_BARE(m) ? 0 : (uint32_t)COMPRESS_DEPTH(m);
-}
-
 /* A Small map of 'view' (its rows taken): bare when its shape and middle
  * fit the pointer, else a struct Small */
-static multimap *mmSmallOf_(const multimapSmall *view, const uint32_t depth,
+static multimap *mmSmallOf_(const multimapSmall *view,
                             const flexCapSizeLimit limit) {
-    if (depth == 0 && multimapBareFits(view->elementsPerEntry, view->mapIsSet,
-                                       view->middle)) {
+    if (multimapBareFits(view->elementsPerEntry, view->mapIsSet,
+                         view->middle)) {
         /* @own: caller; free=multimapFree */
         return multimapBarePack(view->map, view->middle, view->elementsPerEntry,
                                 limit);
@@ -84,7 +80,7 @@ static multimap *mmSmallOf_(const multimapSmall *view, const uint32_t depth,
     /* @own: caller; free=multimapFree */
     multimapSmall *small = zcalloc(1, sizeof(*small));
     *small = *view;
-    multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(small, depth, limit);
+    multimap *tagged = SET_COMPRESS_LIMIT(small, limit);
     return MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_SMALL);
 }
 
@@ -97,7 +93,7 @@ DK_INLINE_ALWAYS multimap *mmBareSettle_(const multimapSmall *view,
                                 multimapBareLimit(was));
     }
 
-    return mmSmallOf_(view, 0, (flexCapSizeLimit)multimapBareLimit(was));
+    return mmSmallOf_(view, (flexCapSizeLimit)multimapBareLimit(was));
 }
 
 /* An entry filled through a bare map's view points at the view's map
@@ -238,8 +234,7 @@ DK_INLINE_ALWAYS void mmBareRelink_(const multimap *m, multimapEntry *me,
 
 /* A new, empty Small map: bare when its shape allows (mmSmallOf_) */
 static multimap *mmNew_(const multimapElements elementsPerEntry,
-                        const bool isSet, const bool compress,
-                        const flexCapSizeLimit limit) {
+                        const bool isSet, const flexCapSizeLimit limit) {
     /* Note: You can only have up to 64k 'elementsPerEntry'
      *       (which is overkill anyway) */
     multimapSmall view = {.middle = FLEX_EMPTY_SIZE,
@@ -248,38 +243,31 @@ static multimap *mmNew_(const multimapElements elementsPerEntry,
     /* @own: container; free=multimapFree */
     view.map = flexNew();
     /* @own: caller; free=multimapFree */
-    return mmSmallOf_(&view, compress, limit);
+    return mmSmallOf_(&view, limit);
 }
 
 multimap *multimapNew(multimapElements elementsPerEntry) {
     /* @own: caller; free=multimapFree */
-    return mmNew_(elementsPerEntry, false, false,
+    return mmNew_(elementsPerEntry, false,
                   dkTierDefaultLimit(DK_TIER_MULTIMAP));
 }
 
 multimap *multimapNewLimit(multimapElements elementsPerEntry,
                            const flexCapSizeLimit limit) {
     /* @own: caller; free=multimapFree */
-    return mmNew_(elementsPerEntry, false, false, limit);
-}
-
-multimap *multimapNewCompress(multimapElements elementsPerEntry,
-                              const flexCapSizeLimit limit) {
-    /* @own: caller; free=multimapFree */
-    return mmNew_(elementsPerEntry, false, true, limit);
+    return mmNew_(elementsPerEntry, false, limit);
 }
 
 multimap *multimapSetNew(multimapElements elementsPerEntry) {
     /* @own: caller; free=multimapFree */
-    return mmNew_(elementsPerEntry, true, false,
-                  dkTierDefaultLimit(DK_TIER_MULTIMAP));
+    return mmNew_(elementsPerEntry, true, dkTierDefaultLimit(DK_TIER_MULTIMAP));
 }
 
 multimap *multimapNewConfigure(multimapElements elementsPerEntry,
-                               const bool isSet, const bool compress,
+                               const bool isSet,
                                const flexCapSizeLimit sizeLimit) {
     /* @own: caller; free=multimapFree */
-    return mmNew_(elementsPerEntry, isSet, compress, sizeLimit);
+    return mmNew_(elementsPerEntry, isSet, sizeLimit);
 }
 
 size_t multimapCount(const multimap *m) {
@@ -381,8 +369,7 @@ static bool multimapDumpAscends_(const flex *rows,
 }
 
 multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
-                              bool compress, flexCapSizeLimit limit,
-                              flex *rows) {
+                              flexCapSizeLimit limit, flex *rows) {
     if (!multimapDumpAscends_(rows, elementsPerEntry, isSet)) {
         flexFree(rows);
         return nullptr;
@@ -396,8 +383,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
     const size_t splitSize = flexOptimizationSizeLimit[limit];
     if (total == 0 || bytes <= splitSize * 3) {
         /* @own: caller; free=multimapFree */
-        multimap *m =
-            multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
+        multimap *m = multimapNewConfigure(elementsPerEntry, isSet, limit);
         cleanerName(zfree, Void) void *storage =
             zcalloc(elementsPerEntry, sizeof(databoxBig) + sizeof(databox *));
         databoxBig *boxes = storage;
@@ -439,7 +425,7 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
                                                      elementsPerEntry, isSet);
     /* Inner maps split at the multimap's own limit, as inserts grow them */
     full->maxSize = (uint32_t)splitSize;
-    multimap *m = SET_COMPRESS_DEPTH_LIMIT(full, compress, limit);
+    multimap *m = SET_COMPRESS_LIMIT(full, limit);
     return MULTIMAP_TAG_(m, MULTIMAP_TYPE_FULL);
 }
 
@@ -447,12 +433,8 @@ flexCapSizeLimit multimapLimit(const multimap *m) {
     return mmLimit_(m);
 }
 
-bool multimapCompresses(const multimap *m) {
-    return mmDepth_(m) != 0;
-}
-
 static void multimapUpgradeIfNecessaryWithReference(
-    multimap **m, uint_fast32_t depth, flexCapSizeLimit limit,
+    multimap **m, flexCapSizeLimit limit,
     const multimapAtom *restrict referenceContainer);
 
 /* Whether the rows' keys, resolved through 'referenceContainer', strictly
@@ -508,9 +490,8 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
             .middle = (uint32_t)(flexMiddle(rows, elementsPerEntry) - rows),
             .elementsPerEntry = elementsPerEntry};
         /* @own: caller; free=multimapFree */
-        multimap *m = mmSmallOf_(&view, 0, limit);
-        multimapUpgradeIfNecessaryWithReference(&m, 0, limit,
-                                                referenceContainer);
+        multimap *m = mmSmallOf_(&view, limit);
+        multimapUpgradeIfNecessaryWithReference(&m, limit, referenceContainer);
         return m;
     }
 
@@ -536,13 +517,14 @@ multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
         nullptr, map, middle, maps, elementsPerEntry, false,
         referenceContainer);
     full->maxSize = (uint32_t)splitSize;
-    multimap *m = SET_COMPRESS_DEPTH_LIMIT(full, 0, limit);
+    multimap *m = SET_COMPRESS_LIMIT(full, limit);
     return MULTIMAP_TAG_(m, MULTIMAP_TYPE_FULL);
 }
 
-DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
-    multimap **m, const uint_fast32_t depth, const flexCapSizeLimit limit,
-    const bool useReference, const multimapAtom *restrict referenceContainer) {
+DK_INLINE_ALWAYS void
+multimapUpgradeIfNecessary_(multimap **m, const flexCapSizeLimit limit,
+                            const bool useReference,
+                            const multimapAtom *restrict referenceContainer) {
     const multimapType type = multimapType_(*m);
     if (type == MULTIMAP_TYPE_SMALL) {
         multimapSmall *small = mms(*m);
@@ -564,7 +546,7 @@ DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
                 MULTIMAP_IS_BARE(*m) ? nullptr : small, small->map,
                 small->middle, small->elementsPerEntry, small->mapIsSet);
 
-            medium = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
+            medium = SET_COMPRESS_LIMIT(medium, limit);
             *m = MULTIMAP_TAG_(medium, MULTIMAP_TYPE_MEDIUM);
         }
     } else if (type == MULTIMAP_TYPE_MEDIUM) {
@@ -598,15 +580,15 @@ DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
             full->maxSize = flexOptimizationSizeLimit[limit];
             /* Full keeps the configuration too (copies, dumps and
              * snapshots read it from here) */
-            multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(full, depth, limit);
+            multimap *tagged = SET_COMPRESS_LIMIT(full, limit);
             *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_FULL);
         }
     }
 }
 
-static void multimapUpgradeIfNecessary(multimap **m, const uint_fast32_t depth,
+static void multimapUpgradeIfNecessary(multimap **m,
                                        const flexCapSizeLimit limit) {
-    multimapUpgradeIfNecessary_(m, depth, limit, false, nullptr);
+    multimapUpgradeIfNecessary_(m, limit, false, nullptr);
 }
 
 /* After a delete: move a drained Full or Medium down to the tier its rows
@@ -626,7 +608,6 @@ static void multimapUpgradeIfNecessary(multimap **m, const uint_fast32_t depth,
  * right for maps of references. */
 DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
                                         size_t fullBytes, size_t smallBytes) {
-    const uint32_t depth = mmDepth_(*m);
     const flexCapSizeLimit limit = mmLimit_(*m);
     flex *rows = nullptr;
     multimapElements elementsPerEntry;
@@ -675,11 +656,11 @@ DK_INLINE_ALWAYS void multimapMoveDown_(multimap **m, uint32_t fullMaps,
         /* @own: container; free=multimapMediumFree */
         multimapMedium *medium = multimapMediumNewFromOneGrow(
             nullptr, rows, view.middle, elementsPerEntry, isSet);
-        multimap *tagged = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
+        multimap *tagged = SET_COMPRESS_LIMIT(medium, limit);
         *m = MULTIMAP_TAG_(tagged, MULTIMAP_TYPE_MEDIUM);
     } else {
         /* @own: caller; free=multimapFree */
-        *m = mmSmallOf_(&view, depth, limit);
+        *m = mmSmallOf_(&view, limit);
     }
 }
 
@@ -717,12 +698,11 @@ void multimapCompactWithReference(multimap **m,
     } while (0)
 
 static void multimapUpgradeIfNecessaryWithReference(
-    multimap **m, const uint_fast32_t depth, const flexCapSizeLimit limit,
+    multimap **m, const flexCapSizeLimit limit,
     const multimapAtom *restrict referenceContainer) {
-    multimapUpgradeIfNecessary_(m, depth, limit, true, referenceContainer);
+    multimapUpgradeIfNecessary_(m, limit, true, referenceContainer);
 }
 multimap *multimapCopy(const multimap *m) {
-    const uint32_t depth = mmDepth_(m);
     const flexCapSizeLimit limit = mmLimit_(m);
 
     multimap *copy;
@@ -732,7 +712,7 @@ multimap *multimapCopy(const multimap *m) {
         multimapSmall view = multimapBareView(m);
         /* @own: caller; free=multimapFree */
         view.map = flexDuplicate(view.map);
-        return mmSmallOf_(&view, depth, limit);
+        return mmSmallOf_(&view, limit);
     }
 
     if (type == MULTIMAP_TYPE_SMALL) {
@@ -746,7 +726,7 @@ multimap *multimapCopy(const multimap *m) {
         copy = (multimap *)multimapFullCopy(mmf(m));
     }
 
-    copy = SET_COMPRESS_DEPTH_LIMIT(copy, depth, limit);
+    copy = SET_COMPRESS_LIMIT(copy, limit);
     copy = MULTIMAP_TAG_(copy, type);
     return copy;
 }
@@ -768,9 +748,8 @@ bool multimapInsertReplacing(multimap **m, const databox *elements[],
 
     /* Now check multimap to see if we should grow to a larger
      * representation. */
-    const uint32_t depth = mmDepth_(*m);
     const flexCapSizeLimit limit = mmLimit_(*m);
-    multimapUpgradeIfNecessary(m, depth, limit);
+    multimapUpgradeIfNecessary(m, limit);
     return replaced;
 }
 
@@ -789,9 +768,8 @@ bool multimapInsertIfAbsentEntry(multimap **m, const databox *elements[],
     }
 
     if (inserted) {
-        const uint32_t depth = mmDepth_(*m);
         const flexCapSizeLimit limit = mmLimit_(*m);
-        multimapUpgradeIfNecessary(m, depth, limit);
+        multimapUpgradeIfNecessary(m, limit);
     }
 
     return inserted;
@@ -807,9 +785,8 @@ void multimapInsertFullWidth(multimap **m, const databox *elements[]) {
 
     /* Now check multimap to see if we should grow to a larger
      * representation. */
-    const uint32_t depth = mmDepth_(*m);
     const flexCapSizeLimit limit = mmLimit_(*m);
-    multimapUpgradeIfNecessary(m, depth, limit);
+    multimapUpgradeIfNecessary(m, limit);
 }
 
 void multimapInsertWithSurrogateKey(multimap **m, const databox *elements[],
@@ -821,10 +798,8 @@ void multimapInsertWithSurrogateKey(multimap **m, const databox *elements[],
 
     /* Now check multimap to see if we should grow to a larger
      * representation. */
-    const uint32_t depth = mmDepth_(*m);
     const flexCapSizeLimit limit = mmLimit_(*m);
-    multimapUpgradeIfNecessaryWithReference(m, depth, limit,
-                                            referenceContainer);
+    multimapUpgradeIfNecessaryWithReference(m, limit, referenceContainer);
 }
 
 bool multimapInsertWithSurrogateKeyIfAbsent(
@@ -836,10 +811,8 @@ bool multimapInsertWithSurrogateKeyIfAbsent(
                      insertKey, referenceContainer, foundKey, whenAbsent,
                      whenAbsentCtx);
     if (inserted) {
-        const uint32_t depth = mmDepth_(*m);
         const flexCapSizeLimit limit = mmLimit_(*m);
-        multimapUpgradeIfNecessaryWithReference(m, depth, limit,
-                                                referenceContainer);
+        multimapUpgradeIfNecessaryWithReference(m, limit, referenceContainer);
     }
 
     return inserted;
@@ -848,9 +821,8 @@ bool multimapInsertWithSurrogateKeyIfAbsent(
 void multimapAppend(multimap **m, const databox *elements[]) {
     MULTIMAP_UPDATE_(, *m, Append, elements);
 
-    const uint32_t depth = mmDepth_(*m);
     const flexCapSizeLimit limit = mmLimit_(*m);
-    multimapUpgradeIfNecessary(m, depth, limit);
+    multimapUpgradeIfNecessary(m, limit);
 }
 
 bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
@@ -896,9 +868,8 @@ static void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx,
                                   flex **map) {
     const multimapType type = multimapType_(*m);
     if (type == MULTIMAP_TYPE_SMALL || type == MULTIMAP_TYPE_MEDIUM) {
-        const uint32_t depth = mmDepth_(*m);
         const flexCapSizeLimit limit = mmLimit_(*m);
-        multimapUpgradeIfNecessary(m, depth, limit);
+        multimapUpgradeIfNecessary(m, limit);
     } else {
         multimapFull *full = mmf(*m);
         multimapFullRegularizeMap(full, mapIdx, map);
@@ -1265,11 +1236,10 @@ void multimapReset(multimap **m) {
     }
 
     const bool isSet = multimapIsSet(*m);
-    const bool compress = multimapCompresses(*m);
     const flexCapSizeLimit limit = multimapLimit(*m);
     multimapFree(*m);
     /* @own: caller; free=multimapFree */
-    *m = multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
+    *m = multimapNewConfigure(elementsPerEntry, isSet, limit);
 }
 
 void multimapFree(multimap *m) {
@@ -4065,9 +4035,9 @@ int32_t multimapWidePersistSweep(void) {
             unlink(wal);
 
             persistCtx *ctx = persistCtxNew(base, nullptr);
-            multimapP *mp = ctx ? multimapNewConfigureP(ctx, 2, false, false,
-                                                        plans[p].limit)
-                                : nullptr;
+            multimapP *mp =
+                ctx ? multimapNewConfigureP(ctx, 2, false, plans[p].limit)
+                    : nullptr;
             if (!mp) {
                 ERR("%s: could not create the persistent map", where);
                 if (ctx) {
@@ -4333,9 +4303,9 @@ static int32_t multimapFullWidthEntrySweep_(void) {
                                   MULTIMAP_TYPE_FULL};
     for (size_t t = 0; t < countof(keys); t++) {
         cleaner(multimapFree) multimap *a =
-            multimapNewConfigure(2, true, false, limits[t]);
+            multimapNewConfigure(2, true, limits[t]);
         cleaner(multimapFree) multimap *b =
-            multimapNewConfigure(2, true, false, limits[t]);
+            multimapNewConfigure(2, true, limits[t]);
         for (int64_t k = 0; k < keys[t]; k++) {
             for (int64_t v = 0; v < 5; v++) {
                 const databox key = databoxNewSigned(k);
@@ -4855,7 +4825,7 @@ int multimapTest(int, char *[]) {
                 for (size_t c = 0; c < countof(conds) && !err; c++) {
                     const int64_t rows = sizes[s];
                     cleaner(multimapFree) multimap *m =
-                        multimapNewConfigure(2, set, false, FLEX_CAP_LEVEL_512);
+                        multimapNewConfigure(2, set, FLEX_CAP_LEVEL_512);
                     databoxBig wide[1];
                     for (int64_t r = 0; r < rows; r++) {
                         /* Every 16th key 128-bit (sorting past the rest) */
@@ -4926,7 +4896,7 @@ int multimapTest(int, char *[]) {
                 const int64_t rows = sizes[s];
                 const int64_t keys = set ? rows / 3 : rows;
                 cleaner(multimapFree) multimap *m =
-                    multimapNewConfigure(2, set, false, FLEX_CAP_LEVEL_512);
+                    multimapNewConfigure(2, set, FLEX_CAP_LEVEL_512);
                 databoxBig wide[1];
                 for (int64_t r = 0; r < rows; r++) {
                     const int64_t k = set ? r / 3 : r;
@@ -5226,7 +5196,7 @@ int multimapTest(int, char *[]) {
         const int64_t rowsPerKey[] = {1, 7, 61};
         for (size_t s = 0; s < countof(rowsPerKey); s++) {
             cleaner(multimapFree) multimap *set =
-                multimapNewConfigure(2, true, false, FLEX_CAP_LEVEL_512);
+                multimapNewConfigure(2, true, FLEX_CAP_LEVEL_512);
             for (int64_t k = 0; k < 40; k++) {
                 for (int64_t r = 0; r < rowsPerKey[s]; r++) {
                     const databox key = databoxNewSigned(k);
@@ -6624,15 +6594,13 @@ int multimapTest(int, char *[]) {
     TEST("Reset from every tier: an empty Small keeping its configuration") {
         const struct {
             bool isSet;
-            bool compress;
             flexCapSizeLimit limit;
-        } configs[] = {{false, false, FLEX_CAP_LEVEL_64},
-                       {true, true, FLEX_CAP_LEVEL_128}};
+        } configs[] = {{false, FLEX_CAP_LEVEL_64}, {true, FLEX_CAP_LEVEL_128}};
         for (size_t c = 0; c < countof(configs); c++) {
             for (int32_t tier = MULTIMAP_TYPE_SMALL; tier <= MULTIMAP_TYPE_FULL;
                  tier++) {
-                cleaner(multimapFree) multimap *m = multimapNewConfigure(
-                    2, configs[c].isSet, configs[c].compress, configs[c].limit);
+                cleaner(multimapFree) multimap *m =
+                    multimapNewConfigure(2, configs[c].isSet, configs[c].limit);
                 int64_t next = 0;
                 do {
                     const databox kb = databoxNewSigned(next);
@@ -6648,7 +6616,6 @@ int multimapTest(int, char *[]) {
                 if (multimapGetType(m) != MULTIMAP_TYPE_SMALL ||
                     multimapCount(m) != 0 || multimapExists(m, &kb) ||
                     multimapIsSet(m) != configs[c].isSet ||
-                    multimapCompresses(m) != configs[c].compress ||
                     multimapLimit(m) != configs[c].limit) {
                     ERR("config %zu tier %d: reset to tier %d, count %zu", c,
                         tier, multimapGetType(m), multimapCount(m));
@@ -9386,7 +9353,7 @@ int multimapTest(int, char *[]) {
             FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
         for (size_t t = 0; t < countof(keys); t++) {
             cleaner(multimapFree) multimap *m =
-                multimapNewConfigure(2, true, false, limits[t]);
+                multimapNewConfigure(2, true, limits[t]);
             for (int64_t k = 0; k < keys[t]; k++) {
                 for (int64_t v = 4; v >= 0; v--) {
                     const databox key = databoxNewSigned(k);
@@ -9423,13 +9390,12 @@ int multimapTest(int, char *[]) {
     }
 
     TEST("a size limit holds in every tier, through a dump and rebuild") {
-        /* Made with the 512-byte limit (and with compression): grown to
-         * Full, its inner maps split at 512 bytes; its dump rebuilt with the
-         * same configuration is Full with 512-byte inner maps too, and both
-         * report the limit and compression they were made with */
-        for (int compress = 0; compress <= 1; compress++) {
+        /* Made with the 512-byte limit: grown to Full, its inner maps split
+         * at 512 bytes; its dump rebuilt with the same configuration is
+         * Full with 512-byte inner maps too, and both report the limit */
+        {
             cleaner(multimapFree) multimap *m =
-                multimapNewConfigure(2, false, compress, FLEX_CAP_LEVEL_512);
+                multimapNewConfigure(2, false, FLEX_CAP_LEVEL_512);
             for (int64_t k = 0; k < 1500; k++) {
                 const databox key = databoxNewSigned(k);
                 const databox val = databoxNewSigned(k * 3);
@@ -9437,25 +9403,21 @@ int multimapTest(int, char *[]) {
                 multimapInsert(&m, row);
             }
             const uint32_t want = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_512];
-            cleaner(multimapFree) multimap *b =
-                multimapNewFromDump(2, false, multimapCompresses(m),
-                                    multimapLimit(m), multimapDump(m));
+            cleaner(multimapFree) multimap *b = multimapNewFromDump(
+                2, false, multimapLimit(m), multimapDump(m));
             bool ok = multimapType_(m) == MULTIMAP_TYPE_FULL && b &&
                       multimapType_(b) == MULTIMAP_TYPE_FULL &&
                       mmf(m)->maxSize == want && mmf(b)->maxSize == want &&
                       multimapLimit(m) == FLEX_CAP_LEVEL_512 &&
                       multimapLimit(b) == FLEX_CAP_LEVEL_512 &&
-                      multimapCompresses(m) == (bool)compress &&
-                      multimapCompresses(b) == (bool)compress &&
                       multimapCount(b) == 1500;
             if (ok) {
                 multimapVerify(b);
             }
             if (!ok) {
-                ERR("compress %d: tiers %d/%d, maxSize %u/%u (want %u), "
-                    "limits %d/%d",
-                    compress, (int)multimapType_(m),
-                    b ? (int)multimapType_(b) : -1, (unsigned)mmf(m)->maxSize,
+                ERR("tiers %d/%d, maxSize %u/%u (want %u), limits %d/%d",
+                    (int)multimapType_(m), b ? (int)multimapType_(b) : -1,
+                    (unsigned)mmf(m)->maxSize,
                     b ? (unsigned)mmf(b)->maxSize : 0, (unsigned)want,
                     (int)multimapLimit(m), b ? (int)multimapLimit(b) : -1);
             }
@@ -9477,9 +9439,8 @@ int multimapTest(int, char *[]) {
                     const databox *row[] = {&key, &val};
                     multimapInsert(&m, row);
                 }
-                cleaner(multimapFree) multimap *b =
-                    multimapNewFromDump(2, set, multimapCompresses(m),
-                                        multimapLimit(m), multimapDump(m));
+                cleaner(multimapFree) multimap *b = multimapNewFromDump(
+                    2, set, multimapLimit(m), multimapDump(m));
                 if (!b || multimapIsSet(b) != (bool)set) {
                     ERR("set %d tier %zu: no rebuild", set, t);
                     continue;
@@ -9515,7 +9476,7 @@ int multimapTest(int, char *[]) {
         for (int limit = FLEX_CAP_LEVEL_0; limit <= FLEX_CAP_LEVEL_65536;
              limit++) {
             cleaner(multimapFree) multimap *empty = multimapNewFromDump(
-                2, false, false, (flexCapSizeLimit)limit, flexNew());
+                2, false, (flexCapSizeLimit)limit, flexNew());
             if (!empty || multimapCount(empty) != 0) {
                 ERR("limit %d: an empty dump did not rebuild empty", limit);
             }
@@ -9525,9 +9486,9 @@ int multimapTest(int, char *[]) {
         const databox one = databoxNewSigned(1);
         const databox two = databoxNewSigned(2);
         const databox *down[] = {&two, &one, &one, &one};
-        if (multimapNewFromDump(2, false, false, FLEX_CAP_LEVEL_2048,
+        if (multimapNewFromDump(2, false, FLEX_CAP_LEVEL_2048,
                                 flexNewFromDataboxPtrsExact(down, 4)) ||
-            multimapNewFromDump(2, false, false, FLEX_CAP_LEVEL_2048,
+            multimapNewFromDump(2, false, FLEX_CAP_LEVEL_2048,
                                 flexNewFromDataboxPtrsExact(down, 3))) {
             ERR("NewFromDump accepted unordered or partial rows");
         }
@@ -9558,10 +9519,9 @@ int multimapTest(int, char *[]) {
         /* Two passes of rows each: sized so each tier is reached */
         const int64_t counts[] = {10, 60, 1000};
         for (size_t t = 0; t < countof(limits); t++) {
-            for (int compress = 0; compress <= 1; compress++) {
+            {
                 cleaner(multimapFree) multimap *appended =
-                    compress ? multimapNewCompress(2, limits[t])
-                             : multimapNewLimit(2, limits[t]);
+                    multimapNewLimit(2, limits[t]);
                 cleaner(multimapFree) multimap *inserted =
                     multimapNewLimit(2, limits[t]);
 
@@ -9581,7 +9541,7 @@ int multimapTest(int, char *[]) {
                 multimapVerify(appended);
                 if (multimapType_(appended) != tiers[t] ||
                     multimapCount(appended) != multimapCount(inserted)) {
-                    ERR("tier %zu compress %d: type %d, %zu rows", t, compress,
+                    ERR("tier %zu: type %d, %zu rows", t,
                         (int)multimapType_(appended), multimapCount(appended));
                     continue;
                 }
@@ -9596,7 +9556,7 @@ int multimapTest(int, char *[]) {
                     if (!multimapIteratorNextInto(&b, rb, 2) ||
                         databoxCompare(&ra[0], &rb[0]) != 0 ||
                         databoxCompare(&ra[1], &rb[1]) != 0) {
-                        ERR("tier %zu compress %d: rows differ", t, compress);
+                        ERR("tier %zu: rows differ", t);
                         break;
                     }
                 }
@@ -9647,8 +9607,8 @@ int multimapTest(int, char *[]) {
     TEST("multimap: a Small map of one- or two-element rows that is not a "
          "set is its flex alone, through every entry operation") {
         /* Which maps start bare: rows of 1, of 2, of 3; a set; a
-         * compressing map; a 64 KB limit */
-        static const bool bare[] = {true, true, false, false, false, true};
+         * 64 KB limit */
+        static const bool bare[] = {true, true, false, false, true};
         for (size_t i = 0; i < countof(bare); i++) {
             cleaner(multimapFree) multimap *shape = nullptr;
             switch (i) {
@@ -9663,9 +9623,6 @@ int multimapTest(int, char *[]) {
                 break;
             case 3:
                 shape = multimapSetNew(2);
-                break;
-            case 4:
-                shape = multimapNewCompress(2, FLEX_CAP_LEVEL_2048);
                 break;
             default:
                 shape = multimapNewLimit(2, FLEX_CAP_LEVEL_65536);
