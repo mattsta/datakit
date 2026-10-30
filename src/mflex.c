@@ -2,6 +2,7 @@
 #include "mflexInternal.h"
 
 #include "cleaner.h"
+#include "dkDiag.h"
 
 #define PTRLIB_BITS_LOW 2
 #include "ptrlib.h"
@@ -45,12 +46,16 @@ enum stateBufferIndex { UNCOMPRESSED = 0, COMPRESSED = 1 };
 /* ====================================================================
  * Open / Close helpers
  * ==================================================================== */
+/* A block this process compressed decompresses whole, or memory is corrupt:
+ * the process stops (mflexOpenChecked is the form for outside bytes) */
 #define _MFLEX_OPEN(m)                                                         \
     do {                                                                       \
         if (_mflexType(m) == MFLEX_TYPE_CFLEX) {                               \
-            /* Note: this doesn't check for decompress failure... */           \
-            cflexConvertToFlex(mfc(m), &STATE_UNCOMPRESSED_FLEX,               \
-                               &STATE_UNCOMPRESSED_SIZE);                      \
+            if (!cflexConvertToFlex(mfc(m), &STATE_UNCOMPRESSED_FLEX,          \
+                                    &STATE_UNCOMPRESSED_SIZE)) {               \
+                DK_DIAG_FATAL(DK_DIAG_MFLEX_UNREADABLE, "%s",                  \
+                              "a compressed block did not decompress whole");  \
+            }                                                                  \
             f = STATE_UNCOMPRESSED_FLEX;                                       \
             STATE_UNCOMPRESSED_RETAIN;                                         \
         } else {                                                               \
@@ -318,6 +323,21 @@ flex *mflexOpen(const mflex *m, mflexState *state) {
 /* if you open as ReadOnly, you never have to Close() */
 const flex *mflexOpenReadOnly(const mflex *m, mflexState *state) {
     return (const flex *)mflexOpen(m, state);
+}
+
+const flex *mflexOpenChecked(const mflex *m, mflexState *state) {
+    if (_mflexType(m) != MFLEX_TYPE_CFLEX) {
+        STATE_UNCOMPRESSED_RELEASE;
+        return mff(m);
+    }
+
+    if (!cflexConvertToFlex(mfc(m), &STATE_UNCOMPRESSED_FLEX,
+                            &STATE_UNCOMPRESSED_SIZE)) {
+        return nullptr;
+    }
+
+    STATE_UNCOMPRESSED_RETAIN;
+    return STATE_UNCOMPRESSED_FLEX;
 }
 
 /* Attempt to compress 'f' using STATE_COMPRESSED. */
@@ -826,6 +846,32 @@ int mflexTest(int, char *[]) {
         mflexPushByType(&m, resetState, &box, FLEX_ENDPOINT_TAIL);
         if (mflexCount(m) != 1) {
             ERR("Expected 1 after post-reset push, got %zu", mflexCount(m));
+        }
+    }
+
+    TEST("a damaged compressed block: the checked open refuses it, an "
+         "intact one opens to the same bytes") {
+        /* @own: container; free=mflexFree */
+        flex *f = flexNew();
+        for (int i = 0; i < 200; i++) {
+            flexPushBytes(&f, "a compressible row of text", 26,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        cleaner(flexFree) flex *want = flexDuplicate(f);
+        cleaner(mflexFree) mflex *m = mflexConvertFromFlex(f, state);
+        const flex *got = mflexOpenChecked(m, state);
+        if (!mflexIsCompressed(m) || !got ||
+            flexBytes(got) != flexBytes(want) ||
+            memcmp(got, want, flexBytes(want)) != 0) {
+            ERR("%s", "an intact compressed block did not open to its bytes");
+        }
+
+        /* All-zero LZ4 input names a match at offset 0: never valid */
+        cflex *c = mfc(m);
+        const size_t data = cflexBytesCompressed(c);
+        memset(c + cflexBytes(c) - data, 0, data);
+        if (mflexOpenChecked(m, state)) {
+            ERR("%s", "a damaged compressed block opened");
         }
     }
 

@@ -39,6 +39,7 @@ static const char *const dkDiagCodeNames_[DK_DIAG_CODE_COUNT_] = {
     [DK_DIAG_TIMER_REENTERED] = "TIMER_REENTERED",
     [DK_DIAG_MULTIARRAY_INDEX] = "MULTIARRAY_INDEX",
     [DK_DIAG_MULTIMAP_SET_REWRITE] = "MULTIMAP_SET_REWRITE",
+    [DK_DIAG_MFLEX_UNREADABLE] = "MFLEX_UNREADABLE",
 };
 
 const char *dkDiagCodeName(dkDiagCode code) {

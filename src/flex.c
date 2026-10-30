@@ -6484,8 +6484,9 @@ static bool cflexDecompressEntriesIntoBuffer(const cflex *c, void *buffer,
         compressedDataStart, (char *)buffer, sizeWithoutHeader);
 #endif
 
-    /* return true if decompress restored all flex entry bytes */
-    return decompressedStatus >= 0;
+    /* True only when the entries came back whole: exactly the bytes the
+     * header states (a short result leaves the rest of the buffer stale) */
+    return decompressedStatus >= 0 && (size_t)decompressedStatus == bufferLen;
 }
 
 /* returns true if 'c' is expanded to a flex in 'fBuffer'

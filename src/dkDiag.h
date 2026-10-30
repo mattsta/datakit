@@ -84,6 +84,10 @@ typedef enum dkDiagCode {
     /* an in-place rewrite (replace, resize, increment) of a set map's row:
      * every element of a set row orders it, so the rewrite is refused */
     DK_DIAG_MULTIMAP_SET_REWRITE = 19,
+    /* a compressed block (mflex) that does not decompress to the size its
+     * header states: memory corruption (FATAL through mflexOpen;
+     * mflexOpenChecked reports nothing and answers NULL) */
+    DK_DIAG_MFLEX_UNREADABLE = 20,
     DK_DIAG_CODE_COUNT_ /* one past the last code; not a code */
 } dkDiagCode;
 

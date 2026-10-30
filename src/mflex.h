@@ -64,9 +64,15 @@ void mflexBulkAppendFlex(mflex **mm, mflexState *state, const flex *elements);
 void mflexDeleteOffsetCount(mflex **mm, mflexState *state, int32_t offset,
                             uint32_t count);
 
-/* mflex open (unwraps a flex usable for regular operations */
+/* mflex open (unwraps a flex usable for regular operations).  A block this
+ * process made always opens; one that does not decompress to the size its
+ * header states means memory is corrupt, and the process stops
+ * (DK_DIAG_MFLEX_UNREADABLE). */
 flex *mflexOpen(const mflex *m, mflexState *state);
 const flex *mflexOpenReadOnly(const mflex *m, mflexState *state);
+/* A read-only open for blocks from outside (restored, received): NULL
+ * when the block does not decompress whole */
+const flex *mflexOpenChecked(const mflex *m, mflexState *state);
 
 /* mflex re-compression */
 void mflexCloseGrow(mflex **mm, mflexState *state, flex *f);
