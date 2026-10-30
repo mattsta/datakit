@@ -88,8 +88,8 @@ in a scattered order (perfRegression `multitier`):
 
 | Setup                             | Memory  | Set     | Get, 9 in 10 on a tenth of keys | Get, any key |
 | --------------------------------- | ------- | ------- | ------------------------------- | ------------ |
-| all hot (no limits)               | 6.01 MB | 0.94 us | 0.33 us                         | 0.35 us      |
-| hot held to a quarter of the rows | 2.77 MB | 4.7 us  | 1.5 us                          | 9.3 us       |
+| all hot (no limits)               | 6.04 MB | 0.94 us | 0.33 us                         | 0.35 us      |
+| hot held to a quarter of the rows | 2.79 MB | 4.7 us  | 1.5 us                          | 9.3 us       |
 
 The hot path is multidict's. A read below the hot level costs a block decompression (about 2 us
 at the default 8 KB cold blocks) plus the moves it causes; the cold level's block size is the

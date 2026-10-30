@@ -129,7 +129,7 @@ against a multimap's 6 MB, with 2 us lookups (0.55 us at 1 KB blocks for
 2.48 MB) and 19 ns a row to scan; single-row writes cost about 5 us, sorted
 batches one recompression per block. multitier puts a multidict in front of
 a coldmap and a sink behind it: held to a quarter of the rows hot, the
-same 100,000 rows take 2.77 MB against 6.01 MB, reads of the hot tenth stay
+same 100,000 rows take 2.79 MB against 6.04 MB, reads of the hot tenth stay
 fast and a read from the cold level costs about 9 us. See
 [COLDMAP.md](modules/multi/COLDMAP.md) and
 [MULTITIER.md](modules/multi/MULTITIER.md).

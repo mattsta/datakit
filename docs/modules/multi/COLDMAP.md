@@ -111,13 +111,14 @@ Apple M1 Max, clang 22, `perf` preset; 100,000 rows of `"user:NNNNNNNN"` ->
 | ---------- | ------- | ------- | ----------- | ------------- |
 | 1 KB       | 2.48 MB | 0.55 us | 0.55 us     | 23 ns         |
 | 2 KB       | 1.80 MB | 0.73 us | 0.76 us     | 20 ns         |
-| 4 KB       | 1.51 MB | 1.2 us  | 1.2 us      | 19 ns         |
+| 4 KB       | 1.52 MB | 1.2 us  | 1.2 us      | 19 ns         |
 | 8 KB       | 1.27 MB | 2.0 us  | 2.0 us      | 19 ns         |
-| 16 KB      | 1.02 MB | 3.3 us  | 3.3 us      | 18 ns         |
-| 32 KB      | 0.88 MB | 5.9 us  | 6.0 us      | 17 ns         |
-| 64 KB      | 0.83 MB | 11.5 us | 11.5 us     | 17 ns         |
+| 16 KB      | 1.04 MB | 3.3 us  | 3.3 us      | 18 ns         |
+| 32 KB      | 0.93 MB | 5.9 us  | 6.0 us      | 17 ns         |
+| 64 KB      | 0.94 MB | 11.5 us | 11.5 us     | 17 ns         |
 
-A build costs about 100 ns a row; a single-row insert or delete about 5 us at 8 KB blocks. A
+Memory includes the coldmap's own scratch state, two buffers of one block each (128 KB at
+64 KB blocks). A build costs about 100 ns a row; a single-row insert or delete about 5 us at 8 KB blocks. A
 multimap holds the same rows in about 6 MB. How much a block saves depends on the rows: integer
 -> integer rows store at 87-92% of their flex size (kept plain under any required saving above
 that), short repeated phrases at 52-70%, records at 16-46% (perfRegression `mapBlockCompress`).
