@@ -236,6 +236,8 @@ static flexEnvelopeAlgo persistChecksumToEnvelopeAlgo(persistChecksum t) {
         return FLEX_ENV_ALGO_HMAC_SHA256;
     case PERSIST_CHECKSUM_HMAC_BLAKE3:
         return FLEX_ENV_ALGO_HMAC_BLAKE3;
+    case PERSIST_CHECKSUM_RAPIDHASH:
+        return FLEX_ENV_ALGO_RAPIDHASH;
     }
     return FLEX_ENV_ALGO_NONE;
 }
@@ -415,6 +417,7 @@ static bool persistChecksumWritable_(persistChecksum t) {
     case PERSIST_CHECKSUM_BLAKE3_KEYED:
     case PERSIST_CHECKSUM_HMAC_SHA256:
     case PERSIST_CHECKSUM_HMAC_BLAKE3:
+    case PERSIST_CHECKSUM_RAPIDHASH:
         return true;
     }
     return false;
@@ -6814,6 +6817,7 @@ int persistTest(int, char *[]) {
             PERSIST_CHECKSUM_XXH64,       PERSIST_CHECKSUM_XXH3_64,
             PERSIST_CHECKSUM_XXH3_128,    PERSIST_CHECKSUM_BLAKE3_KEYED,
             PERSIST_CHECKSUM_HMAC_SHA256, PERSIST_CHECKSUM_HMAC_BLAKE3,
+            PERSIST_CHECKSUM_RAPIDHASH,
         };
         const size_t algoCount = countof(algos);
 

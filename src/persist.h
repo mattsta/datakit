@@ -374,6 +374,7 @@ typedef enum persistChecksum {
     PERSIST_CHECKSUM_BLAKE3_KEYED = 4, /* 32 B, keyed (native BLAKE3) */
     PERSIST_CHECKSUM_HMAC_SHA256 = 5,  /* 32 B, keyed (RFC 4231) */
     PERSIST_CHECKSUM_HMAC_BLAKE3 = 6,  /* 32 B, keyed (RFC 2104 over BLAKE3) */
+    PERSIST_CHECKSUM_RAPIDHASH = 7,    /* 8 B, no key (rapidhash, seed 0) */
 } persistChecksum;
 
 /* True iff `t` is a keyed (tamper-evident) algorithm that requires a key. */

@@ -249,8 +249,8 @@ Snapshot bodies and WAL entries are each wrapped in an envelope with a
 digest (`persistConfig.checksumType`):
 
 - Checksums, no key: `PERSIST_CHECKSUM_XXH3_64` (the default), `XXH3_128`,
-  `XXH64` (slower than XXH3_64 at every size, same 8 bytes). For
-  local files on a trusted host.
+  `RAPIDHASH` (8 bytes, seed 0), `XXH64` (slower than XXH3_64 at every
+  size, same 8 bytes). For local files on a trusted host.
 - MACs, keyed: `PERSIST_CHECKSUM_HMAC_SHA256`, `HMAC_BLAKE3`, `BLAKE3_KEYED`
   (exactly 32-byte key). For bytes an attacker could alter between writer
   and reader. Set the key with `persistSetIntegrityKey`, or bind a keyring
