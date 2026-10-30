@@ -65,6 +65,22 @@ bool coldmapLookup(const coldmap *cm, mflexState *state, const databox *key,
                    databox *elements[]);
 bool coldmapExists(const coldmap *cm, mflexState *state, const databox *key);
 
+/* Writes decompress the block they change and compress it again (several
+ * microseconds a block): a coldmap suits rows that change rarely, or
+ * arrive in batches.  A block past the raw limit splits in two; one that
+ * stores under half the target merges with a neighbour when the two fit
+ * the raw limit. */
+
+/* Insert the row elements[0 .. elementsPerEntry - 1], replacing the row
+ * with its key; true when it replaced one */
+bool coldmapInsert(coldmap *cm, const databox *elements[]);
+/* Delete 'key's row; false when there is none */
+bool coldmapDelete(coldmap *cm, const databox *key);
+/* Delete the rows whose keys lie in [lo, hi] (a NULL bound: open at that
+ * end); a block wholly inside goes without being decompressed.  The bounds
+ * must not point into the coldmap's own rows.  Returns the rows deleted. */
+size_t coldmapDeleteRange(coldmap *cm, const databox *lo, const databox *hi);
+
 /* Rows in key order (forward) or reverse.  Next fills elements[0 ..
  * elementsPerEntry - 1] (key first) and opens blocks through 'state' as it
  * reaches them; a row's bytes stay valid until the next Next. */

@@ -2,6 +2,8 @@
 
 #include "cleaner.h"
 
+defcleaner(flex *, flexFree);
+
 /* One block: a flex of whole rows (compressed or plain), its first key as
  * an owned copy (routing never borrows block memory), and what reading it
  * needs without decompressing first */
@@ -31,36 +33,74 @@ struct coldmap {
 /* ====================================================================
  * Blocks
  * ==================================================================== */
-static void coldmapBlockAppend_(coldmap *cm, flex *f) {
+/* Heap bytes a routing key owns */
+static uint64_t coldmapKeyBytes_(const databox *key) {
+    return key->allocated ? (key->big ? sizeof(databoxWide) : key->len) : 0;
+}
+
+/* Block 'b's numbers out of the totals, before it changes or goes */
+static void coldmapBlockUncount_(coldmap *cm, const coldmapBlock *b) {
+    cm->rows -= b->count;
+    cm->rawBytes -= b->raw;
+    cm->storedBytes -= mflexBytesActual(b->rows);
+    cm->compressedBlocks -= mflexIsCompressed(b->rows);
+    cm->keyBytes -= coldmapKeyBytes_(&b->first);
+}
+
+/* Keep 'f' (rows, at least one) as block 'b' and count it: 'f' was opened
+ * from b->rows through the coldmap's state ('grew': rows came in, else
+ * only went), or is a new flex when b->rows is NULL */
+static void coldmapBlockStore_(coldmap *cm, coldmapBlock *b, flex *f,
+                               bool grew) {
+    databoxFreeData(&b->first);
+    databoxBig first = {};
+    flexGetByTypeBig(flexHead(f), &first);
+    b->first = databoxCopy((const databox *)&first);
+    b->count = (uint32_t)(flexCount(f) / cm->elementsPerEntry);
+    b->middle = (uint32_t)(flexMiddle(f, cm->elementsPerEntry) - f);
+    b->raw = (uint32_t)flexBytes(f);
+    if (!b->rows) {
+        /* @own: container; free=mflexFree */
+        b->rows = mflexConvertFromFlex(f, cm->state);
+    } else if (grew) {
+        mflexCloseGrow(&b->rows, cm->state, f);
+    } else {
+        mflexCloseShrink(&b->rows, cm->state, f);
+    }
+
+    cm->rows += b->count;
+    cm->rawBytes += b->raw;
+    cm->storedBytes += mflexBytesActual(b->rows);
+    cm->compressedBlocks += mflexIsCompressed(b->rows);
+    cm->keyBytes += coldmapKeyBytes_(&b->first);
+}
+
+/* A new, empty block at index 'at' (the blocks from 'at' move up one) */
+static coldmapBlock *coldmapBlockInsert_(coldmap *cm, size_t at) {
     if (cm->blockCount == cm->blockCap) {
         cm->blockCap = cm->blockCap ? cm->blockCap * 2 : 8;
         /* @own: container; free=coldmapFree */
         cm->blocks = zrealloc(cm->blocks, cm->blockCap * sizeof(*cm->blocks));
     }
 
-    coldmapBlock *b = &cm->blocks[cm->blockCount++];
-    databox first = {};
-    flexGetByType(flexHead(f), &first);
-    b->first = databoxCopy(&first);
-    if (b->first.allocated) {
-        cm->keyBytes += b->first.len;
-    }
-
-    b->count = (uint32_t)(flexCount(f) / cm->elementsPerEntry);
-    b->middle = (uint32_t)(flexMiddle(f, cm->elementsPerEntry) - f);
-    b->raw = (uint32_t)flexBytes(f);
-    /* @own: container; free=mflexFree */
-    b->rows = mflexConvertFromFlex(f, cm->state);
-
-    cm->rows += b->count;
-    cm->rawBytes += b->raw;
-    cm->storedBytes += mflexBytesActual(b->rows);
-    cm->compressedBlocks += mflexIsCompressed(b->rows);
+    memmove(&cm->blocks[at + 1], &cm->blocks[at],
+            (cm->blockCount - at) * sizeof(*cm->blocks));
+    cm->blockCount++;
+    cm->blocks[at] = (coldmapBlock){};
+    return &cm->blocks[at];
 }
 
 static void coldmapBlockRelease_(coldmapBlock *b) {
     mflexFree(b->rows);
     databoxFreeData(&b->first);
+}
+
+/* Drop block 'at', already counted out of the totals */
+static void coldmapBlockDrop_(coldmap *cm, size_t at) {
+    coldmapBlockRelease_(&cm->blocks[at]);
+    memmove(&cm->blocks[at], &cm->blocks[at + 1],
+            (cm->blockCount - at - 1) * sizeof(*cm->blocks));
+    cm->blockCount--;
 }
 
 /* The block whose key range holds 'key': the last block whose first key
@@ -188,8 +228,8 @@ coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
         }
 
         const uint64_t stored = cm->storedBytes;
-        coldmapBlockAppend_(cm, block);
-        const coldmapBlock *b = &cm->blocks[cm->blockCount - 1];
+        coldmapBlock *b = coldmapBlockInsert_(cm, cm->blockCount);
+        coldmapBlockStore_(cm, b, block, true);
         storedPermille = (cm->storedBytes - stored) * 1000 / b->raw;
         storedPermille = storedPermille ? storedPermille : 1;
         if (!rows) {
@@ -219,6 +259,160 @@ void coldmapFree(coldmap *cm) {
     zfree(cm->blocks);
     mflexStateFree(cm->state);
     zfree(cm);
+}
+
+/* ====================================================================
+ * Writing
+ * ==================================================================== */
+/* Block 'at + 1' appended to block 'at' */
+static void coldmapMergeNext_(coldmap *cm, size_t at) {
+    coldmapBlock *upperBlock = &cm->blocks[at + 1];
+    cleaner(flexFree) flex *upper =
+        flexDuplicate(mflexOpenReadOnly(upperBlock->rows, cm->state));
+    coldmapBlockUncount_(cm, upperBlock);
+    coldmapBlockDrop_(cm, at + 1);
+
+    coldmapBlock *b = &cm->blocks[at];
+    coldmapBlockUncount_(cm, b);
+    flex *f = mflexOpen(b->rows, cm->state);
+    flexBulkAppendFlex(&f, upper);
+    coldmapBlockStore_(cm, b, f, true);
+}
+
+/* Block 'at' merged with a neighbour when it stores under half the target
+ * and the two fit the raw limit together */
+static void coldmapMaybeMerge_(coldmap *cm, size_t at) {
+    if (at >= cm->blockCount || cm->blockCount < 2 ||
+        mflexBytesActual(cm->blocks[at].rows) * 2 >= cm->storedTarget) {
+        return;
+    }
+
+    const size_t lower = at + 1 < cm->blockCount ? at : at - 1;
+    if ((uint64_t)cm->blocks[lower].raw + cm->blocks[lower + 1].raw <=
+        cm->rawCap) {
+        coldmapMergeNext_(cm, lower);
+    }
+}
+
+bool coldmapInsert(coldmap *cm, const databox *elements[]) {
+    const multimapElements epe = cm->elementsPerEntry;
+    if (!cm->blockCount) {
+        /* @own: container; free=mflexFree */
+        flex *f = flexNew();
+        for (multimapElements e = 0; e < epe; e++) {
+            flexPushByTypeExact(&f, elements[e], FLEX_ENDPOINT_TAIL);
+        }
+        coldmapBlockStore_(cm, coldmapBlockInsert_(cm, 0), f, true);
+        return false;
+    }
+
+    /* Below every key: the first block takes it */
+    size_t at;
+    if (!coldmapRoute_(cm, elements[0], &at)) {
+        at = 0;
+    }
+
+    coldmapBlock *b = &cm->blocks[at];
+    coldmapBlockUncount_(cm, b);
+    flex *f = mflexOpen(b->rows, cm->state);
+    flexEntry *middle = f + b->middle;
+    const bool replaced =
+        flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+            &f, epe, elements, &middle, true, nullptr);
+
+    /* Past the raw limit: the upper half becomes the next block */
+    flex *upper = nullptr;
+    if (flexBytes(f) > cm->rawCap && flexCount(f) >= 2 * (size_t)epe) {
+        /* @own: container; free=mflexFree */
+        upper = flexSplitMiddle(&f, epe, flexMiddle(f, epe));
+    }
+
+    coldmapBlockStore_(cm, b, f, true);
+    if (upper) {
+        coldmapBlockStore_(cm, coldmapBlockInsert_(cm, at + 1), upper, true);
+    }
+    return replaced;
+}
+
+bool coldmapDelete(coldmap *cm, const databox *key) {
+    size_t at;
+    if (!coldmapRoute_(cm, key, &at)) {
+        return false;
+    }
+
+    /* An open that changes nothing needs no close */
+    coldmapBlock *b = &cm->blocks[at];
+    flex *f = mflexOpen(b->rows, cm->state);
+    flexEntry *fe = flexFindByTypeSortedWithMiddle(f, cm->elementsPerEntry, key,
+                                                   f + b->middle);
+    if (!fe) {
+        return false;
+    }
+
+    coldmapBlockUncount_(cm, b);
+    flexEntry *middle = f + b->middle;
+    flexDeleteSortedValueWithMiddle(&f, cm->elementsPerEntry, fe, &middle);
+    if (!flexCount(f)) {
+        mflexCloseShrink(&b->rows, cm->state, f);
+        coldmapBlockDrop_(cm, at);
+        return true;
+    }
+
+    coldmapBlockStore_(cm, b, f, false);
+    coldmapMaybeMerge_(cm, at);
+    return true;
+}
+
+size_t coldmapDeleteRange(coldmap *cm, const databox *lo, const databox *hi) {
+    if (lo && hi && databoxCompare(lo, hi) > 0) {
+        return 0;
+    }
+
+    size_t at = 0;
+    if (lo && !coldmapRoute_(cm, lo, &at)) {
+        at = 0;
+    }
+
+    const size_t start = at;
+    size_t deleted = 0;
+    while (at < cm->blockCount) {
+        coldmapBlock *b = &cm->blocks[at];
+        if (hi && databoxCompare(&b->first, hi) > 0) {
+            break;
+        }
+
+        /* A block whose keys all lie in the range goes whole, never
+         * decompressed: it starts at or after 'lo', and the next block
+         * starts at or before 'hi' (or there is no 'hi') */
+        const bool fromInside = !lo || databoxCompare(&b->first, lo) >= 0;
+        const bool toInside =
+            !hi || (at + 1 < cm->blockCount &&
+                    databoxCompare(&cm->blocks[at + 1].first, hi) <= 0);
+        coldmapBlockUncount_(cm, b);
+        if (fromInside && toInside) {
+            deleted += b->count;
+            coldmapBlockDrop_(cm, at);
+            continue;
+        }
+
+        flex *f = mflexOpen(b->rows, cm->state);
+        deleted += flexDeleteSortedKeyRange(&f, cm->elementsPerEntry, lo, hi,
+                                            f + b->middle);
+        if (!flexCount(f)) {
+            mflexCloseShrink(&b->rows, cm->state, f);
+            coldmapBlockDrop_(cm, at);
+            continue;
+        }
+
+        coldmapBlockStore_(cm, b, f, false);
+        at++;
+    }
+
+    /* The edges may have shrunk: the upper one first, so the lower keeps
+     * its index */
+    coldmapMaybeMerge_(cm, start + 1);
+    coldmapMaybeMerge_(cm, start);
+    return deleted;
 }
 
 /* ====================================================================
@@ -389,7 +583,6 @@ void coldmapGetStats(const coldmap *cm, coldmapStats *stats) {
 #include "multimap.h"
 
 defcleaner(coldmap *, coldmapFree);
-defcleaner(flex *, flexFree);
 defcleaner(mflexState *, mflexStateFree);
 defcleaner(multimap *, multimapFree);
 defcleanerName(databox *, zfree, Boxes);
@@ -437,6 +630,34 @@ static databox coldmapTestKey_(coldmapShape_ shape, size_t i, char *buf,
         return DATABOX_WITH_BYTES((uint8_t *)buf, (size_t)klen);
     }
     return databoxNewSigned((int64_t)i);
+}
+
+/* Every block holds rows, its routing key is its first row's key, first
+ * keys ascend, and the totals are the blocks' sums */
+static bool coldmapVerify_(const coldmap *cm, mflexState *state) {
+    uint64_t rows = 0;
+    uint64_t raw = 0;
+    uint64_t stored = 0;
+    uint64_t compressed = 0;
+    for (size_t i = 0; i < cm->blockCount; i++) {
+        const coldmapBlock *b = &cm->blocks[i];
+        const flex *f = mflexOpenReadOnly(b->rows, state);
+        databoxBig head = {};
+        flexGetByTypeBig(flexHead(f), &head);
+        if (!b->count || b->count * cm->elementsPerEntry != flexCount(f) ||
+            b->raw != flexBytes(f) ||
+            (flexEntry *)f + b->middle != flexMiddle(f, cm->elementsPerEntry) ||
+            databoxCompare(&b->first, (const databox *)&head) != 0 ||
+            (i && databoxCompare(&cm->blocks[i - 1].first, &b->first) >= 0)) {
+            return false;
+        }
+        rows += b->count;
+        raw += b->raw;
+        stored += mflexBytesActual(b->rows);
+        compressed += mflexIsCompressed(b->rows);
+    }
+    return rows == cm->rows && raw == cm->rawBytes &&
+           stored == cm->storedBytes && compressed == cm->compressedBlocks;
 }
 
 int coldmapTest(int argc, char *argv[]) {
@@ -633,6 +854,78 @@ int coldmapTest(int argc, char *argv[]) {
             ERR("ints: %" PRIu64 " compressed blocks, %" PRIu64
                 " stored of %" PRIu64,
                 st.compressedBlocks, st.storedBytes, st.rawBytes);
+        }
+    }
+
+    TEST("inserts, deletes and range deletes agree with a multimap, blocks "
+         "splitting and merging") {
+        static const coldmapConfig configs[] = {
+            {}, {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128}};
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        for (size_t c = 0; c < countof(configs); c++) {
+            cleaner(multimapFree) multimap *m =
+                coldmapTestRows_(COLDMAP_SHAPE_RECORDS, 300);
+            cleaner(coldmapFree) coldmap *cm =
+                coldmapNewFromDump(2, &configs[c], multimapDump(m));
+            uint64_t rng = 0x243F6A8885A308D3ULL + c;
+            char key[32];
+            char hiKey[32];
+            char value[64];
+            size_t splitsSeen = 0;
+            for (size_t step = 0; step < 6000; step++) {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                const size_t id = (rng >> 8) % 1200;
+                const uint32_t op = (uint32_t)(rng % 16);
+                const size_t blocksBefore = cm->blockCount;
+                const databox k = coldmapTestKey_(COLDMAP_SHAPE_RECORDS, id,
+                                                  key, sizeof(key));
+                if (op < 9) {
+                    const int vlen = snprintf(
+                        value, sizeof(value),
+                        "{\"name\":\"user %zu\",\"step\":%zu}", id, step % 5);
+                    const databox v =
+                        DATABOX_WITH_BYTES((uint8_t *)value, (size_t)vlen);
+                    const databox *row[2] = {&k, &v};
+                    const bool had = multimapExists(m, &k);
+                    multimapInsert(&m, row);
+                    if (coldmapInsert(cm, row) != had) {
+                        ERR("config %zu step %zu: insert replaced", c, step);
+                    }
+                } else if (op < 15) {
+                    if (multimapDelete(&m, &k) != coldmapDelete(cm, &k)) {
+                        ERR("config %zu step %zu: delete", c, step);
+                    }
+                } else {
+                    /* A range of up to 40 ids, sometimes open at one end */
+                    const databox hi = coldmapTestKey_(COLDMAP_SHAPE_RECORDS,
+                                                       id + (rng >> 40) % 40,
+                                                       hiKey, sizeof(hiKey));
+                    const databox *lo = (rng >> 50) % 8 ? &k : nullptr;
+                    const databox *top = (rng >> 54) % 8 ? &hi : nullptr;
+                    if (lo || top) {
+                        const size_t want = multimapDeleteRange(&m, lo, top);
+                        if (coldmapDeleteRange(cm, lo, top) != want) {
+                            ERR("config %zu step %zu: range", c, step);
+                        }
+                    }
+                }
+                splitsSeen += cm->blockCount > blocksBefore;
+
+                if (step % 500 == 499 || coldmapCount(cm) != multimapCount(m)) {
+                    cleaner(flexFree) flex *want = multimapDump(m);
+                    cleaner(flexFree) flex *got = coldmapDump(cm, state);
+                    if (!flexEqual(want, got) || !coldmapVerify_(cm, state)) {
+                        ERR("config %zu step %zu: rows or blocks differ", c,
+                            step);
+                        break;
+                    }
+                }
+            }
+            if (c == 1 && !splitsSeen) {
+                ERR("%s", "512-byte blocks never split");
+            }
         }
     }
 
