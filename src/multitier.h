@@ -36,7 +36,9 @@ typedef struct multitierConfig {
     uint64_t hotMaxBytes;
     /* The hot level's LRU levels (0: 4) */
     uint32_t hotLevels;
-    /* Rows waiting for the cold level before they go in together (0: 64) */
+    /* Rows waiting for the cold level before they go in together: at
+     * least this many (0: 64), and at least 4 per cold block, so each
+     * block a batch rewrites takes several rows */
     uint32_t demoteBatch;
     /* The cold level's limit of stored bytes (0: no limit, so no row ever
      * reaches the sink) */
@@ -69,7 +71,8 @@ typedef struct multitierStats {
     uint64_t hotRows;
     uint64_t hotBytes; /* key and value bytes */
     uint64_t pendingRows;
-    uint64_t coldRows;
+    uint64_t coldRows;         /* live: a copy above supersedes the shadowed */
+    uint64_t coldShadowedRows; /* superseded, leaving with the next batch */
     uint64_t coldStoredBytes;
     uint64_t coldRawBytes;
     uint64_t coldBlocks;

@@ -424,6 +424,67 @@ bool coldmapInsertMany(coldmap *cm, const flex *rows, size_t *replaced) {
     return true;
 }
 
+bool coldmapDeleteMany(coldmap *cm, const flex *keys, size_t *deleted) {
+    if (!coldmapRowsAscend_(keys, 1)) {
+        return false;
+    }
+
+    const multimapElements epe = cm->elementsPerEntry;
+    const size_t total = flexCount(keys);
+    flexEntry *fe = total ? flexHead(keys) : nullptr;
+    size_t done = 0;
+    size_t gone = 0;
+    databoxBig key = {};
+    while (done < total) {
+        fe = coldmapDecodeRow_(keys, fe, 1, &key);
+        size_t at;
+        if (!coldmapRoute_(cm, (const databox *)&key, &at)) {
+            done++; /* below every key: no row */
+            continue;
+        }
+
+        /* Every following key routed to this block goes with it: one
+         * decompression and one compression for the batch */
+        coldmapBlock *b = &cm->blocks[at];
+        const databox *next =
+            at + 1 < cm->blockCount ? &cm->blocks[at + 1].first : nullptr;
+        coldmapBlockUncount_(cm, b);
+        flex *f = mflexOpen(b->rows, cm->state);
+        flexEntry *middle = f + b->middle;
+        for (;;) {
+            flexEntry *row = flexFindByTypeSortedWithMiddle(
+                f, epe, (const databox *)&key, middle);
+            if (row) {
+                flexDeleteSortedValueWithMiddle(&f, epe, row, &middle);
+                gone++;
+            }
+            done++;
+            if (done == total || !flexCount(f)) {
+                break;
+            }
+
+            flexEntry *after = coldmapDecodeRow_(keys, fe, 1, &key);
+            if (next && databoxCompare((const databox *)&key, next) >= 0) {
+                break; /* the next block's key: decoded again there */
+            }
+            fe = after;
+        }
+
+        if (!flexCount(f)) {
+            mflexCloseShrink(&b->rows, cm->state, f);
+            coldmapBlockDrop_(cm, at);
+            continue;
+        }
+        coldmapBlockStore_(cm, b, f, false);
+        coldmapMaybeMerge_(cm, at);
+    }
+
+    if (deleted) {
+        *deleted = gone;
+    }
+    return true;
+}
+
 flex *coldmapRemoveBlock(coldmap *cm, size_t index) {
     if (index >= cm->blockCount) {
         return nullptr;
@@ -1341,6 +1402,60 @@ int coldmapTest(int argc, char *argv[]) {
         flexPushByTypeExact(&bad, &one, FLEX_ENDPOINT_TAIL);
         if (coldmapInsertMany(cm, bad, nullptr) || coldmapCount(cm) != 5) {
             ERR("%s", "rows out of order were taken");
+        }
+    }
+
+    TEST("batches of sorted keys delete as key-at-a-time deletes would") {
+        static const coldmapConfig configs[] = {
+            {}, {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128}};
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        for (size_t c = 0; c < countof(configs); c++) {
+            cleaner(multimapFree) multimap *m =
+                coldmapTestRows_(COLDMAP_SHAPE_RECORDS, 1500);
+            cleaner(coldmapFree) coldmap *cm =
+                coldmapNewFromDump(2, &configs[c], multimapDump(m));
+            uint64_t rng = 0xA4093822299F31D0ULL + c;
+            char key[32];
+            for (size_t batch = 0; batch < 30; batch++) {
+                /* Ascending ids, present (even) and absent (odd) alike */
+                cleaner(flexFree) flex *keys = flexNew();
+                size_t id = (rng >> 20) % 400;
+                size_t want = 0;
+                const size_t count = 1 + (rng >> 30) % 150;
+                for (size_t r = 0; r < count; r++) {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 7;
+                    rng ^= rng << 17;
+                    id += 1 + (rng >> 33) % 7;
+                    const databox k = coldmapTestKey_(COLDMAP_SHAPE_RECORDS, id,
+                                                      key, sizeof(key));
+                    flexPushByTypeExact(&keys, &k, FLEX_ENDPOINT_TAIL);
+                    want += multimapDelete(&m, &k);
+                }
+
+                size_t deleted = 0;
+                if (!coldmapDeleteMany(cm, keys, &deleted) || deleted != want) {
+                    ERR("config %zu batch %zu: %zu deleted, want %zu", c, batch,
+                        deleted, want);
+                }
+            }
+
+            cleaner(flexFree) flex *want = multimapDump(m);
+            cleaner(flexFree) flex *got = coldmapDump(cm, state);
+            if (!flexEqual(want, got) || !coldmapVerify_(cm, state)) {
+                ERR("config %zu: rows or blocks differ", c);
+            }
+
+            /* Keys out of order change nothing */
+            cleaner(flexFree) flex *bad = flexNew();
+            const databox hi =
+                coldmapTestKey_(COLDMAP_SHAPE_RECORDS, 900, key, sizeof(key));
+            flexPushByTypeExact(&bad, &hi, FLEX_ENDPOINT_TAIL);
+            flexPushByTypeExact(&bad, &hi, FLEX_ENDPOINT_TAIL);
+            if (coldmapDeleteMany(cm, bad, nullptr) ||
+                coldmapCount(cm) != multimapCount(m)) {
+                ERR("config %zu: repeated keys taken", c);
+            }
         }
     }
 

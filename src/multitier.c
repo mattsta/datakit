@@ -6,10 +6,16 @@
 
 defcleaner(flex *, flexFree);
 
+/* Rows a demotion batch holds per cold block, at least */
+static constexpr size_t MULTITIER_ROWS_PER_COLD_BLOCK = 4;
+
 struct multitier {
     multidict *hot;
     multidictClass *hotClass;
     multimap *pending; /* [key, value] rows the hot level gave up, sorted */
+    /* Keys whose cold row a copy above supersedes (in the hot level or
+     * the batch), sorted: those rows leave the cold level together */
+    multimap *shadowed;
     coldmap *cold;
     mflexState *state; /* the cold level's reads */
     multitierConfig config;
@@ -56,23 +62,69 @@ static void multitierColdPressure_(multitier *t) {
         t->rng ^= t->rng << 17;
         cleaner(flexFree) flex *rows =
             coldmapRemoveBlock(t->cold, t->rng % cs.blocks);
-        if (t->config.sink) {
-            t->config.sink(t->config.sinkCtx, rows);
+
+        /* A shadowed row is superseded by its copy above: it goes, and
+         * only the live rows reach the sink */
+        cleaner(flexFree) flex *live = flexNew();
+        flexEntry *fe = flexHead(rows);
+        for (size_t r = 0; r < flexCount(rows) / 2; r++) {
+            databoxBig row[2] = {};
+            flexGetByTypeBig(fe, &row[0]);
+            fe = flexNext(rows, fe);
+            flexGetByTypeBig(fe, &row[1]);
+            fe = flexNext(rows, fe);
+            if (!multimapDelete(&t->shadowed, (const databox *)&row[0])) {
+                const databox *both[2] = {(const databox *)&row[0],
+                                          (const databox *)&row[1]};
+                flexAppendMultipleExact(&live, 2, both);
+            }
         }
-        t->sunkRows += flexCount(rows) / 2;
+
+        if (t->config.sink && flexCount(live)) {
+            t->config.sink(t->config.sinkCtx, live);
+        }
+        t->sunkRows += flexCount(live) / 2;
         t->sunkBlocks++;
         coldmapGetStats(t->cold, &cs);
     }
 }
 
-void multitierFlush(multitier *t) {
-    if (!multimapCount(t->pending)) {
+/* The shadowed rows leave the cold level together once there are several
+ * per block: one recompression per block they share */
+static void multitierShadowPressure_(multitier *t, bool all) {
+    const size_t perBlock =
+        MULTITIER_ROWS_PER_COLD_BLOCK * coldmapBlockCount(t->cold);
+    const size_t count = multimapCount(t->shadowed);
+    if (!count || (!all && count < (perBlock > t->config.demoteBatch
+                                        ? perBlock
+                                        : t->config.demoteBatch))) {
         return;
     }
 
-    cleaner(flexFree) flex *rows = multimapDump(t->pending);
-    coldmapInsertMany(t->cold, rows, nullptr);
-    multimapReset(&t->pending);
+    cleaner(flexFree) flex *keys = multimapDump(t->shadowed);
+    coldmapDeleteMany(t->cold, keys, nullptr);
+    multimapReset(&t->shadowed);
+}
+
+void multitierFlush(multitier *t) {
+    if (multimapCount(t->pending)) {
+        /* Each row replaces its key's cold row: a shadow mark on it ends */
+        cleaner(flexFree) flex *rows = multimapDump(t->pending);
+        if (multimapCount(t->shadowed)) {
+            flexEntry *fe = flexHead(rows);
+            for (size_t r = 0; r < flexCount(rows) / 2; r++) {
+                databoxBig key = {};
+                flexGetByTypeBig(fe, &key);
+                multimapDelete(&t->shadowed, (const databox *)&key);
+                fe = flexNext(rows, fe);
+                fe = flexNext(rows, fe);
+            }
+        }
+        coldmapInsertMany(t->cold, rows, nullptr);
+        multimapReset(&t->pending);
+    }
+
+    multitierShadowPressure_(t, true);
     multitierColdPressure_(t);
 }
 
@@ -86,7 +138,12 @@ static void multitierHotPressure_(multitier *t, const databox *keep) {
     t->keep = keep;
     multidictEvictToLimit(t->hot);
     t->keep = nullptr;
-    if (multimapCount(t->pending) >= t->config.demoteBatch) {
+    /* Rows land in random blocks: a batch of several per cold block
+     * shares each block's recompression among them */
+    const size_t perBlock =
+        MULTITIER_ROWS_PER_COLD_BLOCK * coldmapBlockCount(t->cold);
+    if (multimapCount(t->pending) >=
+        (perBlock > t->config.demoteBatch ? perBlock : t->config.demoteBatch)) {
         multitierFlush(t);
     }
 }
@@ -121,6 +178,8 @@ multitier *multitierNew(const multitierConfig *config) {
     multidictSetMaxMemory(t->hot, c->hotMaxBytes);
     /* @own: container; free=multimapFree */
     t->pending = multimapNew(2);
+    /* @own: container; free=multimapFree */
+    t->shadowed = multimapSetNew(1);
     /* @own: container; free=mflexStateFree */
     t->state = mflexStateCreate();
     return t;
@@ -134,6 +193,7 @@ void multitierFree(multitier *t) {
     multidictFree(t->hot);
     multidictDefaultClassFree(t->hotClass);
     multimapFree(t->pending);
+    multimapFree(t->shadowed);
     coldmapFree(t->cold);
     mflexStateFree(t->state);
     zfree(t);
@@ -142,14 +202,24 @@ void multitierFree(multitier *t) {
 /* ====================================================================
  * Reads and writes
  * ==================================================================== */
+/* 'key's live cold row is superseded: it leaves with the next batch */
+static void multitierShadow_(multitier *t, const databox *key) {
+    const databox *row[1] = {key};
+    multimapInsert(&t->shadowed, row);
+    multitierShadowPressure_(t, false);
+}
+
 bool multitierSet(multitier *t, const databox *key, const databox *value) {
-    /* A key new to the hot level may sit lower: that copy goes */
+    /* A key new to the hot level may sit lower: that copy goes (a cold
+     * row by a shadow mark, not a rewrite of its block) */
     bool isNew = multidictPut(t->hot, key, value);
     if (isNew) {
         if (multimapDelete(&t->pending, key)) {
             isNew = false;
-        } else if (coldmapCount(t->cold) && coldmapDelete(t->cold, key)) {
+        } else if (coldmapCount(t->cold) &&
+                   coldmapExists(t->cold, t->state, key)) {
             isNew = false;
+            multitierShadow_(t, key);
         }
     }
 
@@ -158,12 +228,13 @@ bool multitierSet(multitier *t, const databox *key, const databox *value) {
 }
 
 /* 'key's value below the hot level (borrowed from the batch or the cold
- * level's read state) */
+ * level's read state); a shadowed cold row is not live */
 static bool multitierFindBelow_(multitier *t, const databox *key,
                                 databox *value, bool *fromBatch) {
     databox *values[1] = {value};
     *fromBatch = multimapLookup(t->pending, key, values);
-    return *fromBatch || coldmapLookup(t->cold, t->state, key, values);
+    return *fromBatch || (!multimapExists(t->shadowed, key) &&
+                          coldmapLookup(t->cold, t->state, key, values));
 }
 
 bool multitierGet(multitier *t, const databox *key, databox *value) {
@@ -185,7 +256,7 @@ bool multitierGet(multitier *t, const databox *key, databox *value) {
     if (fromBatch) {
         multimapDelete(&t->pending, key);
     } else {
-        coldmapDelete(t->cold, key);
+        multitierShadow_(t, key);
     }
     t->coldHits++;
     multitierHotPressure_(t, key);
@@ -201,18 +272,25 @@ bool multitierPeek(multitier *t, const databox *key, databox *value) {
 }
 
 bool multitierDelete(multitier *t, const databox *key) {
-    return multidictDelete(t->hot, key) || multimapDelete(&t->pending, key) ||
-           coldmapDelete(t->cold, key);
+    if (multidictDelete(t->hot, key) || multimapDelete(&t->pending, key)) {
+        /* A cold row it superseded goes with it */
+        if (multimapDelete(&t->shadowed, key)) {
+            coldmapDelete(t->cold, key);
+        }
+        return true;
+    }
+
+    return coldmapDelete(t->cold, key);
 }
 
 size_t multitierCount(const multitier *t) {
     return multidictCount(t->hot) + multimapCount(t->pending) +
-           coldmapCount(t->cold);
+           coldmapCount(t->cold) - multimapCount(t->shadowed);
 }
 
 size_t multitierBytes(const multitier *t) {
     return sizeof(*t) + multidictBytes(t->hot) + multimapBytes(t->pending) +
-           coldmapBytes(t->cold);
+           multimapBytes(t->shadowed) + coldmapBytes(t->cold);
 }
 
 void multitierGetStats(const multitier *t, multitierStats *stats) {
@@ -222,7 +300,8 @@ void multitierGetStats(const multitier *t, multitierStats *stats) {
         .hotRows = multidictCount(t->hot),
         .hotBytes = multidictKeyBytes(t->hot) + multidictValBytes(t->hot),
         .pendingRows = multimapCount(t->pending),
-        .coldRows = cs.rows,
+        .coldRows = cs.rows - multimapCount(t->shadowed),
+        .coldShadowedRows = multimapCount(t->shadowed),
         .coldStoredBytes = cs.storedBytes,
         .coldRawBytes = cs.rawBytes,
         .coldBlocks = cs.blocks,

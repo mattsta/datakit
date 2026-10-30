@@ -93,6 +93,11 @@ bool coldmapInsert(coldmap *cm, const databox *elements[]);
  * compression.  'replaced' (may be NULL): how many replaced a row.  False,
  * nothing changed, when the rows do not ascend. */
 bool coldmapInsertMany(coldmap *cm, const flex *rows, size_t *replaced);
+/* Delete the row of every key in 'keys' (a flex of keys alone, strictly
+ * ascending; not consumed): the keys bound for one block go with one
+ * decompression and one compression.  'deleted' (may be NULL): rows
+ * deleted.  False, nothing changed, when the keys do not ascend. */
+bool coldmapDeleteMany(coldmap *cm, const flex *keys, size_t *deleted);
 /* Remove block 'index' (0 .. coldmapBlockCount - 1) whole: its rows, in
  * key order as a dump-form flex the caller frees; NULL past the end */
 [[nodiscard]] flex *coldmapRemoveBlock(coldmap *cm, size_t index);
