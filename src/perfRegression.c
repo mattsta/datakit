@@ -2342,6 +2342,103 @@ static void benchMultilist(void) {
 defcleanerName(multilist **, zfree, PerfLists);
 defcleanerName(multimap **, zfree, PerfMaps);
 
+/* Compressibility of map-shaped blocks, as a sorted container's inner flex
+ * holds them: rows in key order packed into flexes of 512 B, 2 KB, 8 KB
+ * and 64 KB, three row shapes (integer -> integer; integer -> a short
+ * value repeating 64 phrases; "user:NNNNNNNN" -> a small JSON-like
+ * record), each block compressed and opened through mflex (LZ4).  Rows:
+ * "<shape>/<size>/close" ns per block to compress (bytes: the average
+ * block stored), "<shape>/<size>/open" ns per block to decompress (bytes:
+ * the average block's flex) */
+static void benchMapBlockCompress(void) {
+    static const char *const phrases[8] = {"pending", "active",    "archived",
+                                           "deleted", "suspended", "review",
+                                           "shipped", "returned"};
+    static const struct {
+        const char *name;
+        size_t bytes;
+    } sizes[] = {{"512", 512}, {"2k", 2048}, {"8k", 8192}, {"64k", 65536}};
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+    for (int shape = 0; shape < 3; shape++) {
+        static const char *const shapes[3] = {"int", "phrase", "record"};
+        for (size_t s = 0; s < countof(sizes); s++) {
+            constexpr uint32_t rowsTotal = 200'000;
+            flex *blocks[4096];
+            uint32_t blockCount = 0;
+            /* @own: container; free=flexFree */
+            flex *cur = flexNew();
+            char keyBuf[32];
+            char valBuf[96];
+            for (uint32_t i = 0; i < rowsTotal && blockCount < 4096; i++) {
+                databox key = databoxNewSigned((int64_t)i * 3);
+                databox val = databoxNewSigned((int64_t)(i * 7919u % 100'000));
+                if (shape == 1) {
+                    const int n = snprintf(valBuf, sizeof(valBuf), "%s-%u",
+                                           phrases[i % 8], (i * 7919u) % 64u);
+                    val = databoxNewBytes(valBuf, (size_t)n);
+                } else if (shape == 2) {
+                    const int kn =
+                        snprintf(keyBuf, sizeof(keyBuf), "user:%08u", i);
+                    const int vn = snprintf(
+                        valBuf, sizeof(valBuf),
+                        "{\"plan\":\"%s\",\"seats\":%u,\"region\":\"r%u\"}",
+                        phrases[i % 8], i % 50, i % 7);
+                    key = databoxNewBytes(keyBuf, (size_t)kn);
+                    val = databoxNewBytes(valBuf, (size_t)vn);
+                }
+                const databox *row[2] = {&key, &val};
+                flexAppendMultipleExact(&cur, 2, row);
+                if (flexBytes(cur) >= sizes[s].bytes) {
+                    blocks[blockCount++] = cur;
+                    /* @own: container; free=flexFree */
+                    cur = flexNew();
+                }
+            }
+            flexFree(cur);
+
+            /* Compress each block (mflex keeps it stored compressed when
+             * that is smaller), then open each */
+            mflex *stored[4096];
+            size_t rawBytes = 0;
+            size_t storedBytes = 0;
+            double t0 = timeUtilMonotonicSec();
+            for (uint32_t b = 0; b < blockCount; b++) {
+                rawBytes += flexBytes(blocks[b]);
+                /* @own: container; free=mflexFree */
+                flex *copy = flexDuplicate(blocks[b]);
+                stored[b] = mflexConvertFromFlex(copy, state);
+            }
+            const double closeSecs = timeUtilMonotonicSec() - t0;
+            for (uint32_t b = 0; b < blockCount; b++) {
+                storedBytes += mflexBytesActual(stored[b]);
+            }
+
+            t0 = timeUtilMonotonicSec();
+            for (uint32_t b = 0; b < blockCount; b++) {
+                const flex *open = mflexOpenReadOnly(stored[b], state);
+                perfContainerSink += flexCount(open);
+            }
+            const double openSecs = timeUtilMonotonicSec() - t0;
+
+            char name[48];
+            snprintf(name, sizeof(name), "%s/%s/close", shapes[shape],
+                     sizes[s].name);
+            emitRow("mapBlockCompress", name,
+                    blockCount ? storedBytes / blockCount : 0, blockCount,
+                    closeSecs);
+            snprintf(name, sizeof(name), "%s/%s/open", shapes[shape],
+                     sizes[s].name);
+            emitRow("mapBlockCompress", name,
+                    blockCount ? rawBytes / blockCount : 0, blockCount,
+                    openSecs);
+            for (uint32_t b = 0; b < blockCount; b++) {
+                flexFree(blocks[b]);
+                mflexFree(stored[b]);
+            }
+        }
+    }
+}
+
 /* Snapshot compression in the persist layer: one multimap of
  * PERF_CONTAINER_N {integer key, short string value} rows (values drawn
  * from 64 phrases, as real tables repeat), snapshotted and restored
@@ -3346,6 +3443,10 @@ int perfRegressionTest(int, char *[]) {
 
         if (perfWanted("persistSnapshot")) {
             benchPersistSnapshot();
+        }
+
+        if (perfWanted("mapBlockCompress")) {
+            benchMapBlockCompress();
         }
 
         if (perfWanted("multilru")) {
