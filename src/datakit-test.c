@@ -110,6 +110,7 @@
 #include "persist/multilruP.h"
 #include "persist/multimapP.h"
 #include "persist/multiroarP.h"
+#include "persist/multitierP.h"
 #include "persist/persistCtx.h"
 #include "portableRandom.h"
 #include "ptrPrevNext.h"
@@ -12416,7 +12417,7 @@ static const TestEntry testRegistry[] = {
     T_A(persistContract, "pcontract"), T_A(multimapP, "mmP"),
     T_A(multilistP, "mlP"), T_A(multidictP, "mdP"), T_A(flexP, "fP"),
     T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"), T_A(multiroarP, "mrP"),
-    T_A(coldmapP, "cmP"), T_A(multilruP, "mlruP"),
+    T_A(coldmapP, "cmP"), T_A(multitierP, "tierP"), T_A(multilruP, "mlruP"),
 
     /* Distributed / Cluster */
     T_A_ADJ(clusterRing, "ring,cluster,chr"),

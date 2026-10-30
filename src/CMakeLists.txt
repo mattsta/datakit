@@ -651,6 +651,7 @@ add_library(${PROJECT_NAME} OBJECT
     persist/multilruP.c
     persist/multiroarP.c
     persist/coldmapP.c
+    persist/multitierP.c
 )
 
 # Test drivers, benchmarks and the persistence contract are written for

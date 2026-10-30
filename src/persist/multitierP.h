@@ -1,0 +1,45 @@
+#pragma once
+
+/* multitierP - a multitier whose changes are logged to a persistCtx
+ *
+ * What the multitier holds is logged, not where: a Set is logged before it
+ * is made (a refused log changes nothing), a Delete of a present key
+ * likewise, and rows a sink takes are logged as they leave (by any call:
+ * a Get or a Set can push rows out of the cold level).  Moves between
+ * levels log nothing.  Open replays the WAL over the last snapshot, with
+ * no use history: the first Gets warm rows again. */
+
+#include "../multitier.h"
+#include "persistCtx.h"
+
+/* @handle: fixed: its address holds from creation to free */
+typedef struct multitierP multitierP;
+
+/* config NULL: the defaults; its sink receives rows after they are logged */
+multitierP *multitierNewP(persistCtx *ctx, const multitierConfig *config);
+/* The multitier the context's files hold; 'sink' as the config's */
+multitierP *multitierOpenP(persistCtx *ctx, multitierSinkFn *sink,
+                           void *sinkCtx);
+void multitierCloseP(multitierP *t);
+
+/* The multitier itself, for stats (changes through it are not logged) */
+multitier *multitierGetRawP(multitierP *t);
+size_t multitierCountP(const multitierP *t);
+
+persistLogResult multitierSetP(multitierP *t, const databox *key,
+                               const databox *value);
+/* As multitierDelete: a key with no row logs nothing */
+persistLogResult multitierDeleteP(multitierP *t, const databox *key);
+/* Reads: as multitierGet / multitierPeek (a Get logs the rows it pushes
+ * out to the sink) */
+bool multitierGetP(multitierP *t, const databox *key, databox *value);
+bool multitierPeekP(multitierP *t, const databox *key, databox *value);
+void multitierFlushP(multitierP *t);
+
+bool multitierSyncP(multitierP *t);
+bool multitierCompactP(multitierP *t);
+void multitierGetStatsP(const multitierP *t, persistCtxStats *stats);
+
+#ifdef DATAKIT_TEST
+int multitierPTest(int argc, char *argv[]);
+#endif
