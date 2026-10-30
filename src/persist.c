@@ -98,7 +98,7 @@ const dkFormatSpec persistFormatWALFile = {
  * the ones it knows */
 #define PERSIST_HEADER_MAX_BYTES ((uint32_t)4096)
 
-/* Every header ends with an XXH64 over its other bytes: a cheap check that
+/* Every header ends with an XXH3-64 over its other bytes: a cheap check that
  * rejects corrupt files before the envelope (which carries the body's
  * integrity) is read */
 #define PERSIST_HEADER_DIGEST_LEN ((size_t)8)
@@ -237,7 +237,7 @@ static flexEnvelopeAlgo persistChecksumToEnvelopeAlgo(persistChecksum t) {
 
 /* The digest closing a header of `headerLen` bytes */
 static uint64_t persistHeaderDigest(const void *header, size_t headerLen) {
-    return (uint64_t)XXH64(header, headerLen - PERSIST_HEADER_DIGEST_LEN, 0);
+    return (uint64_t)XXH3_64bits(header, headerLen - PERSIST_HEADER_DIGEST_LEN);
 }
 
 dkFormatSpec persistOpsFormat(const persistOps *ops) {
@@ -378,7 +378,7 @@ persistConfig persistDefaultConfig(void) {
     return (persistConfig){
         .compression = PERSIST_COMPRESS_NONE,
         .compressionLevel = 0,
-        .checksumType = PERSIST_CHECKSUM_XXH64,
+        .checksumType = PERSIST_CHECKSUM_XXH3_64,
         .syncMode = PERSIST_SYNC_EVERYSEC,
         .walMaxSize = (size_t)64 * 1024 * 1024, /* 64 MB */
         .walBufferSize = (size_t)64 * 1024,     /* 64 KB */
@@ -6596,7 +6596,7 @@ int persistTest(int, char *[]) {
             persistSetConfig(p, &none) ||
 #endif
             (persistGetConfig(p, &after),
-             after.checksumType != PERSIST_CHECKSUM_XXH64)) {
+             after.checksumType != PERSIST_CHECKSUM_XXH3_64)) {
             ERR("set took a checksum no write can use");
         }
         persistClose(p);

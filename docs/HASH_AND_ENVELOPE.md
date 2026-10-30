@@ -533,11 +533,11 @@ accidental corruption on receive.
 ```c
 #include "flexEnvelope.h"
 
-/* Hash the payload with xxh64 (8-byte checksum — fast, accidental
+/* Hash the payload with XXH3-64 (8-byte checksum — fastest, accidental
  * corruption detection only).  For tamper-evidence across an
  * untrusted boundary, use HMAC_SHA256 or BLAKE3_KEYED instead. */
 flexEnvelopeWrapParams wp = {
-    .algo = FLEX_ENV_ALGO_XXH64,
+    .algo = FLEX_ENV_ALGO_XXH3_64,
 };
 
 /* Figure out how much space the envelope will need. */

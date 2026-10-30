@@ -60,7 +60,7 @@
  * │ count[8] = element count │
  * │ envelopeLen[8] = size of the body envelope in bytes │
  * │ walSequence[8] = WAL sequence the snapshot includes │
- * │ digest[8] = XXH64 over the header's other bytes │
+ * │ digest[8] = XXH3-64 over the header's other bytes │
  * ├────────────────────────────────────────────────────────────────┤
  * │ Body envelope (envelopeLen bytes) │
  * │ flexEnvelopeWrap(serialized payload, configured algorithm). │
@@ -85,7 +85,7 @@
  * │ formatFeatures[8] = as in the snapshot header; every entry │
  * │ in the file is in this structure format │
  * │ sequence[8] = starting sequence number │
- * │ digest[8] = XXH64 over the header's other bytes │
+ * │ digest[8] = XXH3-64 over the header's other bytes │
  * ├────────────────────────────────────────────────────────────────┤
  * │ Entry 0 │
  * │ envelopeLen[4] = byte length of the entry envelope │
@@ -354,7 +354,7 @@ static inline bool persistOpCarriesFullValue(uint16_t op) {
  * cross-host replication, plugin ingest, or anywhere the bytes can be
  * forged by an attacker between writer and reader.
  *
- * The persist header itself carries a small XXH64/XXH32 self-check so
+ * The persist header itself carries a small XXH3-64 self-check so
  * obviously-corrupt files fail fast without invoking the envelope work.
  */
 /* Snapshot bodies and WAL entries are always wrapped in a flexEnvelope.
@@ -368,8 +368,8 @@ typedef enum persistChecksum {
         0,                             /* 0 B digest, test-only (refused
                                                   unless built with
                                                   -DDATAKIT_ENABLE_INSECURE_TEST_ALGOS) */
-    PERSIST_CHECKSUM_XXH64 = 1,        /* 8 B, no key */
-    PERSIST_CHECKSUM_XXH3_64 = 2,      /* 8 B, no key */
+    PERSIST_CHECKSUM_XXH64 = 1,        /* 8 B, no key; XXH3_64 is faster */
+    PERSIST_CHECKSUM_XXH3_64 = 2,      /* 8 B, no key: the default */
     PERSIST_CHECKSUM_XXH3_128 = 3,     /* 16 B, no key */
     PERSIST_CHECKSUM_BLAKE3_KEYED = 4, /* 32 B, keyed (native BLAKE3) */
     PERSIST_CHECKSUM_HMAC_SHA256 = 5,  /* 32 B, keyed (RFC 4231) */
