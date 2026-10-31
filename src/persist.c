@@ -215,6 +215,11 @@ struct persist {
     persistStore *quarantine;       /* owned; NULL: none */
     char *quarantinePath;           /* owned; opened when a heal needs it */
     persistBadEntryReport badEntry; /* the last one met */
+    /* badEntry changed: the notify callback runs once the WAL's state is
+     * settled (its append position, whether it is held), so what the
+     * callback does (an append, a key or quarantine that releases a held
+     * entry) is not then overwritten */
+    bool badEntryNotifyDue;
     persistBadEntryNotify *badEntryNotify;
     void *badEntryNotifyCtx;
 };
@@ -1868,9 +1873,7 @@ static void persistBadEntryReport_(persist *p, int64_t offset, uint64_t bytes,
         return;
     }
     r->events++;
-    if (p->badEntryNotify) {
-        p->badEntryNotify(p, r, p->badEntryNotifyCtx);
-    }
+    p->badEntryNotifyDue = true;
 }
 
 /* Copy WAL bytes [from, from + n) to the end of `q` */
@@ -2040,7 +2043,7 @@ bool persistLastBadEntry(const persist *p, persistBadEntryReport *out) {
  * no appends, since readers stop at it and nothing after it would ever
  * replay; logging resumes once it reads (the right key bound, the store
  * back) or after persistCompact starts a fresh WAL. */
-static bool persistWALResume(persist *p, int64_t goodEnd, int stop) {
+static bool persistWALResumeSettled_(persist *p, int64_t goodEnd, int stop) {
     persistStore *store = p->walStore;
     if (stop == PERSIST_WAL_BAD && !persistWALHeal_(p, goodEnd)) {
         p->walInitialized = false;
@@ -2058,6 +2061,19 @@ static bool persistWALResume(persist *p, int64_t goodEnd, int stop) {
     p->walCursorMoved = true;
     p->walInitialized = true;
     return true;
+}
+
+/* Settle the WAL after a walk, then tell the notify callback about a bad
+ * entry the walk met */
+static bool persistWALResume(persist *p, int64_t goodEnd, int stop) {
+    const bool resumed = persistWALResumeSettled_(p, goodEnd, stop);
+    if (p->badEntryNotifyDue) {
+        p->badEntryNotifyDue = false;
+        if (p->badEntryNotify) {
+            p->badEntryNotify(p, &p->badEntry, p->badEntryNotifyCtx);
+        }
+    }
+    return resumed;
 }
 
 /* Read every entry from just past the WAL header, handing each to `cb`
@@ -6413,6 +6429,32 @@ static void persistTestBadNotifyFn(persist *,
     persistTestBadNotify *n = ctx;
     n->calls++;
     n->last = *report;
+}
+
+/* A notify callback that acts once: logs an insert when told of a heal,
+ * or attaches a quarantine when told of a held entry */
+typedef struct persistTestActingNotify {
+    persistStore *quarantine; /* given to a held entry, when set */
+    bool acted;
+    bool logged;
+} persistTestActingNotify;
+
+static void persistTestActingNotifyFn(persist *p,
+                                      const persistBadEntryReport *report,
+                                      void *ctx) {
+    persistTestActingNotify *n = ctx;
+    if (n->acted) {
+        return;
+    }
+    n->acted = true;
+    if (report->action == PERSIST_BAD_ENTRY_HEALED) {
+        const int64_t fifty = 50;
+        n->logged = persistLogOp(p, PERSIST_OP_INSERT, &fifty, 1) !=
+                    PERSIST_LOG_REFUSED;
+    } else if (n->quarantine) {
+        persistAttachQuarantine(p, n->quarantine);
+        n->quarantine = nullptr; /* the persist owns it now */
+    }
 }
 
 static bool persistTestRecoversTo(persist *p, const int64_t *want, size_t n) {
@@ -12413,6 +12455,67 @@ int persistTest(int, char *[]) {
         if (!all || intsetCount(all) != 7) {
             ERR("recovered %zu members after the sweep, want 7",
                 all ? (size_t)intsetCount(all) : (size_t)0);
+        }
+    }
+
+    TEST("bad WAL entries: what the notify callback does is not undone") {
+        /* Inserts 1, 2, 3 with the second entry damaged.  With a
+         * quarantine the heal notifies and the callback logs 50: its entry
+         * survives the append that follows.  Without one the entry is
+         * held; a callback that attaches a quarantine releases it, and
+         * the next append heals and logs */
+        for (int withQuarantine = 1; withQuarantine >= 0; withQuarantine--) {
+            persist *p = persistCreate(&persistOpsIntset, nullptr);
+            persistAttachSnapshot(p, persistStoreMemory(0));
+            persistStore *wal = persistStoreMemory(0);
+            persistAttachWAL(p, wal);
+            persistTestActingNotify acting = {};
+            if (withQuarantine) {
+                persistAttachQuarantine(p, persistStoreMemory(0));
+            } else {
+                acting.quarantine = persistStoreMemory(0);
+            }
+            persistSetBadEntryNotify(p, persistTestActingNotifyFn, &acting);
+            cleaner(intsetFree) intset *empty = intsetNew();
+            persistSnapshot(p, empty);
+            for (int64_t v = 1; v <= 3; v++) {
+                PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
+            }
+            persistSync(p);
+            size_t walLen = 0;
+            uint8_t *bytes = (uint8_t *)persistStoreMemoryBuffer(wal, &walLen);
+            size_t at = sizeof(persistWALHeader);
+            uint32_t entryLen = 0;
+            memcpy(&entryLen, bytes + at, sizeof(entryLen));
+            at += sizeof(entryLen) + entryLen;
+            memcpy(&entryLen, bytes + at, sizeof(entryLen));
+            bytes[at + sizeof(entryLen) + entryLen / 2] ^= 0x10u;
+
+            /* The recovery meets the damage: heal (the callback logs) or
+             * hold (the callback attaches a quarantine) */
+            intset *partial = persistRecover(p);
+            if (partial) {
+                intsetFree(partial);
+            }
+            const int64_t ninetyNine = 99;
+            const bool second = persistLogOp(p, PERSIST_OP_INSERT, &ninetyNine,
+                                             1) != PERSIST_LOG_REFUSED;
+            persistSync(p);
+            intset *got = persistRecover(p);
+            const int64_t want =
+                withQuarantine ? 3 : 2; /* {1, 50, 99} or {1, 99} */
+            if (!acting.acted || (withQuarantine && !acting.logged) ||
+                !second || !got || (int64_t)intsetCount(got) != want) {
+                ERR("quarantine %d: acted %d, logged %d, appended %d, %zu "
+                    "recovered, want %" PRId64,
+                    withQuarantine, acting.acted, acting.logged, second,
+                    got ? (size_t)intsetCount(got) : (size_t)0, want);
+            }
+            if (got) {
+                intsetFree(got);
+            }
+            persistStoreClose(acting.quarantine);
+            persistClose(p);
         }
     }
 
