@@ -453,6 +453,9 @@ typedef struct multilruStats {
 
 /* Fill stats struct with current metrics snapshot (O(1) operation) */
 void multilruGetStats(const multilru *mlru, multilruStats *stats);
+/* The lifetime counters (inserts, evictions, demotions, promotions,
+ * deletes) back to zero; a restore starts them over */
+void multilruResetCounters(multilru *mlru);
 
 /* ====================================================================
  * Bulk Query Operations

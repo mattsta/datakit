@@ -1357,6 +1357,14 @@ bool multilruIsPopulated(const multilru *mlru, multilruPtr ptr) {
     return E_POPULATED(mlru, ptr) && !E_HEAD(mlru, ptr);
 }
 
+void multilruResetCounters(multilru *mlru) {
+    mlru->statInserts = 0;
+    mlru->statEvictions = 0;
+    mlru->statDemotions = 0;
+    mlru->statPromotions = 0;
+    mlru->statDeletes = 0;
+}
+
 void multilruGetStats(const multilru *mlru, multilruStats *stats) {
     /* Current state */
     stats->count = mlru->count;

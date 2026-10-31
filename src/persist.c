@@ -5929,6 +5929,10 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
     }
 
     multilruSetAutoEvict(mlru, !(flags & 4));
+    /* The counters are this object's: not the inserts and deletes that
+     * rebuilt it (the saved state does not hold them; a log replay counts
+     * an eviction as the delete it logs) */
+    multilruResetCounters(mlru);
     /* @own: caller; free=multilruFree */
     multilru *out = mlru;
     mlru = nullptr;
@@ -11673,6 +11677,38 @@ int persistTest(int, char *[]) {
         /* @own: container; free=multilruFree */
         multilru *lru = multilruNew();
         err += persistTestDecoderMatrix(&persistOpsMultiLRU, lru);
+    }
+
+    TEST("a multilru restore starts its counters at zero") {
+        cleaner(multilruFree) multilru *lru = multilruNewWithLevels(4);
+        multilruPtr ptrs[40];
+        for (size_t i = 0; i < countof(ptrs); i++) {
+            ptrs[i] = multilruInsert(lru);
+        }
+        for (size_t i = 0; i < countof(ptrs); i += 3) {
+            multilruIncrease(lru, ptrs[i]);
+        }
+        multilruDelete(lru, ptrs[1]);
+        multilruDelete(lru, ptrs[2]);
+        multilruPtr out;
+        (void)multilruRemoveMinimum(lru, &out);
+        size_t len = 0;
+        cleanerName(zfree, Bytes) uint8_t *snap =
+            persistOpsMultiLRU.snapshot(lru, &len);
+        multilru *back = snap ? persistOpsMultiLRU.restore(snap, len) : nullptr;
+        multilruStats a;
+        multilruStats b = {};
+        multilruGetStats(lru, &a);
+        if (back) {
+            multilruGetStats(back, &b);
+        }
+        if (!back || b.inserts || b.evictions || b.demotions || b.promotions ||
+            b.deletes || a.count != b.count) {
+            ERR("restored counters: inserts %" PRIu64 ", deletes %" PRIu64
+                ", count %zu of %zu",
+                b.inserts, b.deletes, b.count, a.count);
+        }
+        multilruFree(back);
     }
 
     TEST("restore: every truncation and byte flip is refused or "
