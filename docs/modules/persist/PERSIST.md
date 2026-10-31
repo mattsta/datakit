@@ -261,6 +261,12 @@ digest (`persistConfig.checksumType`):
   with `persistAttachKeyring(p, ring, keyId)`. Writes are refused without a
   key.
 
+A keyed configuration reads only keyed envelopes: an unkeyed snapshot is
+refused and an unkeyed WAL entry holds the WAL (`PERSIST_ERR_UNKEYED_ENVELOPE`),
+since anyone can compute an unkeyed digest. To move a file set from a checksum
+to a MAC, open it under the old configuration, switch `checksumType` and set
+the key, then `persistCompact`: both files are rewritten keyed.
+
 A keyring binding re-checks the key on every operation. After an
 intentional rotation, call `persistRebindKeyring`; until then operations
 fail with `PERSIST_ERR_KEY_GENERATION_MISMATCH`. A file written under a
@@ -405,14 +411,15 @@ closes and frees any store no persist owns).
 A false return from the core API may leave a typed code in
 `persistLastError(p)`:
 
-| Code                                  | Meaning                                           |
-| ------------------------------------- | ------------------------------------------------- |
-| `PERSIST_ERR_KEY_GENERATION_MISMATCH` | the bound key was rotated since it was attached   |
-| `PERSIST_ERR_KEY_NOT_FOUND`           | the bound key id is no longer in the keyring      |
-| `PERSIST_ERR_NO_KEY_ATTACHED`         | a keyed algorithm with no key                     |
-| `PERSIST_ERR_KEY_ID_MISMATCH`         | the file was written under another key id         |
-| `PERSIST_ERR_CONTAINER_FORMAT`        | the file framing's stamp is not readable here     |
-| `PERSIST_ERR_STRUCTURE_FORMAT`        | the structure format's stamp is not readable here |
+| Code                                  | Meaning                                                                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `PERSIST_ERR_KEY_GENERATION_MISMATCH` | the bound key was rotated since it was attached                                                                                |
+| `PERSIST_ERR_KEY_NOT_FOUND`           | the bound key id is no longer in the keyring                                                                                   |
+| `PERSIST_ERR_NO_KEY_ATTACHED`         | a keyed algorithm with no key                                                                                                  |
+| `PERSIST_ERR_KEY_ID_MISMATCH`         | the file was written under another key id                                                                                      |
+| `PERSIST_ERR_CONTAINER_FORMAT`        | the file framing's stamp is not readable here                                                                                  |
+| `PERSIST_ERR_STRUCTURE_FORMAT`        | the structure format's stamp is not readable here                                                                              |
+| `PERSIST_ERR_UNKEYED_ENVELOPE`        | a keyed checksum read an envelope no key made (forged, or older than the keyed checksum); a WAL holding one is held, never cut |
 
 Other failures (I/O, a malformed file) return false and may leave
 `PERSIST_ERR_NONE`: not every failure path sets a code.

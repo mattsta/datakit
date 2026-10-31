@@ -826,6 +826,11 @@ typedef enum [[nodiscard]] persistErr {
     PERSIST_ERR_STRUCTURE_FORMAT = 6, /* the structure's format stamp in the
                                          file is one this build does not
                                          read (persistLastFormat) */
+    PERSIST_ERR_UNKEYED_ENVELOPE = 7, /* a keyed checksum configuration read
+                                         an envelope no key made (forged,
+                                         or written before the checksum
+                                         became keyed): refused, and a WAL
+                                         holding one is held, never cut */
 } persistErr;
 
 /* Read the typed error code from the most recent failed operation on

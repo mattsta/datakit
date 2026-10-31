@@ -310,8 +310,18 @@ static bool persistBuildWrapParams(persist *p,
 static bool persistKeyProblem_(persist *p, const uint8_t *envelope,
                                const size_t len) {
     flexEnvelopeHeader header;
-    if (!flexEnvelopePeek(envelope, len, &header) ||
-        !flexEnvelopeAlgoIsKeyed(header.algo)) {
+    if (!flexEnvelopePeek(envelope, len, &header)) {
+        return false;
+    }
+    if (!flexEnvelopeAlgoIsKeyed(header.algo)) {
+        /* Under a keyed configuration an unkeyed envelope is a key
+         * problem too: forged, or older than the keyed checksum, and
+         * either way for the operator to judge, never cut away */
+        if (flexEnvelopeAlgoIsKeyed(
+                persistChecksumToEnvelopeAlgo(p->config.checksumType))) {
+            p->lastError = PERSIST_ERR_UNKEYED_ENVELOPE;
+            return true;
+        }
         return false;
     }
     if (!p->integrityKey && !p->integrityPreparedKey && !p->attachedKeyring) {
@@ -328,12 +338,16 @@ static bool persistBuildVerifyParams(persist *p,
             return false;
         }
     }
+    /* A keyed configuration takes only keyed envelopes: one no key made
+     * is something anyone could have computed */
+    const bool keyed = flexEnvelopeAlgoIsKeyed(
+        persistChecksumToEnvelopeAlgo(p->config.checksumType));
     *outParams = (flexEnvelopeVerifyParams){
         .max_payload_len = FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD,
         .key = p->integrityKey,
         .key_len = p->integrityKeyLen,
         .prepared_key = p->integrityPreparedKey,
-        .opts = FLEX_ENV_VERIFY_DEFAULT,
+        .opts = keyed ? FLEX_ENV_VERIFY_REQUIRE_HMAC : FLEX_ENV_VERIFY_DEFAULT,
     };
     return true;
 }
@@ -2721,6 +2735,7 @@ const char *persistErrName(persistErr err) {
         PERSIST_NAME_CASE_(PERSIST_ERR_, KEY_ID_MISMATCH);
         PERSIST_NAME_CASE_(PERSIST_ERR_, CONTAINER_FORMAT);
         PERSIST_NAME_CASE_(PERSIST_ERR_, STRUCTURE_FORMAT);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, UNKEYED_ENVELOPE);
     }
     return "UNKNOWN";
 }
@@ -7074,6 +7089,82 @@ int persistTest(int, char *[]) {
             }
         }
 
+        TEST("a keyed configuration refuses envelopes no key made: a "
+             "forged snapshot, a forged WAL entry (held, never cut)") {
+            /* Unkeyed envelopes of the same contents, which anyone can
+             * compute, written over a keyed persist's files */
+            static const persistChecksum forgers[] = {
+                PERSIST_CHECKSUM_XXH3_64, PERSIST_CHECKSUM_RAPIDHASH};
+            for (size_t k = 0; k < countof(forgers); k++) {
+                persistConfig plain = persistDefaultConfig();
+                plain.checksumType = forgers[k];
+                persist *forger = persistCreate(&persistOpsFlex, &plain);
+                persistStore *forgedSnap = persistStoreMemory(0);
+                persistStore *forgedWal = persistStoreMemory(0);
+                persistAttachSnapshot(forger, forgedSnap);
+                persistAttachWAL(forger, forgedWal);
+                cleaner(flexFree) flex *f = flexNew();
+                flexPushSigned(&f, 7, FLEX_ENDPOINT_TAIL);
+                (void)persistSnapshot(forger, f);
+                const databox box = DATABOX_SIGNED(8);
+                (void)persistLogOp(forger, PERSIST_OP_PUSH_TAIL, &box, 1);
+                persistSync(forger);
+                size_t snapLen = 0;
+                size_t walLen = 0;
+                const uint8_t *snapBytes =
+                    persistStoreMemoryBuffer(forgedSnap, &snapLen);
+                const uint8_t *walBytes =
+                    persistStoreMemoryBuffer(forgedWal, &walLen);
+
+                persistConfig keyed = persistDefaultConfig();
+                keyed.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+                persist *p = persistCreate(&persistOpsFlex, &keyed);
+                persistStore *snapStore = persistStoreMemory(0);
+                persistStore *walStore = persistStoreMemory(0);
+                (void)snapStore->write(snapStore->ctx, snapBytes, snapLen);
+                (void)walStore->write(walStore->ctx, walBytes, walLen);
+                persistAttachSnapshot(p, snapStore);
+                persistAttachWAL(p, walStore);
+                persistSetIntegrityKey(p, persistTestKey,
+                                       sizeof(persistTestKey));
+                flex *restored = persistRestore(p);
+                if (restored) {
+                    ERR("forger %zu: a keyed persist restored an unkeyed "
+                        "snapshot",
+                        k);
+                    flexFree(restored);
+                }
+
+                /* A keyed snapshot, then the forged WAL entry: replay
+                 * refuses it, and logging is held, not healed */
+                persistStore *goodSnap = persistStoreMemory(0);
+                persistAttachSnapshot(p, goodSnap);
+                (void)persistSnapshot(p, f);
+                flex *recovered = persistRecover(p);
+                if (recovered && flexCount(recovered) != 1) {
+                    ERR("forger %zu: replay applied a forged entry (%zu "
+                        "values)",
+                        k, flexCount(recovered));
+                }
+                flexFree(recovered);
+                const databox next = DATABOX_SIGNED(9);
+                if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &next, 1) ||
+                    persistLastError(p) != PERSIST_ERR_UNKEYED_ENVELOPE) {
+                    ERR("forger %zu: a log went on after a forged entry "
+                        "(error %d)",
+                        k, (int)persistLastError(p));
+                }
+                size_t walAfter = 0;
+                (void)persistStoreMemoryBuffer(walStore, &walAfter);
+                if (walAfter != walLen) {
+                    ERR("forger %zu: the forged WAL was cut to %zu of %zu", k,
+                        walAfter, walLen);
+                }
+                persistClose(p);
+                persistClose(forger);
+            }
+        }
+
         TEST("envelope rejects keyed algorithm without key") {
             persistConfig config = persistDefaultConfig();
             config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
@@ -10732,10 +10823,10 @@ int persistTest(int, char *[]) {
                             "NO_ACTION", "HEALED", "HELD");
         PERSIST_TEST_NAMES_(persistQuarantineReadName, persistQuarantineRead,
                             "RECORD", "END", "DAMAGED");
-        PERSIST_TEST_NAMES_(persistErrName, persistErr, "NONE",
-                            "KEY_GENERATION_MISMATCH", "KEY_NOT_FOUND",
-                            "NO_KEY_ATTACHED", "KEY_ID_MISMATCH",
-                            "CONTAINER_FORMAT", "STRUCTURE_FORMAT");
+        PERSIST_TEST_NAMES_(
+            persistErrName, persistErr, "NONE", "KEY_GENERATION_MISMATCH",
+            "KEY_NOT_FOUND", "NO_KEY_ATTACHED", "KEY_ID_MISMATCH",
+            "CONTAINER_FORMAT", "STRUCTURE_FORMAT", "UNKEYED_ENVELOPE");
 #undef PERSIST_TEST_NAMES_
     }
 
