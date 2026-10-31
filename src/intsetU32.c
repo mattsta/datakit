@@ -78,6 +78,9 @@ intsetU32 *intsetU32Copy(const intsetU32 *is) {
  * changes.  'len' == 0 releases the buffer (empty set carries a NULL
  * buffer). */
 void intsetU32Resize(intsetU32 *is, const uint32_t len) {
+    if (is->count > len) {
+        is->count = len; /* members sort: the smallest 'len' stay */
+    }
     if (len == 0) {
         zfree(is->contents);
         is->contents = nullptr;
@@ -382,6 +385,21 @@ int intsetU32Test(int, char **) {
             intsetU32Assert(intsetU32Count(is) == n - 1);
         }
         intsetU32Assert(!intsetU32RandomDelete(is, &deleted));
+        printf("SUCCESS\n");
+    }
+
+    printf("A resize below the count keeps the smallest members: ");
+    {
+        cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
+        for (uint32_t v = 0; v < 100; v++) {
+            intsetU32Add(is, v * 2);
+        }
+        intsetU32Resize(is, 10);
+        intsetU32Assert(intsetU32Count(is) == 10);
+        intsetU32Assert(intsetU32Exists(is, 18) && !intsetU32Exists(is, 20));
+        intsetU32Assert(intsetU32Add(is, 501) && intsetU32Count(is) == 11);
+        intsetU32Resize(is, 0);
+        intsetU32Assert(intsetU32Count(is) == 0 && !intsetU32Exists(is, 0));
         printf("SUCCESS\n");
     }
 
