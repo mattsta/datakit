@@ -578,7 +578,10 @@ bool multilruGetAutoEvict(const multilru *mlru);
 void multilruSetUnboundedLevels(multilru *mlru, bool unbounded);
 bool multilruGetUnboundedLevels(const multilru *mlru);
 
-/* Told of each true eviction (level 0), BEFORE the entry's slot is freed */
+/* Told of each true eviction (level 0): the entry is already out of the
+ * multilru (not counted, not populated) and its handle is reused only
+ * after the callback returns.  The callback may call into the multilru,
+ * but must not free it. */
 typedef void multilruEvictFn(multilruPtr evicted, void *userData);
 
 /* Register callback for eviction notification (NULL disables it) */

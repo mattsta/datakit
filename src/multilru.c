@@ -1120,17 +1120,17 @@ bool multilruRemoveMinimum(multilru *mlru, multilruPtr *out) {
         mlru->weights[idx] = 0;
     }
 
-    /* Notify callback BEFORE freeing (so caller can clean up external data) */
+    /* The entry is out of the multilru before the callback runs, so a
+     * callback may call into it and finds it consistent; the handle goes
+     * to the free list (to be reused) only after the callback returns */
+    entryClear(mlru, idx);
+    mlru->count--;
+    mlru->statEvictions++;
     if (mlru->evictCallback) {
         mlru->evictCallback(idx, mlru->evictCallbackData);
     }
 
-    mlru->statEvictions++;
-
-    /* Add to free list */
     freeListPush(mlru, idx);
-    mlru->count--;
-
     return true;
 }
 
@@ -1712,6 +1712,22 @@ static size_t zipfian(uint64_t *seed, size_t n, double skew) {
 /* Static callback for eviction workflow tests */
 static size_t testEvictedPtrs[100];
 static size_t testEvictCount;
+
+/* Calls back into the multilru: deletes the evicted handle (already out)
+ * and, for its first five calls, inserts an entry */
+static multilru *testReentLru_ = nullptr;
+static int testReentCalls_ = 0;
+static int testReentBad_ = 0;
+static void testReentrantEvict_(multilruPtr ptr, void *) {
+    testReentCalls_++;
+    if (multilruIsPopulated(testReentLru_, ptr)) {
+        testReentBad_++;
+    }
+    multilruDelete(testReentLru_, ptr);
+    if (testReentCalls_ <= 5 && multilruInsert(testReentLru_) == ptr) {
+        testReentBad_++; /* the evicted handle reused under its callback */
+    }
+}
 
 static void testEvictionCallback(multilruPtr ptr, void *) {
     if (testEvictCount < 100) {
@@ -4658,6 +4674,40 @@ int multilruTest(int, char *[]) {
     /* ----------------------------------------------------------------
      * Production Eviction Workflow Tests
      * ---------------------------------------------------------------- */
+
+    TEST("an eviction callback that calls into the multilru keeps it "
+         "consistent") {
+        multilruConfig config = {.maxLevels = 4,
+                                 .startCapacity = 16,
+                                 .policy = MLRU_POLICY_COUNT,
+                                 .maxCount = 10};
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
+        testReentLru_ = mlru;
+        testReentCalls_ = 0;
+        testReentBad_ = 0;
+        multilruSetEvictCallback(mlru, testReentrantEvict_, nullptr);
+        for (int i = 0; i < 30; i++) {
+            (void)multilruInsert(mlru);
+        }
+        size_t populated = 0;
+        for (multilruPtr p = 1; p < 256; p++) {
+            populated += multilruIsPopulated(mlru, p);
+        }
+        multilruPtr freeHandles[256];
+        const size_t frees = multilruFreeHandles(mlru, freeHandles, 256);
+        for (size_t i = 0; i < frees; i++) {
+            if (multilruIsPopulated(mlru, freeHandles[i])) {
+                testReentBad_++;
+            }
+        }
+        multilruSetEvictCallback(mlru, nullptr, nullptr);
+        testReentLru_ = nullptr;
+        if (testReentBad_ || testReentCalls_ == 0 ||
+            multilruCount(mlru) != 10 || populated != multilruCount(mlru)) {
+            ERR("%d calls, %d bad, count %zu with %zu populated",
+                testReentCalls_, testReentBad_, multilruCount(mlru), populated);
+        }
+    }
 
     TEST("eviction workflow - callback notification") {
         /* Test callback-based eviction where external data is cleaned up
