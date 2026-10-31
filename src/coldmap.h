@@ -56,7 +56,7 @@ typedef struct coldmapConfig {
  * 'elementsPerEntry' elements in strictly ascending key order, as
  * multimapDump gives; consumed).  'config' NULL: the defaults.  NULL, with
  * 'rows' freed, when the rows do not ascend, 'elementsPerEntry' is 0 or
- * past 65535, or the config is out of range. */
+ * past MULTIMAP_ELEMENTS_MAX, or the config is out of range. */
 [[nodiscard]] coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
                                           const coldmapConfig *config,
                                           flex *rows);

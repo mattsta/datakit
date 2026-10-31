@@ -216,7 +216,8 @@ coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
                             const coldmapConfig *config, flex *rows) {
     const coldmapConfig defaults = {};
     const coldmapConfig *c = config ? config : &defaults;
-    if (elementsPerEntry > UINT16_MAX || c->rawLimit > FLEX_CAP_LEVEL_65536 ||
+    if (elementsPerEntry > MULTIMAP_ELEMENTS_MAX ||
+        c->rawLimit > FLEX_CAP_LEVEL_65536 ||
         c->minSavingPercent > MFLEX_SAVING_PERCENT_MAX ||
         c->level > CFLEX_LEVEL_MAX ||
         !coldmapRowsAscend_(rows, elementsPerEntry)) {
@@ -931,31 +932,38 @@ bool coldmapRowsAscend(const flex *rows, multimapElements elementsPerEntry) {
 /* ====================================================================
  * Persistence (persistOpsColdmap; the format is described in persist.h)
  * ==================================================================== */
-/* Elements before the blocks: elementsPerEntry, raw limit, stored target,
- * required saving, LZ4 level, block count */
-static constexpr uint32_t COLDMAP_PERSIST_HEADER = 6;
+/* The unsigneds before the blocks, in order */
+typedef enum coldmapPersistField_ {
+    CM_PF_ELEMENTS, /* elementsPerEntry */
+    CM_PF_RAW_LIMIT,
+    CM_PF_STORED_TARGET,
+    CM_PF_MIN_SAVING,
+    CM_PF_LEVEL,
+    CM_PF_BLOCKS,
+    CM_PF_COUNT
+} coldmapPersistField_;
 /* Elements per block: compressed (0 or 1), the bytes as kept */
 static constexpr uint32_t COLDMAP_PERSIST_BLOCK = 2;
 
 static uint8_t *coldmapPersistSnapshot_(const void *structure, size_t *len) {
     const coldmap *cm = structure;
     const coldmapConfig *c = &cm->config;
-    const databox fields[COLDMAP_PERSIST_HEADER] = {
-        DATABOX_UNSIGNED(cm->elementsPerEntry),
-        DATABOX_UNSIGNED(c->rawLimit),
-        DATABOX_UNSIGNED(c->storedTarget),
-        DATABOX_UNSIGNED(c->minSavingPercent),
-        DATABOX_UNSIGNED(c->level),
-        DATABOX_UNSIGNED(cm->blockCount),
+    const databox fields[CM_PF_COUNT] = {
+        [CM_PF_ELEMENTS] = DATABOX_UNSIGNED(cm->elementsPerEntry),
+        [CM_PF_RAW_LIMIT] = DATABOX_UNSIGNED(c->rawLimit),
+        [CM_PF_STORED_TARGET] = DATABOX_UNSIGNED(c->storedTarget),
+        [CM_PF_MIN_SAVING] = DATABOX_UNSIGNED(c->minSavingPercent),
+        [CM_PF_LEVEL] = DATABOX_UNSIGNED(c->level),
+        [CM_PF_BLOCKS] = DATABOX_UNSIGNED(cm->blockCount),
     };
-    const databox *header[COLDMAP_PERSIST_HEADER];
-    for (uint32_t i = 0; i < COLDMAP_PERSIST_HEADER; i++) {
+    const databox *header[CM_PF_COUNT];
+    for (uint32_t i = 0; i < CM_PF_COUNT; i++) {
         header[i] = &fields[i];
     }
 
     /* @own: caller; free=zfree */
     flex *f = flexNew();
-    flexAppendMultipleExact(&f, COLDMAP_PERSIST_HEADER, header);
+    flexAppendMultipleExact(&f, CM_PF_COUNT, header);
     for (size_t i = 0; i < cm->blockCount; i++) {
         const mflex *rows = cm->blocks[i].rows;
         size_t bytes;
@@ -1031,32 +1039,37 @@ static void *coldmapPersistRestore_(const uint8_t *data, size_t len) {
     const flex *f = (const flex *)data;
     const size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
-    uint64_t v[COLDMAP_PERSIST_HEADER];
-    if (count < COLDMAP_PERSIST_HEADER) {
+    uint64_t v[CM_PF_COUNT];
+    if (count < CM_PF_COUNT) {
         return nullptr;
     }
-    for (uint32_t i = 0; i < COLDMAP_PERSIST_HEADER; i++) {
+    for (uint32_t i = 0; i < CM_PF_COUNT; i++) {
         if (!flexReadUnsigned(f, &fe, &v[i])) {
             return nullptr;
         }
     }
 
-    const size_t blockEntries = count - COLDMAP_PERSIST_HEADER;
-    if (v[0] == 0 || v[0] > UINT16_MAX || v[1] < FLEX_CAP_LEVEL_64 ||
-        v[1] > FLEX_CAP_LEVEL_65536 || v[2] == 0 || v[2] > UINT32_MAX ||
-        v[3] > MFLEX_SAVING_PERCENT_MAX || v[4] > CFLEX_LEVEL_MAX ||
+    /* Here: each field fits its type and holds a resolved value (never a
+     * 0 that means "the default"), and the blocks are whole.  coldmapNew
+     * checks the ranges. */
+    const size_t blockEntries = count - CM_PF_COUNT;
+    if (!v[CM_PF_ELEMENTS] || v[CM_PF_ELEMENTS] > UINT32_MAX ||
+        !v[CM_PF_RAW_LIMIT] || v[CM_PF_RAW_LIMIT] > UINT8_MAX ||
+        !v[CM_PF_STORED_TARGET] || v[CM_PF_STORED_TARGET] > UINT32_MAX ||
+        v[CM_PF_MIN_SAVING] > UINT8_MAX || v[CM_PF_LEVEL] > UINT8_MAX ||
         blockEntries % COLDMAP_PERSIST_BLOCK ||
-        v[5] != blockEntries / COLDMAP_PERSIST_BLOCK) {
+        v[CM_PF_BLOCKS] != blockEntries / COLDMAP_PERSIST_BLOCK) {
         return nullptr;
     }
 
-    const coldmapConfig config = {.rawLimit = (flexCapSizeLimit)v[1],
-                                  .storedTarget = (uint32_t)v[2],
-                                  .minSavingPercent = (uint8_t)v[3],
-                                  .level = (cflexLevel)v[4]};
+    const coldmapConfig config = {
+        .rawLimit = (flexCapSizeLimit)v[CM_PF_RAW_LIMIT],
+        .storedTarget = (uint32_t)v[CM_PF_STORED_TARGET],
+        .minSavingPercent = (uint8_t)v[CM_PF_MIN_SAVING],
+        .level = (cflexLevel)v[CM_PF_LEVEL]};
     /* @own: caller; free=coldmapFree */
-    coldmap *cm = coldmapNew((multimapElements)v[0], &config);
-    if (cm && !coldmapPersistRestoreBlocks_(cm, f, fe, v[5])) {
+    coldmap *cm = coldmapNew((multimapElements)v[CM_PF_ELEMENTS], &config);
+    if (cm && !coldmapPersistRestoreBlocks_(cm, f, fe, v[CM_PF_BLOCKS])) {
         coldmapFree(cm);
         return nullptr;
     }
@@ -1336,7 +1349,7 @@ static bool coldmapSameBlocks_(const coldmap *a, const coldmap *b) {
 static flex *coldmapTestReorder_(const flex *snap, bool swap) {
     /* @own: caller; free=flexFree */
     flex *out = flexNew();
-    const size_t first = COLDMAP_PERSIST_HEADER;
+    const size_t first = CM_PF_COUNT;
     const size_t pair = 2 * COLDMAP_PERSIST_BLOCK;
     for (size_t n = 0; n < flexCount(snap); n++) {
         size_t from = n;
@@ -1355,7 +1368,7 @@ static flex *coldmapTestReorder_(const flex *snap, bool swap) {
 /* The offset in snapshot 'snap' of the last byte of its first compressed
  * block (0: none) */
 static size_t coldmapTestCompressedTail_(const flex *snap) {
-    flexEntry *fe = flexIndex(snap, COLDMAP_PERSIST_HEADER);
+    flexEntry *fe = flexIndex(snap, CM_PF_COUNT);
     while (fe) {
         uint64_t compressed = 0;
         databox stored = {};
@@ -1925,6 +1938,51 @@ int coldmapTest(int argc, char *argv[]) {
             if (coldmapDeleteMany(cm, bad, nullptr) ||
                 coldmapCount(cm) != multimapCount(m)) {
                 ERR("config %zu: repeated keys taken", c);
+            }
+        }
+    }
+
+    TEST("a snapshot whose header field is out of range, or wraps into "
+         "range in its type, is refused") {
+        cleaner(multimapFree) multimap *m =
+            coldmapTestRows_(COLDMAP_SHAPE_RECORDS, 200);
+        cleaner(coldmapFree) coldmap *cm =
+            coldmapNewFromDump(2, nullptr, multimapDump(m));
+        size_t len = 0;
+        cleanerName(zfree, Void) void *snap =
+            persistOpsColdmap.snapshot(cm, &len);
+        cleaner(coldmapFree) coldmap *same =
+            persistOpsColdmap.restore(snap, len);
+        if (!same) {
+            ERR("%s", "an untouched snapshot was refused");
+        }
+
+        static const struct {
+            coldmapPersistField_ field;
+            uint64_t value;
+        } bad[] = {
+            {CM_PF_ELEMENTS, 0},
+            {CM_PF_ELEMENTS, MULTIMAP_ELEMENTS_MAX + 1},
+            {CM_PF_ELEMENTS, UINT64_C(1) << 32 | 2}, /* wraps to 2 */
+            {CM_PF_RAW_LIMIT, 0},
+            {CM_PF_RAW_LIMIT, FLEX_CAP_LEVEL_65536 + 1},
+            {CM_PF_STORED_TARGET, 0},
+            {CM_PF_MIN_SAVING, MFLEX_SAVING_PERCENT_MAX + 1},
+            {CM_PF_MIN_SAVING, 256 + 50}, /* wraps to 50 */
+            {CM_PF_LEVEL, CFLEX_LEVEL_MAX + 1},
+            {CM_PF_LEVEL, 256 + 1}, /* wraps to 1 */
+            {CM_PF_BLOCKS, 0},
+        };
+        for (size_t b = 0; b < countof(bad); b++) {
+            const databoxBig with = {.data.u64 = bad[b].value,
+                                     .type = DATABOX_UNSIGNED_64};
+            cleaner(flexFree) flex *damaged =
+                flexTestReplaceEntry((const flex *)snap, bad[b].field, &with);
+            coldmap *r = persistOpsColdmap.restore(damaged, flexBytes(damaged));
+            if (r) {
+                ERR("field %d = %" PRIu64 " restored", (int)bad[b].field,
+                    bad[b].value);
+                coldmapFree(r);
             }
         }
     }

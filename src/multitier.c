@@ -454,12 +454,26 @@ void multitierGetConfig(const multitier *t, multitierConfig *config) {
 /* ====================================================================
  * Persistence (persistOpsMultitier; the format is described in persist.h)
  * ==================================================================== */
-/* Elements before the parts: the config (hot limit, LRU levels, demotion
- * batch, cold limit, logged uses, then the cold level's raw limit, stored
- * target, required saving and LZ4 level) and the state (the clock's hand,
- * hot hits, cold hits, misses, demotions, rows sunk, blocks swept) */
-static constexpr uint32_t MULTITIER_PERSIST_CONFIG = 9;
-static constexpr uint32_t MULTITIER_PERSIST_COUNTERS = 7;
+/* The unsigneds before the parts, in order: the config, then the state */
+typedef enum multitierPersistField_ {
+    MT_PF_HOT_MAX_BYTES,
+    MT_PF_HOT_LEVELS,
+    MT_PF_DEMOTE_BATCH,
+    MT_PF_COLD_MAX_BYTES,
+    MT_PF_LOG_USES,
+    MT_PF_COLD_RAW_LIMIT,
+    MT_PF_COLD_STORED_TARGET,
+    MT_PF_COLD_MIN_SAVING,
+    MT_PF_COLD_LEVEL,
+    MT_PF_HAND, /* the clock: the cold block it sweeps next */
+    MT_PF_HOT_HITS,
+    MT_PF_COLD_HITS,
+    MT_PF_MISSES,
+    MT_PF_DEMOTIONS,
+    MT_PF_SUNK_ROWS,
+    MT_PF_SWEPT_BLOCKS,
+    MT_PF_COUNT
+} multitierPersistField_;
 /* Then the hot level, the batch, the shadowed keys and the cold level,
  * each the bytes of its own snapshot or dump */
 static constexpr uint32_t MULTITIER_PERSIST_PARTS = 4;
@@ -476,25 +490,24 @@ static void multitierPersistPart_(flex **out, const void *bytes, size_t len) {
 static uint8_t *multitierPersistSnapshot_(const void *structure, size_t *len) {
     const multitier *t = structure;
     const multitierConfig *c = &t->config;
-    const uint64_t
-        fields[MULTITIER_PERSIST_CONFIG + MULTITIER_PERSIST_COUNTERS] = {
-            c->hotMaxBytes,
-            c->hotLevels,
-            c->demoteBatch,
-            c->coldMaxBytes,
-            c->logUses,
-            c->cold.rawLimit,
-            c->cold.storedTarget,
-            c->cold.minSavingPercent,
-            c->cold.level,
-            t->hand,
-            t->hotHits,
-            t->coldHits,
-            t->misses,
-            t->demotions,
-            t->sunkRows,
-            t->sweptBlocks,
-        };
+    const uint64_t fields[MT_PF_COUNT] = {
+        [MT_PF_HOT_MAX_BYTES] = c->hotMaxBytes,
+        [MT_PF_HOT_LEVELS] = c->hotLevels,
+        [MT_PF_DEMOTE_BATCH] = c->demoteBatch,
+        [MT_PF_COLD_MAX_BYTES] = c->coldMaxBytes,
+        [MT_PF_LOG_USES] = c->logUses,
+        [MT_PF_COLD_RAW_LIMIT] = c->cold.rawLimit,
+        [MT_PF_COLD_STORED_TARGET] = c->cold.storedTarget,
+        [MT_PF_COLD_MIN_SAVING] = c->cold.minSavingPercent,
+        [MT_PF_COLD_LEVEL] = c->cold.level,
+        [MT_PF_HAND] = t->hand,
+        [MT_PF_HOT_HITS] = t->hotHits,
+        [MT_PF_COLD_HITS] = t->coldHits,
+        [MT_PF_MISSES] = t->misses,
+        [MT_PF_DEMOTIONS] = t->demotions,
+        [MT_PF_SUNK_ROWS] = t->sunkRows,
+        [MT_PF_SWEPT_BLOCKS] = t->sweptBlocks,
+    };
     /* @own: caller; free=zfree */
     flex *out = flexNew();
     flexRow head = FLEX_ROW_INIT;
@@ -588,43 +601,48 @@ static void *multitierPersistRestore_(const uint8_t *data, size_t len) {
 
     const flex *f = (const flex *)data;
     flexEntry *fe = flexHead(f);
-    uint64_t v[MULTITIER_PERSIST_CONFIG + MULTITIER_PERSIST_COUNTERS];
+    uint64_t v[MT_PF_COUNT];
     for (size_t i = 0; i < countof(v); i++) {
         if (!flexReadUnsigned(f, &fe, &v[i])) {
             return nullptr;
         }
     }
-    if (v[1] == 0 || v[1] > MULTILRU_LEVELS_MAX || v[2] == 0 ||
-        v[2] > UINT32_MAX || v[4] > 1 || v[5] < FLEX_CAP_LEVEL_64 ||
-        v[5] > FLEX_CAP_LEVEL_65536 || v[6] == 0 || v[6] > UINT32_MAX ||
-        v[7] > MFLEX_SAVING_PERCENT_MAX || v[8] > CFLEX_LEVEL_MAX ||
+    /* Here: each field fits its type, and holds a resolved value (a
+     * snapshot keeps the config in force, never a 0 that means "the
+     * default").  multitierNew and coldmapNew check the ranges. */
+    if (!v[MT_PF_HOT_LEVELS] || v[MT_PF_HOT_LEVELS] > UINT32_MAX ||
+        !v[MT_PF_DEMOTE_BATCH] || v[MT_PF_DEMOTE_BATCH] > UINT32_MAX ||
+        v[MT_PF_LOG_USES] > 1 || !v[MT_PF_COLD_RAW_LIMIT] ||
+        v[MT_PF_COLD_RAW_LIMIT] > UINT8_MAX || !v[MT_PF_COLD_STORED_TARGET] ||
+        v[MT_PF_COLD_STORED_TARGET] > UINT32_MAX ||
+        v[MT_PF_COLD_MIN_SAVING] > UINT8_MAX ||
+        v[MT_PF_COLD_LEVEL] > UINT8_MAX ||
         flexCount(f) != countof(v) + MULTITIER_PERSIST_PARTS) {
         return nullptr;
     }
 
     const multitierConfig config = {
-        .hotMaxBytes = v[0],
-        .hotLevels = (uint32_t)v[1],
-        .demoteBatch = (uint32_t)v[2],
-        .coldMaxBytes = v[3],
-        .logUses = v[4],
-        .cold = {.rawLimit = (flexCapSizeLimit)v[5],
-                 .storedTarget = (uint32_t)v[6],
-                 .minSavingPercent = (uint8_t)v[7],
-                 .level = (cflexLevel)v[8]},
+        .hotMaxBytes = v[MT_PF_HOT_MAX_BYTES],
+        .hotLevels = (uint32_t)v[MT_PF_HOT_LEVELS],
+        .demoteBatch = (uint32_t)v[MT_PF_DEMOTE_BATCH],
+        .coldMaxBytes = v[MT_PF_COLD_MAX_BYTES],
+        .logUses = v[MT_PF_LOG_USES],
+        .cold = {.rawLimit = (flexCapSizeLimit)v[MT_PF_COLD_RAW_LIMIT],
+                 .storedTarget = (uint32_t)v[MT_PF_COLD_STORED_TARGET],
+                 .minSavingPercent = (uint8_t)v[MT_PF_COLD_MIN_SAVING],
+                 .level = (cflexLevel)v[MT_PF_COLD_LEVEL]},
     };
     cleaner(multitierFree) multitier *t = multitierNew(&config);
     if (!t) {
         return nullptr;
     }
-    const uint64_t *counter = &v[MULTITIER_PERSIST_CONFIG];
-    t->hand = counter[0];
-    t->hotHits = counter[1];
-    t->coldHits = counter[2];
-    t->misses = counter[3];
-    t->demotions = counter[4];
-    t->sunkRows = counter[5];
-    t->sweptBlocks = counter[6];
+    t->hand = v[MT_PF_HAND];
+    t->hotHits = v[MT_PF_HOT_HITS];
+    t->coldHits = v[MT_PF_COLD_HITS];
+    t->misses = v[MT_PF_MISSES];
+    t->demotions = v[MT_PF_DEMOTIONS];
+    t->sunkRows = v[MT_PF_SUNK_ROWS];
+    t->sweptBlocks = v[MT_PF_SWEPT_BLOCKS];
 
     /* Each level from its own snapshot or dump, checked as that one is */
     const uint8_t *bytes[MULTITIER_PERSIST_PARTS];
@@ -992,11 +1010,57 @@ int multitierTest(int argc, char *argv[]) {
     }
 
     TEST("a config a snapshot could not restore is refused") {
-        const multitierConfig tooMany = {.hotLevels = 65};
-        const multitierConfig most = {.hotLevels = 64};
+        const multitierConfig tooMany = {.hotLevels = MULTILRU_LEVELS_MAX + 1};
+        const multitierConfig most = {.hotLevels = MULTILRU_LEVELS_MAX};
         cleaner(multitierFree) multitier *ok = multitierNew(&most);
         if (multitierNew(&tooMany) || !ok) {
-            ERR("%s", "65 levels taken or 64 refused");
+            ERR("%s", "levels past the most taken, or the most refused");
+        }
+    }
+
+    TEST("a snapshot whose config field is out of range, or wraps into "
+         "range in its type, is refused") {
+        const multitierConfig config = {.hotMaxBytes = 4096,
+                                        .coldMaxBytes = 8192};
+        cleaner(multitierFree) multitier *t = multitierNew(&config);
+        size_t len = 0;
+        cleanerName(zfree, TierBytes) uint8_t *snap =
+            persistOpsMultitier.snapshot(t, &len);
+        multitier *same = persistOpsMultitier.restore(snap, len);
+        if (!same) {
+            ERR("%s", "an untouched snapshot was refused");
+        }
+        multitierFree(same);
+
+        static const struct {
+            multitierPersistField_ field;
+            uint64_t value;
+        } bad[] = {
+            {MT_PF_HOT_LEVELS, 0},
+            {MT_PF_HOT_LEVELS, MULTILRU_LEVELS_MAX + 1},
+            {MT_PF_HOT_LEVELS, UINT64_C(1) << 32 | 4}, /* wraps to 4 */
+            {MT_PF_DEMOTE_BATCH, 0},
+            {MT_PF_LOG_USES, 2},
+            {MT_PF_COLD_RAW_LIMIT, 0},
+            {MT_PF_COLD_RAW_LIMIT, FLEX_CAP_LEVEL_65536 + 1},
+            {MT_PF_COLD_STORED_TARGET, 0},
+            {MT_PF_COLD_MIN_SAVING, MFLEX_SAVING_PERCENT_MAX + 1},
+            {MT_PF_COLD_MIN_SAVING, 256 + 50}, /* wraps to 50 */
+            {MT_PF_COLD_LEVEL, CFLEX_LEVEL_MAX + 1},
+            {MT_PF_COLD_LEVEL, 256 + 1}, /* wraps to 1 */
+        };
+        for (size_t b = 0; b < countof(bad); b++) {
+            const databoxBig with = {.data.u64 = bad[b].value,
+                                     .type = DATABOX_UNSIGNED_64};
+            cleaner(flexFree) flex *damaged =
+                flexTestReplaceEntry((const flex *)snap, bad[b].field, &with);
+            multitier *r =
+                persistOpsMultitier.restore(damaged, flexBytes(damaged));
+            if (r) {
+                ERR("field %d = %" PRIu64 " restored", (int)bad[b].field,
+                    bad[b].value);
+                multitierFree(r);
+            }
         }
     }
 

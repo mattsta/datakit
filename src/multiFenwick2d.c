@@ -173,13 +173,33 @@ void multiFenwick2dClear(multiFenwick2d *t) {
 /* The largest cell count a tree reaches (fenwick2dCoreImpl.h) */
 #define MF2D_P_MAX_CELLS_ (UINT64_C(1) << 32)
 
+/* A snapshot: this header, in order, then every cell row-major */
+typedef enum mf2dPersistHeader_ {
+    MF2D_PH_ROW_CAP,
+    MF2D_PH_COL_CAP,
+    MF2D_PH_ROWS,
+    MF2D_PH_COLS,
+    MF2D_PH_COUNT
+} mf2dPersistHeader_;
+
+/* An update's or increment's operands, in order */
+typedef enum mf2dPersistArg_ {
+    MF2D_PA_ROW,
+    MF2D_PA_COL,
+    MF2D_PA_VALUE,
+    MF2D_PA_COUNT
+} mf2dPersistArg_;
+
 static uint8_t *multiFenwick2dPersistSnapshot_(const void *structure,
                                                size_t *len) {
     const multiFenwick2d *t = structure;
     /* @own: caller; free=zfree */
     flex *f = flexNew();
-    const uint64_t header[4] = {t->rowCap, t->colCap, t->rows, t->cols};
-    for (size_t h = 0; h < 4; h++) {
+    const uint64_t header[MF2D_PH_COUNT] = {[MF2D_PH_ROW_CAP] = t->rowCap,
+                                            [MF2D_PH_COL_CAP] = t->colCap,
+                                            [MF2D_PH_ROWS] = t->rows,
+                                            [MF2D_PH_COLS] = t->cols};
+    for (size_t h = 0; h < MF2D_PH_COUNT; h++) {
         const databox box = DATABOX_UNSIGNED(header[h]);
         flexPushByTypeExact(&f, &box, FLEX_ENDPOINT_TAIL);
     }
@@ -213,28 +233,29 @@ static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
 
     const flex *f = (const flex *)data;
     const size_t n = flexCount(f);
-    if (n < 4) {
+    if (n < MF2D_PH_COUNT) {
         return nullptr;
     }
 
     flexEntry *fe = flexHead(f);
-    uint64_t header[4];
-    for (size_t h = 0; h < 4; h++) {
+    uint64_t header[MF2D_PH_COUNT];
+    for (size_t h = 0; h < MF2D_PH_COUNT; h++) {
         if (!flexReadUnsigned(f, &fe, &header[h])) {
             return nullptr;
         }
     }
 
-    const uint64_t rowCap = header[0];
-    const uint64_t colCap = header[1];
-    const uint64_t rows = header[2];
-    const uint64_t cols = header[3];
+    const uint64_t rowCap = header[MF2D_PH_ROW_CAP];
+    const uint64_t colCap = header[MF2D_PH_COL_CAP];
+    const uint64_t rows = header[MF2D_PH_ROWS];
+    const uint64_t cols = header[MF2D_PH_COLS];
+    const size_t stored = n - MF2D_PH_COUNT; /* cell entries */
     const bool empty = rowCap == 0;
     if (empty != (colCap == 0) || empty != (rows == 0) ||
         empty != (cols == 0) || (rowCap & (rowCap - 1)) ||
         (colCap & (colCap - 1)) || rows > rowCap || cols > colCap ||
-        (empty && n != 4) ||
-        (!empty && (colCap > (n - 4) / rowCap || rowCap * colCap != n - 4 ||
+        (empty && stored != 0) ||
+        (!empty && (colCap > stored / rowCap || rowCap * colCap != stored ||
                     rowCap * colCap > MF2D_P_MAX_CELLS_))) {
         return nullptr;
     }
@@ -272,7 +293,8 @@ static void *multiFenwick2dPersistRestore_(const uint8_t *data, size_t len) {
 static uint8_t *multiFenwick2dPersistEncodeOp_(persistOp op, const void *args,
                                                size_t argc, size_t *len) {
     *len = 0;
-    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 3) {
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) ||
+        argc != MF2D_PA_COUNT) {
         /* CLEAR has no operand; nothing else is replayed */
         return nullptr;
     }
@@ -294,26 +316,28 @@ static bool multiFenwick2dPersistApplyOp_(void *structure, persistOp op,
     }
 
     const flex *f = (const flex *)data;
-    if (flexCount(f) != 3) {
+    if (flexCount(f) != MF2D_PA_COUNT) {
         return false;
     }
 
     flexEntry *fe = flexHead(f);
-    databoxBig args[3];
-    for (size_t i = 0; i < 3; i++) {
+    databoxBig args[MF2D_PA_COUNT];
+    for (size_t i = 0; i < MF2D_PA_COUNT; i++) {
         flexGetByTypeBig(fe, &args[i]);
         fe = flexNext(f, fe);
     }
 
-    if (args[0].type != DATABOX_UNSIGNED_64 ||
-        args[1].type != DATABOX_UNSIGNED_64 || args[0].data.u64 > SIZE_MAX ||
-        args[1].data.u64 > SIZE_MAX) {
+    const databoxBig *rowArg = &args[MF2D_PA_ROW];
+    const databoxBig *colArg = &args[MF2D_PA_COL];
+    if (rowArg->type != DATABOX_UNSIGNED_64 ||
+        colArg->type != DATABOX_UNSIGNED_64 || rowArg->data.u64 > SIZE_MAX ||
+        colArg->data.u64 > SIZE_MAX) {
         return false;
     }
 
-    const size_t row = (size_t)args[0].data.u64;
-    const size_t col = (size_t)args[1].data.u64;
-    const databox *value = (const databox *)&args[2];
+    const size_t row = (size_t)rowArg->data.u64;
+    const size_t col = (size_t)colArg->data.u64;
+    const databox *value = (const databox *)&args[MF2D_PA_VALUE];
     return op == PERSIST_OP_NUM_INCR ? multiFenwick2dUpdate(t, row, col, value)
                                      : multiFenwick2dSet(t, row, col, value);
 }

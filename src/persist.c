@@ -4922,8 +4922,18 @@ typedef enum mdPersistKeys {
     MD_PERSIST_KEYS_CUSTOM = 2, /* any other type: the caller supplies it */
 } mdPersistKeys;
 
-/* A snapshot: [keys, seed, the settings (this many), key, val, ...] */
-static constexpr size_t MD_PERSIST_SETTINGS = 8;
+/* A snapshot: [keys, seed, the settings (in this order), key, val, ...] */
+typedef enum mdPersistSetting {
+    MD_PS_EXPAND, /* load factors */
+    MD_PS_SHRINK,
+    MD_PS_MAX_MEMORY,
+    MD_PS_EVICT_POLICY,
+    MD_PS_BY_BYTES, /* byte-based expansion: on, target, maximum */
+    MD_PS_BYTE_TARGET,
+    MD_PS_BYTE_MAX,
+    MD_PS_LRU_LEVELS, /* 0: no LRU tracking */
+    MD_PERSIST_SETTINGS
+} mdPersistSetting;
 
 static mdPersistKeys mdPersistKeysOf(const multidictType *type) {
     if (type == &multidictTypeExactKey) {
@@ -5007,9 +5017,7 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
         DATABOX_UNSIGNED(multidictGetHashFunctionSeed((multidict *)d));
     flexPushByTypeExact(&f, &seed, FLEX_ENDPOINT_TAIL);
 
-    /* The dict's settings, as restore applies them (MD_PERSIST_SETTINGS
-     * entries): load factors, memory cap, eviction policy, byte-based
-     * expansion (on, target, maximum) and LRU levels (0: off) */
+    /* The dict's settings, as restore applies them */
     uint32_t expand;
     uint32_t shrink;
     multidictGetLoadFactors(d, &expand, &shrink);
@@ -5017,15 +5025,20 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     uint64_t byteMax;
     const bool byBytes =
         multidictGetByteBasedExpansion(d, &byteTarget, &byteMax);
+    const uint64_t settings[MD_PERSIST_SETTINGS] = {
+        [MD_PS_EXPAND] = expand,
+        [MD_PS_SHRINK] = shrink,
+        [MD_PS_MAX_MEMORY] = multidictGetMaxMemory((multidict *)d),
+        [MD_PS_EVICT_POLICY] = multidictGetEvictPolicy((multidict *)d),
+        [MD_PS_BY_BYTES] = byBytes,
+        [MD_PS_BYTE_TARGET] = byteTarget,
+        [MD_PS_BYTE_MAX] = byteMax,
+        [MD_PS_LRU_LEVELS] = multidictLRULevels(d),
+    };
     flexRow row = FLEX_ROW_INIT;
-    flexRowUnsigned(&row, expand);
-    flexRowUnsigned(&row, shrink);
-    flexRowUnsigned(&row, multidictGetMaxMemory((multidict *)d));
-    flexRowUnsigned(&row, multidictGetEvictPolicy((multidict *)d));
-    flexRowUnsigned(&row, byBytes);
-    flexRowUnsigned(&row, byteTarget);
-    flexRowUnsigned(&row, byteMax);
-    flexRowUnsigned(&row, multidictLRULevels(d));
+    for (size_t i = 0; i < MD_PERSIST_SETTINGS; i++) {
+        flexRowUnsigned(&row, settings[i]);
+    }
     flexRowAppendExact(&f, &row);
 
     /* [key, val, key, val, ...] in key order: the hash table's order
@@ -5126,16 +5139,16 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     const int32_t seed = (int32_t)(uint32_t)seedBox.data.u;
     fe = flexNext(f, fe);
 
-    /* expand, shrink, maxMemory, policy, byBytes, byteTarget, byteMax,
-     * lruLevels: each an unsigned, checked as the setters check them */
+    /* The settings (mdPersistSetting order), each an unsigned, checked as
+     * the setters check them */
     uint64_t s[MD_PERSIST_SETTINGS];
     for (size_t i = 0; i < MD_PERSIST_SETTINGS; i++) {
         if (!flexReadUnsigned(f, &fe, &s[i])) {
             return nullptr;
         }
     }
-    if (s[3] > MULTIDICT_EVICT_SIZE_LRU || s[4] > 1 ||
-        s[7] > MULTILRU_LEVELS_MAX) {
+    if (s[MD_PS_EVICT_POLICY] > MULTIDICT_EVICT_SIZE_LRU ||
+        s[MD_PS_BY_BYTES] > 1 || s[MD_PS_LRU_LEVELS] > MULTILRU_LEVELS_MAX) {
         return nullptr;
     }
     count -= 2 + MD_PERSIST_SETTINGS;
@@ -5144,7 +5157,7 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
      * the pairs and its level (each index once, levels within the LRU) */
     uint64_t placed = 0;
     flexEntry *history = nullptr;
-    if (s[7]) {
+    if (s[MD_PS_LRU_LEVELS]) {
         if (!count || !flexReadUnsigned(f, &fe, &placed) ||
             placed > (count - 1) / 4) {
             return nullptr;
@@ -5184,15 +5197,18 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     /* The settings that shape growth and tracking go in before the pairs;
      * the memory cap and eviction policy after them, so no restore evicts
      * what it is restoring */
-    if (s[0] > UINT32_MAX || s[1] > UINT32_MAX ||
-        !multidictSetLoadFactors(d, (uint32_t)s[0], (uint32_t)s[1]) ||
-        (s[7] && !multidictEnableLRU(d, (size_t)s[7]))) {
+    if (s[MD_PS_EXPAND] > UINT32_MAX || s[MD_PS_SHRINK] > UINT32_MAX ||
+        !multidictSetLoadFactors(d, (uint32_t)s[MD_PS_EXPAND],
+                                 (uint32_t)s[MD_PS_SHRINK]) ||
+        (s[MD_PS_LRU_LEVELS] &&
+         !multidictEnableLRU(d, (size_t)s[MD_PS_LRU_LEVELS]))) {
         multidictFree(d);
         multidictDefaultClassFree(qdc);
         return nullptr;
     }
-    if (s[4]) {
-        multidictEnableByteBasedExpansion(d, s[5], s[6]);
+    if (s[MD_PS_BY_BYTES]) {
+        multidictEnableByteBasedExpansion(d, s[MD_PS_BYTE_TARGET],
+                                          s[MD_PS_BYTE_MAX]);
     }
 
     /* Size the table for every pair once, instead of rehashing as it
@@ -5233,7 +5249,7 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         databoxBig key;
         if (!flexReadUnsigned(f, &history, &index) ||
             !flexReadUnsigned(f, &history, &level) || index >= pairs ||
-            seen[index] || level >= s[7]) {
+            seen[index] || level >= s[MD_PS_LRU_LEVELS]) {
             multidictFree(d);
             multidictDefaultClassFree(qdc);
             return nullptr;
@@ -5243,8 +5259,8 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         multidictLRUPlace(d, (const databox *)&key, (uint32_t)level);
     }
 
-    multidictSetMaxMemory(d, s[2]);
-    multidictSetEvictPolicy(d, (multidictEvictPolicy)s[3]);
+    multidictSetMaxMemory(d, s[MD_PS_MAX_MEMORY]);
+    multidictSetEvictPolicy(d, (multidictEvictPolicy)s[MD_PS_EVICT_POLICY]);
     return d;
 }
 
@@ -5399,6 +5415,14 @@ const persistOps persistOpsMultidict = {
 
 defcleaner(multiarray *, multiarrayFree);
 
+/* A multiarray snapshot: these parts, in order */
+typedef enum multiarrayPersistPart {
+    MA_PP_WIDTH,    /* each element's bytes */
+    MA_PP_ROW_MAX,  /* elements per inner row */
+    MA_PP_ELEMENTS, /* every element, as one byte string */
+    MA_PP_COUNT
+} multiarrayPersistPart;
+
 static uint8_t *multiarrayPersistSnapshot(const void *structure, size_t *len) {
     const multiarray *m = structure;
     const uint16_t width = multiarrayElementLen(m);
@@ -5409,9 +5433,10 @@ static uint8_t *multiarrayPersistSnapshot(const void *structure, size_t *len) {
     const databox w = DATABOX_UNSIGNED(width);
     const databox r = DATABOX_UNSIGNED(multiarrayRowMax(m));
     const databox b = DATABOX_WITH_BYTES(blob, bytes);
-    const databox *parts[] = {&w, &r, &b};
+    const databox *parts[MA_PP_COUNT] = {
+        [MA_PP_WIDTH] = &w, [MA_PP_ROW_MAX] = &r, [MA_PP_ELEMENTS] = &b};
     /* @own: caller; free=zfree */
-    flex *f = flexNewFromDataboxPtrsExact(parts, 3);
+    flex *f = flexNewFromDataboxPtrsExact(parts, MA_PP_COUNT);
     *len = flexBytes(f);
     return (uint8_t *)f;
 }
@@ -5443,13 +5468,13 @@ static void *multiarrayPersistRestore(const uint8_t *data, size_t len) {
         return nullptr;
     }
     const flex *f = (const flex *)data;
-    if (flexCount(f) != 3) {
+    if (flexCount(f) != MA_PP_COUNT) {
         return nullptr;
     }
 
-    databoxBig parts[3];
+    databoxBig parts[MA_PP_COUNT];
     flexEntry *fe = flexHead(f);
-    for (size_t i = 0; i < 3; i++) {
+    for (size_t i = 0; i < MA_PP_COUNT; i++) {
         flexGetByTypeBig(fe, &parts[i]);
         fe = flexNext(f, fe);
     }
@@ -5458,10 +5483,12 @@ static void *multiarrayPersistRestore(const uint8_t *data, size_t len) {
     uint64_t rowMax;
     const uint8_t *blob;
     size_t blobLen;
-    if (!multiarrayPersistUnsigned_(&parts[0], UINT16_MAX, &width) ||
+    if (!multiarrayPersistUnsigned_(&parts[MA_PP_WIDTH], UINT16_MAX, &width) ||
         width == 0 ||
-        !multiarrayPersistUnsigned_(&parts[1], UINT16_MAX, &rowMax) ||
-        rowMax == 0 || !multiarrayPersistBytes_(&parts[2], &blob, &blobLen) ||
+        !multiarrayPersistUnsigned_(&parts[MA_PP_ROW_MAX], UINT16_MAX,
+                                    &rowMax) ||
+        rowMax == 0 ||
+        !multiarrayPersistBytes_(&parts[MA_PP_ELEMENTS], &blob, &blobLen) ||
         blobLen % width) {
         return nullptr;
     }

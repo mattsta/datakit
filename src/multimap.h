@@ -11,11 +11,6 @@
 /* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multimap multimap;
 
-/* The most elements a row holds (key first): a row's width is kept in 16
- * bits.  Every constructor takes 1 .. MULTIMAP_ELEMENTS_MAX elements per
- * entry; the dump constructors refuse others, the rest assert. */
-static constexpr multimapElements MULTIMAP_ELEMENTS_MAX = UINT16_MAX;
-
 [[nodiscard]] multimap *multimapNew(multimapElements elementsPerEntry);
 [[nodiscard]] multimap *multimapNewLimit(multimapElements elementsPerEntry,
                                          const flexCapSizeLimit limit);

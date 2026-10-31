@@ -7,13 +7,12 @@
 
 struct multimapAtom;
 
-/* multimapElements means you have 65535 available "columns" per row.
- * If you (for some strange reason) need more than 64k columns, you can
- * increase the storage class of multimapElements, but note: increasing the
- * storage class will increase all struct alignment causing additional
- * padding. */
-/* Note: multimapSmall and multimapMedium use 16 bits for multimapElements. */
+/* A row's element count (key first).  Rows hold 1 .. MULTIMAP_ELEMENTS_MAX
+ * elements: multimapSmall and multimapMedium keep the count in 16 bits.
+ * Every multimap constructor takes that range; the dump constructors
+ * refuse others, the rest assert. */
 typedef uint32_t multimapElements;
+static constexpr multimapElements MULTIMAP_ELEMENTS_MAX = UINT16_MAX;
 
 /* 32 bit multimapFullIdx gives you a max multimapFull size of:
  *   - 2.1 TB with 512 byte maps
