@@ -67,8 +67,8 @@ size_t SEGMENT_D_FN_(Count)(const void *seg) {
 
 /* Assign element idx; moves a Small tree to the Full tier first when the
  * Small tier's limits would be passed or idx jumps far past the end.
- * False, changing nothing, for a refused write (a tree created here for it
- * is freed again). */
+ * False, changing nothing, for a refused write (refused before any tree is
+ * created for it). */
 bool SEGMENT_D_FN_(Update)(void **seg, size_t idx, SEGMENT_VALUE_TYPE value) {
     if (!seg) {
         return false;
@@ -112,11 +112,8 @@ bool SEGMENT_D_FN_(Update)(void **seg, size_t idx, SEGMENT_VALUE_TYPE value) {
         (SEGMENT_D_UNTAG_(*seg), (uint64_t)idx, value, &success);
     }
 
-    if (!success && created) {
-        SEGMENT_D_FN_(Free)(*seg);
-        *seg = nullptr;
-    }
-
+    /* A tree created here takes the write: the index was checked above */
+    assert(success || !created);
     return success;
 }
 

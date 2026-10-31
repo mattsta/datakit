@@ -1231,6 +1231,86 @@ static int test_multilruP_auto_evict(int, char *[]) {
     TEST_FINAL_RESULT;
 }
 
+/* Whether 'r' is what a write under 'mode' reports: DURABLE when every
+ * write syncs, BUFFERED when none does, either when the sync runs at most
+ * once a second */
+static bool mlruTestLogged(persistLogResult r, persistCtxSyncMode mode) {
+    switch (mode) {
+    case PERSIST_CTX_SYNC_ALWAYS:
+        return r == PERSIST_LOG_DURABLE;
+    case PERSIST_CTX_SYNC_NONE:
+        return r == PERSIST_LOG_BUFFERED;
+    default:
+        return r == PERSIST_LOG_DURABLE || r == PERSIST_LOG_BUFFERED;
+    }
+}
+
+static int test_multilruP_sync_modes(int, char *[]) {
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multilruPTest_sync", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multilruP under every sync mode: results say how durable, "
+         "evictions replay") {
+        /* A size policy at 100: entries of 30 evict the oldest as they
+         * pass it, and one of 500 is evicted at once (its handle out is
+         * 0).  Each result says how durable the write is under the mode;
+         * the reopened cache holds the same entries */
+        static const persistCtxSyncMode modes[] = {PERSIST_CTX_SYNC_NONE,
+                                                   PERSIST_CTX_SYNC_EVERYSEC,
+                                                   PERSIST_CTX_SYNC_ALWAYS};
+        for (size_t m = 0; m < countof(modes); m++) {
+            ptestCleanupFiles(basePath);
+            persistCtxConfig config = persistCtxDefaultConfig();
+            config.syncMode = modes[m];
+            persistCtx *ctx = persistCtxNew(basePath, &config);
+            const multilruConfig lru = {.maxLevels = 4,
+                                        .maxWeight = 100,
+                                        .policy = MLRU_POLICY_SIZE,
+                                        .enableWeights = true};
+            multilruP *mlru = multilruNewWithConfigP(ctx, &lru);
+            /* The first step whose result or handle is not as expected */
+            int badStep = mlru ? -1 : 0;
+            persistLogResult badResult = PERSIST_LOG_REFUSED;
+            for (int i = 0; badStep < 0 && i <= 6; i++) {
+                const bool heavy = i == 6;
+                multilruPtr h = heavy ? 7 : 0;
+                const persistLogResult r =
+                    multilruInsertWeightedP(mlru, heavy ? 500 : 30, &h);
+                if (!mlruTestLogged(r, modes[m]) || (h == 0) != heavy) {
+                    badStep = i;
+                    badResult = r;
+                }
+            }
+            const size_t count = mlru ? multilruCountP(mlru) : 0;
+            const uint64_t weight = mlru ? multilruTotalWeightP(mlru) : 0;
+            multilruCloseP(mlru);
+            persistCtxFree(ctx);
+
+            ctx = persistCtxNew(basePath, &config);
+            mlru = multilruOpenP(ctx);
+            if (badStep >= 0 || weight > 100 || !mlru ||
+                multilruCountP(mlru) != count ||
+                multilruTotalWeightP(mlru) != weight) {
+                ERR("sync mode %d: step %d gave result %d; %zu entries of "
+                    "weight %" PRIu64 ", reopened as %zu",
+                    (int)modes[m], badStep, (int)badResult, count, weight,
+                    mlru ? multilruCountP(mlru) : 0);
+            }
+            multilruCloseP(mlru);
+            persistCtxFree(ctx);
+        }
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST_FINAL_RESULT;
+}
+
 static int test_multilruP_auto_evict_crash_before_compact(int, char *[]) {
     int err = 0;
     cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {};
@@ -1932,6 +2012,7 @@ int multilruPTest(int argc, char *argv[]) {
     err += test_multilruP_weight_extremes(argc, argv);
     err += test_multilruP_auto_evict(argc, argv);
     err += test_multilruP_auto_evict_crash_before_compact(argc, argv);
+    err += test_multilruP_sync_modes(argc, argv);
     err += test_multilruP_size_strategies(argc, argv);
     err += test_multilruP_repack(argc, argv);
     err += test_multilruP_level_promotion(argc, argv);

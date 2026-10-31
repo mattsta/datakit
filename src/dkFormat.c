@@ -362,7 +362,8 @@ int dkFormatTest(int, char *[]) {
         const size_t sealed = dkFormatSealedSize(&stamp, sizeof(body));
         uint8_t buf[128];
         uint8_t *at = dkFormatSealBegin(&stamp, buf, sealed, sizeof(body));
-        if (!at || dkFormatSealBegin(&stamp, buf, sealed - 1, sizeof(body))) {
+        if (!at || dkFormatSealBegin(&stamp, buf, sealed - 1, sizeof(body)) ||
+            dkFormatSealBegin(&stamp, nullptr, sealed, sizeof(body))) {
             ERR("SealBegin: room for the sealed size, and no less");
         }
         memcpy(at, body, sizeof(body));

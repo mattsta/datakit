@@ -5,6 +5,7 @@
 #include "../cleaner.h"
 #include "../ctest.h"
 #include "../datakit.h"
+#include "fenwickPersist.h"
 
 #include <float.h>
 #include <inttypes.h>
@@ -312,6 +313,35 @@ int fenwick2dTest(int, char *[]) {
         }
     }
 
+    TEST("persist: every 2D tree logs and replays only its own ops") {
+        /* Update, Set and Clear are logged; any other op, or an update
+         * without its value, is neither encoded nor applied */
+        const persistOps *const all[] = {
+            &persistOpsFenwick2dI16,   &persistOpsFenwick2dI32,
+            &persistOpsFenwick2dI64,   &persistOpsFenwick2dU16,
+            &persistOpsFenwick2dU32,   &persistOpsFenwick2dU64,
+            &persistOpsFenwick2dFloat, &persistOpsFenwick2dDouble,
+#ifdef __SIZEOF_INT128__
+            &persistOpsFenwick2dI128,  &persistOpsFenwick2dU128,
+#endif
+        };
+        const databox one = databoxNewUnsigned(1);
+        const databox *pair[] = {&one, &one};
+        const databox *three[] = {&one, &one, &one};
+        size_t bodyLen = 0;
+        cleaner(zfree) void *body = persistOpEncodeBoxes(three, 3, &bodyLen);
+        for (size_t i = 0; i < countof(all); i++) {
+            size_t len = 0;
+            void *t = nullptr;
+            if (all[i]->encodeOp(PERSIST_OP_DELETE, three, 3, &len) ||
+                all[i]->encodeOp(PERSIST_OP_UPDATE, pair, 2, &len) ||
+                all[i]->applyOp(&t, PERSIST_OP_DELETE, body, bodyLen) || t) {
+                ERR("%s: persist took an op the tree does not log",
+                    all[i]->name);
+            }
+        }
+    }
+
     TEST("growth: a write far past the tree's size is refused") {
         /* 2048 x 2048 is 2^22 cells, taken from anywhere; 4096 x 2048 from
          * a 4 x 4 tree is more than one doubling of the rows */
@@ -330,6 +360,25 @@ int fenwick2dTest(int, char *[]) {
             ERR("a write at 2047 x 2047 was refused or lost a value");
         }
         fenwick2dI64Free(t);
+
+        /* Past 2^22 cells each side may double, no more: 2048 x 2048 to
+         * 4096 x 2048 is taken; then 8192 x 8192 (the columns four times
+         * over) is refused, as is 8 x 2^20 from 4 x 4 */
+        fenwick2dI16 *s = nullptr;
+        if (!fenwick2dI16Update(&s, 2047, 2047, 1) ||
+            !fenwick2dI16Update(&s, 4095, 2047, 2) ||
+            fenwick2dI16Update(&s, 8191, 8191, 4) ||
+            fenwick2dI16Query(s, 4095, 2047) != 3) {
+            ERR("a doubling past 2^22 cells was refused, or more was taken");
+        }
+        fenwick2dI16Free(s);
+        fenwick2dI16 *narrow = nullptr;
+        if (!fenwick2dI16Update(&narrow, 3, 3, 1) ||
+            fenwick2dI16Update(&narrow, 7, (size_t)1 << 20, 1) ||
+            fenwick2dI16Rows(narrow) != 4) {
+            ERR("a write doubling the rows and jumping the columns was taken");
+        }
+        fenwick2dI16Free(narrow);
     }
 
     TEST_FINAL_RESULT;

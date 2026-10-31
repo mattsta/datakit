@@ -2260,6 +2260,14 @@ DK_STATIC void flexInsertReplace_____(flex **const ff, flexEntry *fe,
         walkerP += entrySize;
     }
 
+    /* A first value read from anywhere inside the entry it replaces (a
+     * slice of its own bytes) is held by that entry: the moves below shift
+     * only what follows the replaced entries, never the entry itself */
+    if (copyFromSelf && replaceOffset == 0 && data >= fe &&
+        data < fe + flexRawEntryLength(fe)) {
+        feIsEntryHoldingData = true;
+    }
+
     /* This is slightly ugly and copy/pasty because we have to do the same
      * operations in different orders depending on
      * growing (resize *then* move)
@@ -2304,20 +2312,15 @@ DK_STATIC void flexInsertReplace_____(flex **const ff, flexEntry *fe,
             const flexEntry *next = fe + pEntryTotalSize;
             const size_t moveNextEntryDownBy = flexSize - (next - f);
 
-            /* Step 1a: if shrink is for the current position, we need
-             *          more accounting to retain data properly if
-             *          the encoding length of the current position is
-             *          also shrinking. */
+            /* Step 1a: data read from inside 'fe' that starts past where
+             *          the new encoding ends moves down to start there,
+             *          before the entries after 'fe' move over it. */
             const bool resizingPShrinksData =
                 (fe + contents[0]->encodingLen) < data;
             if (feIsEntryHoldingData && resizingPShrinksData) {
-                /* If we are updating from our own data and our encoding
-                 * is shrinking, move data down to match up to the new
-                 * shorter encoding length.
-                 * Because the encoding for 'fe' is shrinking, we move 'fe' down
-                 * by the new encoding size to retain proper initial data. */
                 memmove(fe + contents[0]->encodingLen, data, contents[0]->len);
-                /* data = fe + contents[0]->encodingLen; // never read */
+                /* The write below reads the data where it now is */
+                offsetData = (fe + contents[0]->encodingLen) - f;
             }
 
             /* Step 1b: normal case: move entries after the new size of 'fe'
@@ -10770,8 +10773,13 @@ static bool fxStep_(flex **ff, fxModel_ *M, uint32_t op) {
             ok = fxNote_(cflexValidateBuffer(c, cflexBytes(c)) &&
                              cflexBytesCompressed(c) <= cflexBytes(c) &&
                              cflexConvertToFlex(dupc, &out, &outLen) &&
-                             flexEqual(out, *ff),
+                             flexEqual(out, *ff) &&
+                             !cflexValidateBuffer(nullptr, cflexBytes(c)),
                          __LINE__);
+            /* Every short prefix is refused */
+            for (size_t cut = 0; ok && cut < cflexBytes(c) && cut < 6; cut++) {
+                ok = fxNote_(!cflexValidateBuffer(c, cut), __LINE__);
+            }
             flexFree(out);
         }
         break;
@@ -11362,6 +11370,110 @@ int32_t flexTest(int32_t argc, char **argv) {
                 ERR("replace %d: the empty string did not land", how);
             }
             flexFree(e);
+        }
+    }
+
+    TEST("a string replaced by a slice of itself keeps the slice") {
+        /* [s, 7] where s is 200 or 70000 bytes; s is replaced by its own
+         * first or last 50 bytes, so its length takes fewer bytes to
+         * encode: the entry holds the slice and 7 follows it */
+        static const size_t sizes[] = {200, 70000};
+        for (size_t z = 0; z < countof(sizes); z++) {
+            for (int tail = 0; tail < 2; tail++) {
+                const size_t n = sizes[z];
+                cleanerName(zfree, Bytes) uint8_t *src = zmalloc(n);
+                for (size_t i = 0; i < n; i++) {
+                    src[i] = (uint8_t)(i * 31 + 7);
+                }
+                cleaner(flexFree) flex *sf = flexNew();
+                flexPushBytes(&sf, src, n, FLEX_ENDPOINT_TAIL);
+                flexPushSigned(&sf, 7, FLEX_ENDPOINT_TAIL);
+                flexEntry *sliced = flexHead(sf);
+                databox got = {};
+                flexGetByType(sliced, &got);
+                const uint8_t *own = databoxBytes(&got);
+                const size_t at = tail ? n - 50 : 0;
+                flexReplaceBytes(&sf, sliced, own + at, 50);
+                databox now = {};
+                databox seven = {};
+                flexGetByType(flexHead(sf), &now);
+                flexGetByType(flexIndex(sf, 1), &seven);
+                const bool sameBytes =
+                    now.len == 50 &&
+                    memcmp(databoxBytes(&now), src + at, 50) == 0;
+                if (flexCount(sf) != 2 || !sameBytes || seven.data.i != 7) {
+                    ERR("%zu bytes, %s slice: %zu entries, type %d of %zu "
+                        "bytes (%s), then %" PRIdMAX,
+                        n, tail ? "last" : "first", (size_t)flexCount(sf),
+                        (int)now.type, (size_t)now.len,
+                        sameBytes ? "the slice" : "not the slice",
+                        seven.data.i);
+                }
+            }
+        }
+    }
+
+    TEST("sorted inserts by reference into rows wider than the stack row") {
+        /* Rows of 12 elements keyed by interned words ("pear", "apple",
+         * "fig" in that order of insert) sort by the words; a word again
+         * replaces its row.  Then key ranges: none on an empty flex, none
+         * past every key */
+        cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+        static const char *const words[] = {"pear", "apple", "fig"};
+        databox keys[3];
+        for (size_t w = 0; w < countof(words); w++) {
+            keys[w] = databoxNewBytesString(words[w]);
+            multimapAtomInsertConvert(atoms, &keys[w]);
+        }
+        cleaner(flexFree) flex *sf = flexNew();
+        flexEntry *wideMid = flexMiddle(sf, 12);
+        for (int round = 0; round < 2; round++) {
+            for (size_t w = 0; w < countof(words); w++) {
+                databox fields[12];
+                const databox *row[12];
+                fields[0] = keys[w];
+                for (int e = 1; e < 12; e++) {
+                    fields[e] =
+                        databoxNewSigned((int64_t)(w * 100) + e + round);
+                }
+                for (int e = 0; e < 12; e++) {
+                    row[e] = &fields[e];
+                }
+                flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
+                    &sf, 12, row, &wideMid, true, atoms);
+            }
+        }
+        static const char *const sorted[] = {"apple", "fig", "pear"};
+        static const int64_t lastField[] = {112, 212, 12};
+        bool same = flexCount(sf) == 36;
+        for (size_t i = 0; same && i < countof(sorted); i++) {
+            databox key = {};
+            flexGetByTypeWithReference(flexIndex(sf, (int32_t)(i * 12)), &key,
+                                       atoms);
+            databox last = {};
+            flexGetByType(flexIndex(sf, (int32_t)(i * 12 + 11)), &last);
+            same = key.len == strlen(sorted[i]) &&
+                   memcmp(databoxBytes(&key), sorted[i], key.len) == 0 &&
+                   last.data.i == lastField[i];
+            databoxFreeData(&key);
+        }
+        if (!same || wideMid != flexMiddle(sf, 12)) {
+            ERR("wide reference rows: %zu entries, or out of order",
+                (size_t)flexCount(sf));
+        }
+
+        cleaner(flexFree) flex *none = flexNew();
+        const databox one = databoxNewSigned(1);
+        const databox far = databoxNewSigned(1000);
+        cleaner(flexFree) flex *ints = flexNew();
+        for (int64_t k = 0; k < 10; k++) {
+            flexPushSigned(&ints, k, FLEX_ENDPOINT_TAIL);
+        }
+        if (flexDeleteSortedKeyRange(&none, 1, nullptr, &one, nullptr) ||
+            flexDeleteSortedKeyRange(&ints, 1, &far, nullptr,
+                                     flexMiddle(ints, 1)) ||
+            flexCount(ints) != 10) {
+            ERR("a key range over nothing deleted rows");
         }
     }
 

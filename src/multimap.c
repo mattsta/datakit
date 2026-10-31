@@ -9152,6 +9152,48 @@ int multimapTest(int, char *[]) {
      * Test each implementation (Small, Medium, Full) directly
      * ================================================================ */
 
+    TEST("DIRECT: multimapSmall trims a prefix, a set's every row with the "
+         "bound key included") {
+        /* A set of [key, value] rows: keys 0..9, key 5 three times.  Trim
+         * <= 5 removes keys 0..4 and every key-5 row and reports it; the
+         * same trim again, and one below every key, remove nothing */
+        cleaner(multimapSmallFree) multimapSmall *s = multimapSmallNew(2, true);
+        for (int64_t k = 0; k < 10; k++) {
+            for (int64_t v = 0; v < (k == 5 ? 3 : 1); v++) {
+                const databox key = databoxNewSigned(k);
+                const databox val = databoxNewSigned(v);
+                const databox *row[2] = {&key, &val};
+                multimapSmallInsertFullWidth(s, row);
+            }
+        }
+
+        const multimapPredicate five = {.condition =
+                                            MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+                                        .compareAgainst = databoxNewSigned(5)};
+        const multimapPredicate below = {
+            .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+            .compareAgainst = databoxNewSigned(-1)};
+        if (!multimapSmallDeleteByPredicate(s, &five) ||
+            multimapSmallCount(s) != 4) {
+            ERR("trim <= 5 left %zu rows, expected 4", multimapSmallCount(s));
+        }
+        if (multimapSmallDeleteByPredicate(s, &five) ||
+            multimapSmallDeleteByPredicate(s, &below) ||
+            multimapSmallCount(s) != 4) {
+            ERR("a trim that removes nothing reported a delete (%zu rows)",
+                multimapSmallCount(s));
+        }
+        for (int64_t k = 0; k < 10; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned(0);
+            const databox *row[2] = {&key, &val};
+            if (multimapSmallExistsFullWidth(s, row) != (k > 5)) {
+                ERR("after the trim key %" PRId64 " present %d", k, k <= 5);
+            }
+        }
+        multimapSmallVerify(s);
+    }
+
     TEST("DIRECT: multimapSmall key replacement") {
         /* Test Small implementation directly */
         cleaner(multimapSmallFree) multimapSmall *s =
@@ -10477,6 +10519,8 @@ int multimapTest(int, char *[]) {
         MM_SET_REFUSES_(
             multimapReplaceEntryWithReference(&set, &me, &eleven, nullptr));
         MM_SET_REFUSES_(multimapResizeEntry(&set, &me, 40));
+        MM_SET_REFUSES_(
+            multimapResizeEntryWithReference(&set, &me, 40, nullptr));
 #undef MM_SET_REFUSES_
         multimapEntry mapMe;
         multimapGetUnderlyingEntry(map, &one, &mapMe);
@@ -10947,6 +10991,19 @@ int multimapTest(int, char *[]) {
                 atoms)) {
             ERR("NewFromDumpWithReference accepted unordered, partial or "
                 "repeated rows");
+        }
+
+        /* Refused by both: a row width of 0 or past the most a row holds */
+        const databox *up[] = {&one, &two};
+        const multimapElements widths[] = {0, MULTIMAP_ELEMENTS_MAX + 1};
+        for (size_t w = 0; w < countof(widths); w++) {
+            if (multimapNewFromDump(widths[w], false, FLEX_CAP_LEVEL_2048,
+                                    flexNewFromDataboxPtrsExact(up, 2)) ||
+                multimapNewFromDumpWithReference(
+                    widths[w], FLEX_CAP_LEVEL_2048,
+                    flexNewFromDataboxPtrsExact(up, 2), atoms)) {
+                ERR("a dump of row width %u was accepted", (unsigned)widths[w]);
+            }
         }
     }
 

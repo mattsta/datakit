@@ -266,6 +266,12 @@ bool multimapMediumInsertIfAbsent(multimapMedium *m, const databox *elements[],
 
 void multimapMediumInsertFullWidth(multimapMedium *m,
                                    const databox *elements[]) {
+    /* A set holds each row once: its full-width insert is its insert */
+    if (m->mapIsSet) {
+        (void)multimapMediumInsert(m, elements);
+        return;
+    }
+
     size_t mapIdx = multimapMediumBinarySearchFullWidth(m, elements);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
@@ -981,62 +987,11 @@ bool multimapMediumIteratorNextWithSlots(multimapIterator *iter,
 
 bool multimapMediumDeleteByPredicate(multimapMedium *m,
                                      const multimapPredicate *p) {
-    const size_t mapIdx =
-        multimapMediumBinarySearch_(m, &p->compareAgainst, false, nullptr);
-
-    /* Boundary search, NOT an exact-match search: deleting everything
-     * at or below a limit must work for any limit, not only for one
-     * that happens to exist as a key. */
-    flexEntry *startP = flexGetByTypeSortedWithMiddle(
-        m->map[mapIdx], m->elementsPerEntry, &p->compareAgainst,
-        GET_MIDDLE(m, mapIdx));
-
-    /* If the found value is the END OF THE MAP, don't continue! */
-    if (!startP) {
-        return false;
-    }
-
-    /* By default, assume the value we found is at the end of the list. */
-    int compared = 1;
-    if (flexEntryIsValid(m->map[mapIdx], startP)) {
-        databox value;
-        databoxWide valueWide;
-        flexGetByTypeInto(startP, &value, &valueWide);
-
-        compared = databoxCompare(&value, &p->compareAgainst);
-    }
-
-    switch (p->condition) {
-    case MULTIMAP_CONDITION_LESS_THAN_EQUAL:
-        if (mapIdx == 1) {
-            /* The boundary lives in map 1, so all of map 0 sorts below
-             * it and can be dropped with no traversal. */
-            flexReset(&m->map[0]);
-            SET_MIDDLE_FORCE(m, 0);
-        }
-
-        /* see multimapSmall for comments */
-        if (compared == 0) {
-            flexDeleteUpToInclusivePlusN(&m->map[mapIdx], startP,
-                                         m->elementsPerEntry - 1);
-        } else {
-            flexDeleteUpToInclusive(&m->map[mapIdx],
-                                    flexPrev(m->map[mapIdx], startP));
-        }
-
-        SET_MIDDLE_FORCE(m, mapIdx);
-
-        /* Draining map 0 must never strand data in map 1, where
-         * searches (which cut off on an empty map 0) can't reach it. */
-        multimapMediumConform_(m, 0);
-        return true;
-    default:
-        /* A tier trims a prefix (<=) only; multimapDeleteByPredicate
-         * handles every other condition */
-        assert(false && "Not Implemented!");
-        return false;
-    }
-    return false;
+    /* A tier trims a prefix (<=) only; multimapDeleteByPredicate handles
+     * every other condition */
+    assert(p->condition == MULTIMAP_CONDITION_LESS_THAN_EQUAL);
+    return p->condition == MULTIMAP_CONDITION_LESS_THAN_EQUAL &&
+           multimapMediumDeleteRange(m, nullptr, &p->compareAgainst) > 0;
 }
 
 size_t multimapMediumDeleteRange(multimapMedium *m, const databox *lo,
@@ -1051,8 +1006,8 @@ size_t multimapMediumDeleteRange(multimapMedium *m, const databox *lo,
         }
     }
 
-    /* Draining map 0 must never strand data in map 1 (see
-     * DeleteByPredicate) */
+    /* Draining map 0 must never strand data in map 1, where searches
+     * (which cut off on an empty map 0) can't reach it */
     if (rows) {
         multimapMediumConform_(m, 0);
     }

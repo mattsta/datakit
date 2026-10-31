@@ -2307,6 +2307,18 @@ int ulidTest(int, char *[]) {
             g.clockSource != ULID_CLOCK_MONOTONIC_OFFSET) {
             ERR("%s", "after the clock change an id did not rise");
         }
+
+        /* Back to the wall clock, ids still rise; no generator is refused,
+         * and so is a timestamp check for no variant */
+        ulid64_t back;
+        if (!ulidGenSetClockSource(&g, ULID_CLOCK_REALTIME) ||
+            g.clockOffsetNs != 0 ||
+            !ulid64Generate(&g, &back, ULID_VARIANT_MSCOUNT) ||
+            back.data <= after.data ||
+            ulidGenSetClockSource(nullptr, ULID_CLOCK_REALTIME) ||
+            ulid64ValidateTimestamp(0, ULID_VARIANT_COUNT)) {
+            ERR("%s", "a return to the wall clock, or a refusal, failed");
+        }
     }
 
     TEST("SNOWFLAKE ids stay unique and ordered past 8192 in one ms") {

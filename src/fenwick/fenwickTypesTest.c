@@ -19,6 +19,7 @@
 #include "fenwickI16.h"
 #include "fenwickI32.h"
 #include "fenwickI64.h"
+#include "fenwickPersist.h"
 #include "fenwickU16.h"
 #include "fenwickU32.h"
 #include "fenwickU64.h"
@@ -470,6 +471,13 @@ FWT_BULK(Double, double, 1)
             fenwick##T##FullGet(full, 2) != (VT)3) {                           \
             ERR(#T ": an update at the last Full index was not refused");      \
         }                                                                      \
+        /* So is one past one doubling and the jump limit (2^22 cells) */      \
+        ok = true;                                                             \
+        full = fenwick##T##FullUpdate(full, (FullIdx)1 << 23, (VT)1, &ok);     \
+        if (ok || fenwick##T##FullCount(full) != 3 ||                          \
+            fenwick##T##FullGet(full, 2) != (VT)3) {                           \
+            ERR(#T ": a Full update far past its size was not refused");       \
+        }                                                                      \
                                                                                \
         /* LowerBound: the first index whose prefix sum reaches the target     \
          * (prefix sums 1, 3, 6), none past the total */                       \
@@ -551,6 +559,24 @@ int fenwickTypesTest(int, char *[]) {
             fenwick##T##Count(fw) != last + 1 ||                               \
             fenwick##T##Query(fw, last) != 101) {                              \
             ERR(#T ": a write at 2^22 - 1 was refused or lost a value");       \
+        }                                                                      \
+        fenwick##T##Free(fw);                                                  \
+    }                                                                          \
+    TEST("persist: fenwick" #T " logs and replays only its own ops") {         \
+        /* Update, Set and Clear are logged; any other op, or an update        \
+         * without its value, is neither encoded nor applied */                \
+        const persistOps *ops = &persistOpsFenwick##T;                         \
+        const databox idx = databoxNewUnsigned(1);                             \
+        const databox *lone[] = {&idx};                                        \
+        const databox *pair[] = {&idx, &idx};                                  \
+        size_t len = 0;                                                        \
+        size_t bodyLen = 0;                                                    \
+        cleaner(zfree) void *body = persistOpEncodeBoxes(pair, 2, &bodyLen);   \
+        void *fw = nullptr;                                                    \
+        if (ops->encodeOp(PERSIST_OP_DELETE, pair, 2, &len) ||                 \
+            ops->encodeOp(PERSIST_OP_UPDATE, lone, 1, &len) ||                 \
+            ops->applyOp(&fw, PERSIST_OP_DELETE, body, bodyLen) || fw) {       \
+            ERR(#T ": persist took an op the tree does not log");              \
         }                                                                      \
         fenwick##T##Free(fw);                                                  \
     }                                                                          \

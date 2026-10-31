@@ -576,6 +576,8 @@ void persistCtxTestRefuseLogsEnd(persistCtx *ctx, persistCtxTestRefusal *r) {
 #include "persistTestCommon.h"
 #include <unistd.h>
 
+defcleaner(flex *, flexFree);
+
 /* Counts bad-entry notifications */
 static void persistCtxTestNotify(persist *, const persistBadEntryReport *,
                                  void *ctx) {
@@ -757,6 +759,32 @@ int persistCtxTest(int, char *[]) {
             persistCtxFree(ctx);
         }
         dkDiagSetPrintMode(priorPrint);
+    }
+
+    TEST("a saved snapshot recovers; no context or structure is refused") {
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxSave", path, sizeof(path))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            persistCtx *ctx = persistCtxNew(path, nullptr);
+            cleaner(flexFree) flex *f = flexNew();
+            flexPushSigned(&f, 5, FLEX_ENDPOINT_TAIL);
+            if (persistCtxStartNew(nullptr, f, &persistOpsFlex) ||
+                persistCtxStartNew(ctx, nullptr, &persistOpsFlex) ||
+                persistCtxSaveSnapshot(nullptr, f, &persistOpsFlex) ||
+                persistCtxSaveSnapshot(ctx, nullptr, &persistOpsFlex) ||
+                !persistCtxSaveSnapshot(ctx, f, &persistOpsFlex)) {
+                ERR("a save was refused, or one with nothing to save taken");
+            }
+            persistCtxFree(ctx);
+            ctx = persistCtxNew(path, nullptr);
+            cleaner(flexFree) flex *back =
+                persistCtxRecover(ctx, &persistOpsFlex);
+            if (!back || !flexEqual(back, f)) {
+                ERR("the saved snapshot did not recover");
+            }
+            persistCtxFree(ctx);
+        }
     }
 
     TEST("an open with nothing on disk leaves the context unbound") {

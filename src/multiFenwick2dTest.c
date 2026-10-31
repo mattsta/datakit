@@ -6,7 +6,9 @@
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "flex.h"
 #include "multiFenwickFlat.h"
+#include "persist.h"
 
 #include <float.h>
 #include <inttypes.h>
@@ -14,6 +16,7 @@
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(void *, zfree);
+defcleaner(flex *, flexFree);
 defcleaner(multiFenwick2d *, multiFenwick2dFree);
 defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
 
@@ -219,6 +222,54 @@ int multiFenwick2dTest(int, char *[]) {
             multiFenwick2dRows(t) != 1 || multiFenwick2dCols(t) != 1 ||
             !multiFenwick2dGet(t, 0, 0, &r) || r.data.u64 != UINT64_MAX) {
             ERR("an out-of-range cell was accepted or changed the tree");
+        }
+    }
+
+    TEST("persist: a snapshot or op that is not the tree's is refused") {
+        /* Snapshots: fewer entries than the header, empty capacities over
+         * a cell, and a 2 x 2 grid with three cells.  Ops: anything but
+         * Update, Set and Clear, an update without its value, and a row or
+         * column that is not an unsigned integer */
+        const persistOps *ops = &persistOpsMultiFenwick2d;
+        /* {header entries, rowCap, colCap, rows, cols, cells} */
+        static const uint64_t shapes[][6] = {
+            {3, 0, 0, 0, 0, 0}, {4, 0, 0, 0, 0, 1}, {4, 2, 2, 1, 1, 3}};
+        for (size_t i = 0; i < countof(shapes); i++) {
+            cleaner(flexFree) flex *f = flexNew();
+            for (uint64_t e = 0; e < shapes[i][0]; e++) {
+                flexPushUnsigned(&f, shapes[i][1 + e], FLEX_ENDPOINT_TAIL);
+            }
+            for (uint64_t c = 0; c < shapes[i][5]; c++) {
+                flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
+            }
+            void *back = ops->restore((const uint8_t *)f, flexBytes(f));
+            if (back) {
+                ERR("snapshot shape %zu was restored", i);
+                ops->free(back);
+            }
+        }
+
+        const databox one = DATABOX_UNSIGNED(1);
+        const databox minus = DATABOX_SIGNED(-1);
+        const databox *pair[] = {&one, &one};
+        const databox *cell[] = {&one, &one, &one};
+        const databox *badRow[] = {&minus, &one, &one};
+        const databox *badCol[] = {&one, &minus, &one};
+        size_t len = 0;
+        size_t pairLen = 0;
+        size_t rowLen = 0;
+        size_t colLen = 0;
+        cleaner(zfree) void *pairBody = persistOpEncodeBoxes(pair, 2, &pairLen);
+        cleaner(zfree) void *rowBody = persistOpEncodeBoxes(badRow, 3, &rowLen);
+        cleaner(zfree) void *colBody = persistOpEncodeBoxes(badCol, 3, &colLen);
+        cleaner(multiFenwick2dFree) multiFenwick2d *t = nullptr;
+        if (ops->encodeOp(PERSIST_OP_DELETE, cell, 3, &len) ||
+            ops->encodeOp(PERSIST_OP_UPDATE, pair, 2, &len) ||
+            ops->applyOp(&t, PERSIST_OP_DELETE, pairBody, pairLen) ||
+            ops->applyOp(&t, PERSIST_OP_UPDATE, pairBody, pairLen) ||
+            ops->applyOp(&t, PERSIST_OP_UPDATE, rowBody, rowLen) ||
+            ops->applyOp(&t, PERSIST_OP_NUM_INCR, colBody, colLen) || t) {
+            ERR("persist took an op that is not the tree's");
         }
     }
 

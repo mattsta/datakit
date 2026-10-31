@@ -141,6 +141,12 @@ bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[],
 }
 
 void multimapSmallInsertFullWidth(multimapSmall *m, const databox *elements[]) {
+    /* A set holds each row once: its full-width insert is its insert */
+    if (m->mapIsSet) {
+        (void)multimapSmallInsert(m, elements);
+        return;
+    }
+
     flexEntry *middle = GET_MIDDLE(m);
     /* InsertFullWidth: Always compare ALL elements (key+value) to allow
      * multiple entries with same key but different values (sorted set). */
@@ -669,55 +675,11 @@ bool multimapSmallIteratorNextWithSlots(multimapIterator *iter,
 
 bool multimapSmallDeleteByPredicate(multimapSmall *m,
                                     const multimapPredicate *p) {
-    flexEntry *startP = flexGetByTypeSortedWithMiddle(
-        m->map, m->elementsPerEntry, &p->compareAgainst, GET_MIDDLE(m));
-
-    /* If the found value is the END OF THE MAP, don't continue! */
-    if (!startP) {
-        return false;
-    }
-
-    /* RESUME:
-     *   - getbytype is returning the next HIGHEST match, but we don't
-     *     want to delete that, we want to delete UP TO THAT, NOT inclusive.
-     *     Unless it's an exact match, then we delete up to the EXACT MATCH,
-     *     inclusive.
-     */
-
-    /* By default, assume the value we found is at the end of the list. */
-    int compared = 1;
-    if (flexEntryIsValid(m->map, startP)) {
-        databox value;
-        databoxWide valueWide;
-        flexGetByTypeInto(startP, &value, &valueWide);
-
-        compared = databoxCompare(&value, &p->compareAgainst);
-    }
-
-    switch (p->condition) {
-    case MULTIMAP_CONDITION_LESS_THAN_EQUAL:
-        if (compared == 0) {
-            /* The element we found is an EXACT MATCH for LTE, so
-             * delete everything in the map up to AND INCLUDING this
-             * element. */
-            flexDeleteUpToInclusivePlusN(&m->map, startP,
-                                         m->elementsPerEntry - 1);
-
-        } else {
-            /* else, delete everything BELOW the current element because
-             * our find will return the next highest above the search limit */
-            flexDeleteUpToInclusive(&m->map, flexPrev(m->map, startP));
-        }
-        SET_MIDDLE_FORCE(m);
-        return true;
-    default:
-        /* A tier trims a prefix (<=) only; multimapDeleteByPredicate
-         * handles every other condition */
-        assert(false && "Not Implemented!");
-        return false;
-    }
-
-    return false;
+    /* A tier trims a prefix (<=) only; multimapDeleteByPredicate handles
+     * every other condition */
+    assert(p->condition == MULTIMAP_CONDITION_LESS_THAN_EQUAL);
+    return p->condition == MULTIMAP_CONDITION_LESS_THAN_EQUAL &&
+           multimapSmallDeleteRange(m, nullptr, &p->compareAgainst) > 0;
 }
 
 size_t multimapSmallDeleteRange(multimapSmall *m, const databox *lo,

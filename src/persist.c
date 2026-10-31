@@ -7270,6 +7270,12 @@ int persistTest(int, char *[]) {
              after.checksumType != PERSIST_CHECKSUM_XXH3_64)) {
             ERR("set took a checksum no write can use");
         }
+        /* No persist or no config: refused, nothing to compact, no key */
+        if (persistSetConfig(nullptr, &after) || persistSetConfig(p, nullptr) ||
+            persistShouldCompact(nullptr) || persistShouldCompact(p) ||
+            persistLastExpectedKeyId(nullptr)) {
+            ERR("a NULL persist or config was taken");
+        }
         persistClose(p);
     }
 

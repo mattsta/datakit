@@ -904,8 +904,8 @@ int aeadNonceLogTest(int, char *[]) {
          * or a mask that does not fit it, a count over the load limit or
          * off by one, a slot whose hash is not its tuple's, a FIFO head
          * missing or out of range, a head with a predecessor, a tail with
-         * a successor, a list that loops, a link whose prev is wrong; and
-         * an empty log whose head is set */
+         * a successor, a list that loops, a link whose prev is wrong, a tuple
+         * held twice in one probe run; and an empty log whose head is set */
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         for (uint8_t i = 0; i < 5; i++) {
             uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {i, 0x5a};
@@ -924,7 +924,7 @@ int aeadNonceLogTest(int, char *[]) {
         }
         const size_t head = log->fifo_head;
         const size_t second = log->links[head].next;
-        for (int c = 0; c < 11; c++) {
+        for (int c = 0; c < 12; c++) {
             switch (c) {
             case 0:
                 log->cap = cap + 1;
@@ -959,6 +959,16 @@ int aeadNonceLogTest(int, char *[]) {
             case 10:
                 log->fifo_tail = AEAD_NONCE_LOG_NIL;
                 break;
+            case 11: {
+                /* The head's tuple again in the first empty slot past it:
+                 * the copy's probe run passes the original */
+                size_t j = (head + 1u) & log->mask;
+                while (log->slots[j].key_id != 0u) {
+                    j = (j + 1u) & log->mask;
+                }
+                log->slots[j] = log->slots[head];
+                break;
+            }
             }
             if (anlPersistValidate(log)) {
                 ERR("corruption %d was accepted", c);
@@ -1215,6 +1225,30 @@ int aeadNonceLogTest(int, char *[]) {
         }
         if (aeadNonceLogObserve(log, 1u, nullptr)) {
             ERR("NULL nonce accepted");
+        }
+
+        /* Clearing a NULL log or key 0 does nothing */
+        if (!aeadNonceLogObserve(log, 1u, nonce)) {
+            ERR("a first observation was refused");
+        }
+        aeadNonceLogClearKey(nullptr, 1u);
+        aeadNonceLogClearKey(log, 0u);
+        if (aeadNonceLogSize(log) != 1u) {
+            ERR("a no-op clear changed the log (size %zu)",
+                aeadNonceLogSize(log));
+        }
+
+        /* A capacity header below the minimum or above the maximum */
+        const uint64_t caps[] = {AEAD_NONCE_LOG_MIN_CAP / 2,
+                                 (uint64_t)AEAD_NONCE_LOG_MAX_CAP * 2};
+        for (size_t c = 0; c < countof(caps); c++) {
+            cleaner(flexFree) flex *f = flexNew();
+            flexPushUnsigned(&f, caps[c], FLEX_ENDPOINT_TAIL);
+            cleaner(aeadNonceLogFree) aeadNonceLog *back =
+                aeadNonceLogFromBytes((const uint8_t *)f, flexBytes(f));
+            if (back) {
+                ERR("FromBytes accepted capacity %" PRIu64, caps[c]);
+            }
         }
     }
 

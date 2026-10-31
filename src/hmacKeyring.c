@@ -3455,6 +3455,58 @@ int hmacKeyringTest(int, char *[]) {
         hmacKeyringFree(ring);
     }
 
+    TEST("replayed reservations for absent keys keep the highest as each "
+         "key's floor") {
+        /* Key 5 is reserved to 100, then to 50; key 6 to 10.  Neither is
+         * installed, so each keeps its highest limit for its install.  A
+         * snapshot whose pending floor names key 0 is refused */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const databox five = DATABOX_UNSIGNED(5);
+        const databox six = DATABOX_UNSIGNED(6);
+        const databox hundred = DATABOX_UNSIGNED(100);
+        const databox fifty = DATABOX_UNSIGNED(50);
+        const databox ten = DATABOX_UNSIGNED(10);
+        const databox *ops[][2] = {
+            {&five, &hundred}, {&five, &fifty}, {&six, &ten}};
+        bool applied = true;
+        for (size_t i = 0; i < countof(ops); i++) {
+            size_t len = 0;
+            cleanerName(zfree, Bytes) uint8_t *body =
+                persistOpsHmacKeyring.encodeOp(PERSIST_OP_UPDATE, ops[i], 2,
+                                               &len);
+            applied &= body && persistOpsHmacKeyring.applyOp(
+                                   &ring, PERSIST_OP_UPDATE, body, len);
+        }
+        const uint8_t key[32] = {0x15};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {5, 6};
+        uint64_t at5 = 0;
+        uint64_t at6 = 0;
+        if (!applied ||
+            !hmacKeyringInstall(ring, 5u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt) ||
+            !hmacKeyringInstall(ring, 6u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt) ||
+            !hmacKeyringPeekAeadCounter(ring, 5u, &at5) ||
+            !hmacKeyringPeekAeadCounter(ring, 6u, &at6) || at5 != 100 ||
+            at6 != 10) {
+            ERR("installs started at %" PRIu64 " and %" PRIu64
+                ", expected 100 and 10",
+                at5, at6);
+        }
+        hmacKeyringFree(ring);
+
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* no floor */
+        flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL); /* one pending */
+        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* key 0 */
+        flexPushUnsigned(&f, 9u, FLEX_ENDPOINT_TAIL);
+        hmacKeyring *dst = hmacKeyringCreate();
+        if (hmacKeyringRestore(dst, (const uint8_t *)f, flexBytes(f))) {
+            ERR("a pending floor for key 0 was restored");
+        }
+        hmacKeyringFree(dst);
+    }
+
     TEST("revoked key floor: default zero, monotonic, snapshot round-trip") {
         hmacKeyring *ring = hmacKeyringCreate();
 

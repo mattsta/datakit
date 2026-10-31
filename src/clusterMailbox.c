@@ -2906,6 +2906,14 @@ int clusterMailboxTest(int, char *[]) {
                                sizeof(frame), &written)) {
             ERR("an unframeable size, a NULL payload or no output was taken");
         }
+
+        /* Ingest with no mailbox or no bytes is a parameter error */
+        if (clusterMailboxIngest(nullptr, frame, written, 3u) !=
+                CLUSTER_MAILBOX_ERR_PARAM ||
+            clusterMailboxIngest(mb, nullptr, written, 3u) !=
+                CLUSTER_MAILBOX_ERR_PARAM) {
+            ERR("Ingest took a NULL mailbox or NULL bytes");
+        }
     }
 
     TEST("happy-path round-trip across many algorithms") {
@@ -3798,6 +3806,16 @@ int clusterMailboxTest(int, char *[]) {
         }
         if (clusterMailboxRestore(mb, empty, 1)) {
             ERR("Restore must reject non-flex bytes");
+        }
+
+        /* A NULL mailbox or buffer, and a flex with no mode entry */
+        cleaner(flexFree) flex *no_mode = flexNew();
+        if (clusterMailboxRestore(nullptr, (const uint8_t *)no_mode,
+                                  flexBytes(no_mode)) ||
+            clusterMailboxRestore(mb, nullptr, flexBytes(no_mode)) ||
+            clusterMailboxRestore(mb, (const uint8_t *)no_mode,
+                                  flexBytes(no_mode))) {
+            ERR("Restore must reject a NULL argument or an empty flex");
         }
 
         /* Entry count past the mode NOT a multiple of 3 — flex valid but

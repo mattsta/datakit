@@ -364,6 +364,13 @@ SGT_BULK(U128, __uint128_t, 0)
             segment##T##FullGet(full, 2) != (VT)5) {                           \
             ERR(#T ": an update at the last Full index was not refused");      \
         }                                                                      \
+        /* So is one past one doubling and the jump limit (2^22 cells) */      \
+        ok = true;                                                             \
+        full = segment##T##FullUpdate(full, (FullIdx)1 << 23, (VT)1, &ok);     \
+        if (ok || segment##T##FullCount(full) != 3 ||                          \
+            segment##T##FullGet(full, 2) != (VT)5) {                           \
+            ERR(#T ": a Full update far past its size was not refused");       \
+        }                                                                      \
         segment##T##SmallFree(small);                                          \
         segment##T##FullFree(full);                                            \
                                                                                \

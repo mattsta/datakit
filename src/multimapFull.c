@@ -1174,6 +1174,8 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
                    const bool keysCanBecomePointers, void **keyAsPointer,
                    const bool forceFullWidthComparison,
                    databox *const replacedOut) {
+    /* A set's full-width insert is its insert (multimapFullInsertFullWidth) */
+    assert(!(m->mapIsSet && forceFullWidthComparison));
     flexEntry *middle = GET_MIDDLE(m, mapIdx, *map);
 
     bool found = false;
@@ -1190,7 +1192,7 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
         assert(!replacedOut);
         /* A set adds the row only when absent */
         found =
-            m->mapIsSet && !forceFullWidthComparison
+            m->mapIsSet
                 ? flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
                       map, m->elementsPerEntry, elements, insertKey, &middle,
                       referenceContainer)
@@ -1200,7 +1202,7 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
 
         updateRangeBoxForIdxWithReference(m, mapIdx, *map, referenceContainer);
     } else {
-        if (keysCanBecomePointers && m->mapIsSet && !forceFullWidthComparison) {
+        if (keysCanBecomePointers && m->mapIsSet) {
             /* Set semantics with externalized keys: the pointer insert has
              * no dedupe mode, so look for the whole row first and insert
              * (as a full-width row, which may externalize the key) only
@@ -1220,7 +1222,7 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
                 flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(
                     map, m->elementsPerEntry, elements, &middle,
                     compareUsingKeyElementOnly, keyAsPointer, replacedOut);
-        } else if (m->mapIsSet && !forceFullWidthComparison) {
+        } else if (m->mapIsSet) {
             /* TRUE set semantics: full-width compare AND dedupe — the
              * `values` accounting below already assumed found means
              * no-dup ("For sets: 'found' means exact match (no dup)"),
@@ -1240,10 +1242,11 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
 
     SET_MIDDLE(m, mapIdx, middle, *map);
 
-    /* Only update count if we inserted a NEW key (not replaced an existing).
-     * For maps: 'found' means we found and replaced an existing key.
+    /* The count grows by the rows added.  For maps: 'found' means we found
+     * and replaced an existing key, except in a full-width insert (a
+     * sorted bag), which adds the row even when an identical one is held.
      * For sets: 'found' means we found exact (key+value) match (no dup). */
-    if (!found) {
+    if (!found || forceFullWidthComparison) {
         m->values++;
     }
 
@@ -2058,6 +2061,12 @@ void multimapFullAppend(multimapFull *m, const databox *elements[]) {
 }
 
 void multimapFullInsertFullWidth(multimapFull *m, const databox *elements[]) {
+    /* A set holds each row once: its full-width insert is its insert */
+    if (m->mapIsSet) {
+        (void)multimapFullInsert(m, elements);
+        return;
+    }
+
     /* Step 1: find matching map for range (full width search). */
     const multimapFullIdx mapIdx =
         multimapFullBinarySearchFullWidth(m, elements);
@@ -2800,83 +2809,11 @@ bool multimapFullIteratorNextWithSlots(multimapIterator *iter,
 
 bool multimapFullDeleteByPredicate(multimapFull *m,
                                    const multimapPredicate *p) {
-    if (p->condition != MULTIMAP_CONDITION_LESS_THAN_EQUAL) {
-        /* A tier trims a prefix (<=) only; multimapDeleteByPredicate
-         * handles every other condition */
-        assert(false && "Not Implemented!");
-        return false;
-    }
-
-    multimapEntry me = {};
-    /* Boundary (position) search, NOT exact-match: "delete all <= X"
-     * must work for any X, not only when X is an existing key. */
-    multimapFullGetUnderlyingEntryGetEntry(m, &p->compareAgainst, &me);
-    if (!me.fe) {
-        return false;
-    }
-
-    /* Freeing whole sub-maps only decrements the sub-map count, so
-     * every removed row must be subtracted from m->values (the element
-     * count multimapFullCount returns) explicitly. Every sub-map below
-     * the boundary sub-map is entirely <= boundary; free them
-     * wholesale ('0' each time, since deleting '0' promotes the next
-     * map to '0'). */
-    size_t removed = 0;
-    for (multimapFullIdx i = 0; i < me.mapIdx; i++) {
-        flex *map = getMap(m, 0);
-        removed += flexCount(map) / m->elementsPerEntry;
-        flexFree(map);
-        reallocDecrCount(m, 0);
-    }
-
-    /* Re-find in the now-lowest sub-map (the wholesale deletes above
-     * moved indices). Everything left to delete lives in sub-map 0. */
-    multimapFullGetUnderlyingEntryGetEntry(m, &p->compareAgainst, &me);
-    assert(me.mapIdx == 0);
-    if (!me.fe) {
-        m->values -= removed;
-        return removed > 0;
-    }
-
-    /* Compare NOW, against the entry actually found post-coarse: an
-     * exact match deletes up to AND including it; anything else (the
-     * next-higher key, or the end-of-map sentinel when the boundary is
-     * >= every remaining key) deletes strictly below it. Computing this
-     * against a stale pre-coarse entry could pair 'exact' with an
-     * end-sentinel position and walk past the buffer. */
-    const size_t before = flexCount(*me.map) / m->elementsPerEntry;
-    int compared = 1;
-    if (flexEntryIsValid(*me.map, me.fe)) {
-        databox value;
-        databoxWide valueWide;
-        flexGetByTypeInto(me.fe, &value, &valueWide);
-        compared = databoxCompare(&value, &p->compareAgainst);
-    }
-
-    /* see multimapSmall for comments */
-    if (compared == 0) {
-        flexDeleteUpToInclusivePlusN(me.map, me.fe, m->elementsPerEntry - 1);
-    } else {
-        flexDeleteUpToInclusive(me.map, flexPrev(*me.map, me.fe));
-    }
-
-    removed += before - flexCount(*me.map) / m->elementsPerEntry;
-    m->values -= removed;
-
-    /* Trimming can empty the lowest sub-map entirely (boundary >= all
-     * its keys). An empty LEADING sub-map is an invalid Full state -
-     * First and the binary search assume sub-map 0 is populated - so
-     * reclaim it and promote the next sub-map into its place. When it
-     * is the only sub-map, an empty map is the legitimate empty-map
-     * state and is kept. */
-    if (flexCount(*me.map) == 0 && m->count > 1) {
-        flexFree(*me.map);
-        reallocDecrCount(m, 0);
-    } else {
-        SET_MIDDLE_FORCE(m, me.mapIdx, *me.map);
-    }
-
-    return true;
+    /* A tier trims a prefix (<=) only; multimapDeleteByPredicate handles
+     * every other condition */
+    assert(p->condition == MULTIMAP_CONDITION_LESS_THAN_EQUAL);
+    return p->condition == MULTIMAP_CONDITION_LESS_THAN_EQUAL &&
+           multimapFullDeleteRange(m, nullptr, &p->compareAgainst) > 0;
 }
 
 /* The key of the first (or, 'last', the last) row of 'map' compared with
@@ -3243,6 +3180,89 @@ static int32_t surrogateCopyCheck_(const char *where, const multimapFull *m,
  * the old every-size sweep at about 1/80 of its work. */
 static int32_t multimapFullTestNextSize_(int32_t i) {
     return i < 256 ? i + 1 : i + i / 16;
+}
+
+/* The rows (of up to three elements) a forward iteration over 'm' meets */
+static size_t multimapFullTestRows_(multimapFull *m) {
+    multimapIterator iter;
+    multimapFullIteratorInit(m, &iter, true);
+    databox got[3];
+    databox *gotP[3] = {&got[0], &got[1], &got[2]};
+    size_t rows = 0;
+    while (multimapFullIteratorNext(&iter, gotP)) {
+        rows++;
+    }
+    return rows;
+}
+
+/* A set of [key, tag, pad] rows: keys 0..19, tags 0..2, a pad past the map
+ * limit so each map holds one row.  Each row arrives twice, in mixed order,
+ * through Insert ('way' 0), InsertFullWidth (1), Append (2; a row at the
+ * last key goes where an insert puts it) or all three in turn (3); a repeat
+ * changes nothing.  After each round the count is the rows held; at the
+ * end the rows iterate in (key, tag) order and each exists */
+static int multimapFullTestBigSetRows_(int way) {
+    int err = 0;
+    cleaner(multimapFullFree) multimapFull *m = multimapFullSetNew(3, 64);
+    char pad[200];
+    memset(pad, 's', sizeof(pad));
+    const databox padBox = databoxNewBytes(pad, sizeof(pad));
+    for (int round = 0; round < 2; round++) {
+        for (int64_t i = 0; i < 60; i++) {
+            const int64_t k = (i * 7) % 20;
+            const int64_t tag = 2 - i / 20;
+            const databox key = DATABOX_SIGNED(k);
+            const databox tagBox = DATABOX_SIGNED(tag);
+            const databox *row[3] = {&key, &tagBox, &padBox};
+            switch (way < 3 ? way : (int)((i + round) % 3)) {
+            case 0:
+                multimapFullInsert(m, row);
+                break;
+            case 1:
+                multimapFullInsertFullWidth(m, row);
+                break;
+            default:
+                multimapFullAppend(m, row);
+                break;
+            }
+            const size_t rows = multimapFullTestRows_(m);
+            if (rows != multimapFullCount(m)) {
+                ERR("way %d, round %d, row %" PRId64 " (%" PRId64 ", %" PRId64
+                    "): %zu rows held, count %zu",
+                    way, round, i, k, tag, rows, multimapFullCount(m));
+                return err;
+            }
+        }
+    }
+    if (multimapFullCount(m) != 60 || multimapFullNodeCount(m) < 30) {
+        ERR("way %d: %zu rows in %zu maps, expected 60 rows one or two a map",
+            way, multimapFullCount(m), multimapFullNodeCount(m));
+    }
+
+    multimapIterator iter;
+    multimapFullIteratorInit(m, &iter, true);
+    databox got[3];
+    databox *gotP[3] = {&got[0], &got[1], &got[2]};
+    int64_t seen = 0;
+    while (multimapFullIteratorNext(&iter, gotP)) {
+        if (got[0].data.i != seen / 3 || got[1].data.i != seen % 3) {
+            ERR("way %d: row %" PRId64 " is (%" PRIdMAX ", %" PRIdMAX ")", way,
+                seen, got[0].data.i, got[1].data.i);
+            break;
+        }
+        seen++;
+    }
+    for (int64_t i = 0; i < 60; i++) {
+        const databox key = DATABOX_SIGNED(i / 3);
+        const databox tagBox = DATABOX_SIGNED(i % 3);
+        const databox *row[3] = {&key, &tagBox, &padBox};
+        if (!multimapFullExistsFullWidth(m, row)) {
+            ERR("way %d: row (%" PRId64 ", %" PRId64 ") missing", way, i / 3,
+                i % 3);
+        }
+    }
+    multimapFullVerify(m);
+    return err;
 }
 
 int multimapFullTest(int, char *[]) {
@@ -4362,6 +4382,33 @@ int multimapFullTest(int, char *[]) {
                 ERR("key %" PRId64 " not found after appends", k);
                 break;
             }
+        }
+    }
+
+    TEST("a set of rows too big to share a map keeps whole-row order") {
+        /* Through Insert, InsertFullWidth, Append, and the three mixed */
+        for (int way = 0; way < 4; way++) {
+            err += multimapFullTestBigSetRows_(way);
+        }
+
+        /* A map's full-width insert is a sorted bag: each repeat of a
+         * row adds it again, and the count says so */
+        cleaner(multimapFullFree) multimapFull *bag = multimapFullNew(2);
+        bag->maxSize = 64;
+        char pad[100];
+        memset(pad, 'b', sizeof(pad));
+        const databox padBox = databoxNewBytes(pad, sizeof(pad));
+        for (int round = 0; round < 2; round++) {
+            for (int64_t k = 0; k < 20; k++) {
+                const databox key = DATABOX_SIGNED((k * 7) % 20);
+                const databox *row[2] = {&key, &padBox};
+                multimapFullInsertFullWidth(bag, row);
+            }
+        }
+        const size_t rows = multimapFullTestRows_(bag);
+        if (rows != 40 || multimapFullCount(bag) != 40) {
+            ERR("a bag of 20 rows twice holds %zu rows, counts %zu", rows,
+                multimapFullCount(bag));
         }
     }
 

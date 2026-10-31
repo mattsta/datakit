@@ -6092,6 +6092,8 @@ typedef struct testCiOracle {
     bool fold; /* keys match ASCII case-insensitively */
     uint32_t count;
     uint32_t evictMismatch;  /* evicted entries the oracle did not hold */
+    uint32_t vetoEvery;      /* the eviction callback refuses every Nth */
+    uint32_t evictCalls;     /* eviction callback calls */
     uint32_t configured[13]; /* testCiConfigure_ events made, by kind */
     testCiEntry e[TEST_CI_BASES * 8];
 } testCiOracle;
@@ -6590,6 +6592,9 @@ static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
 static bool testCiEvicted_(void *privdata, const databox *key,
                            const databox *val) {
     testCiOracle *o = privdata;
+    if (o->vetoEvery && ++o->evictCalls % o->vetoEvery == 0) {
+        return false; /* the entry stays, in the dict and the oracle */
+    }
     const int32_t at = testCiFindExact_(o, key);
     if (at >= 0 && testBoxIsInt_(val, o->e[at].val)) {
         testCiRemove_(o, at);
@@ -6677,13 +6682,20 @@ static int testCiConfigure_(multidict *d, testCiOracle *o, bool *tracking,
             break;
         }
         const uint64_t cap = user * 3 / 4;
+        /* Any policy, tracked or not (an untracked LFU or SIZE_LRU picks
+         * at random); sometimes every third victim is refused */
+        static const multidictEvictPolicy policies[] = {
+            MULTIDICT_EVICT_RANDOM, MULTIDICT_EVICT_LRU, MULTIDICT_EVICT_LFU,
+            MULTIDICT_EVICT_SIZE_LRU};
+        o->vetoEvery = testRand() % 2 ? 3 : 0;
+        o->evictCalls = 0;
         multidictSetEvictionCallback(d, testCiEvicted_, o);
-        multidictSetEvictPolicy(d, *tracking ? MULTIDICT_EVICT_LRU
-                                             : MULTIDICT_EVICT_RANDOM);
+        multidictSetEvictPolicy(d, policies[testRand() % countof(policies)]);
         multidictSetMaxMemory(d, cap);
         (void)multidictEvictToLimit(d);
         multidictSetMaxMemory(d, 0);
         multidictSetEvictionCallback(d, nullptr, nullptr);
+        o->vetoEvery = 0;
         if (o->evictMismatch ||
             multidictKeyBytes(d) + multidictValBytes(d) > cap) {
             ERR("step %" PRIu32 ": eviction to %" PRIu64 " bytes left %" PRIu64

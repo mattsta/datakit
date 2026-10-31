@@ -3858,6 +3858,32 @@ int flexEnvelopeTest(int, char *[]) {
                     cases[i].verifies) {
                 ERR("case %zu: verify did not give %d", i, cases[i].verifies);
             }
+
+            /* Sealed the same way, Open checks it too */
+            static constexpr uint8_t key[32] = {9};
+            const uint8_t nonce[12] = {(uint8_t)i};
+            const flexEnvelopeSealParams sp = {
+                .key = key,
+                .key_len = sizeof(key),
+                .nonce = nonce,
+                .nonce_len = sizeof(nonce),
+                .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
+                .on_wire_flags = cases[i].flags};
+            const size_t sealedCap = flexEnvelopeWrappedSize(
+                cases[i].len, FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
+                cases[i].flags);
+            cleanerName(zfree, Bytes) uint8_t *sealed = zmalloc(sealedCap);
+            size_t sealedLen = 0;
+            const flexEnvelopeVerifyParams op = {.key = key,
+                                                 .key_len = sizeof(key)};
+            uint8_t opened[64];
+            size_t openedLen = 0;
+            if (!flexEnvelopeSeal(sealed, sealedCap, cases[i].bytes,
+                                  cases[i].len, &sp, &sealedLen) ||
+                flexEnvelopeOpen(sealed, sealedLen, &op, opened, sizeof(opened),
+                                 &openedLen) != cases[i].verifies) {
+                ERR("case %zu: open did not give %d", i, cases[i].verifies);
+            }
         }
     }
 
