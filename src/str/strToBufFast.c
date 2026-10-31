@@ -228,7 +228,7 @@ size_t StrUInt32ToBuf(void *out_, size_t dstLen, uint32_t x) {
     char *out = out_;
     const char *const outStart = out_;
 
-    if (dstLen < 10) {
+    if (dstLen < STR_UINT32_BUF_LEN) {
         return 0;
     }
 
@@ -330,7 +330,7 @@ size_t StrUInt64ToBuf(void *out_, size_t dstLen, uint64_t x) {
     char *out = out_;
     const char *const outStart = out_;
 
-    if (dstLen < 20) {
+    if (dstLen < STR_UINT64_BUF_LEN) {
         return 0;
     }
 
@@ -413,7 +413,7 @@ size_t StrUInt64ToBuf(void *out_, size_t dstLen, uint64_t x) {
 size_t StrInt64ToBuf(void *out_, size_t dstLen, int64_t x) {
     char *out = out_;
     bool negative = x < 0;
-    if (dstLen < 21) {
+    if (dstLen < STR_INT64_BUF_LEN) {
         return 0;
     }
 
@@ -471,10 +471,9 @@ int32_t StrDoubleToBuf(void *_buf, size_t len, double value) {
 /* ====================================================================
  * 128 bit integer string printing
  * ==================================================================== */
-/* Note: a full-width __uint128_t printed in base 10 is 40 characters */
 static constexpr uint64_t PO9 = 1'000'000'000ULL;
 size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
-    if (bufLen < 40) {
+    if (bufLen < STR_UINT128_BUF_LEN) {
         return 0;
     }
 
@@ -552,9 +551,9 @@ size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
 size_t StrInt128ToBuf(void *buf_, size_t bufLen, __int128_t n) {
     uint8_t *buf = (uint8_t *)buf_;
 
-    /* The sign plus the unsigned form's 40, for every value, so a short
+    /* The sign plus the unsigned form's room, for every value, so a short
      * buffer fails on its first use rather than on its first negative */
-    if (bufLen < 41) {
+    if (bufLen < STR_INT128_BUF_LEN) {
         return 0;
     }
 

@@ -36,11 +36,11 @@
 
 #ifndef SEGMENT_SMALL_MAX_COUNT
 #define SEGMENT_SMALL_MAX_COUNT                                                \
-    ((256 * 1024) / (sizeof(SEGMENT_VALUE_TYPE) * 2))
+    (SEGMENT_SMALL_BYTES_MAX / (sizeof(SEGMENT_VALUE_TYPE) * 2))
 #endif
 
 #ifndef SEGMENT_SMALL_MAX_BYTES
-#define SEGMENT_SMALL_MAX_BYTES (256 * 1024)
+#define SEGMENT_SMALL_MAX_BYTES SEGMENT_SMALL_BYTES_MAX
 #endif
 
 #include "segmentCoreAlgo.h"

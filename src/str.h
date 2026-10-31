@@ -555,11 +555,20 @@ typedef __uint128_t StrBloomFilterBig;
 #define StrValTimes100(val) ((val) * 100)
 #endif
 
+/* The most decimal digits a 128-bit integer has (UINT128_MAX's 39) */
+static constexpr size_t STR_INT128_DIGITS_MAX = 39;
+/* The room each writer below needs: its type's widest value (and sign);
+ * the 128-bit ones also use one byte past the digits as they write back
+ * to front from the buffer's end */
+static constexpr size_t STR_UINT32_BUF_LEN = 10;
+static constexpr size_t STR_UINT64_BUF_LEN = 20;
+static constexpr size_t STR_INT64_BUF_LEN = 21;
+static constexpr size_t STR_UINT128_BUF_LEN = STR_INT128_DIGITS_MAX + 1;
+static constexpr size_t STR_INT128_BUF_LEN = STR_UINT128_BUF_LEN + 1;
+
 /* The digits of 'value' (no terminator), returning their count.  Each
- * needs room for its type's widest value, whatever 'value' is (they write
- * whole chunks), and returns 0, writing nothing, when dstLen is smaller:
- * 10 (StrUInt32ToBuf), 20 (StrUInt64ToBuf), 21 (StrInt64ToBuf),
- * 40 (StrUInt128ToBuf), 41 (StrInt128ToBuf). */
+ * needs its STR_*_BUF_LEN of room whatever 'value' is (they write whole
+ * chunks), and returns 0, writing nothing, when dstLen is smaller. */
 size_t StrInt64ToBuf(void *dst, size_t dstLen, int64_t svalue);
 size_t StrUInt32ToBuf(void *dst, size_t dstLen, uint32_t value);
 size_t StrUInt64ToBuf(void *dst, size_t dstLen, uint64_t svalue);

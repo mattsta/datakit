@@ -10,7 +10,11 @@
  */
 
 #include "../dkC23.h" /* stdc_bit_ceil */
+#include <stddef.h>
 #include <stdint.h>
+
+/* The bytes a Small tier's tree holds before Update moves it to Full */
+static constexpr size_t SEGMENT_SMALL_BYTES_MAX = 256 * 1024;
 
 /* Operation type for range queries */
 typedef enum segmentOp {

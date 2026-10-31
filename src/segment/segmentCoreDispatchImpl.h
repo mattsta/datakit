@@ -94,7 +94,7 @@ bool SEGMENT_D_FN_(Update)(void **seg, size_t idx, SEGMENT_VALUE_TYPE value) {
         SEGMENT_D_SMALL_ *small = SEGMENT_D_UNTAG_(*seg);
         if (SEGMENT_D_FN_(SmallShouldUpgrade)(small) ||
             idx >= (size_t)SEGMENT_D_FN_(SmallCount)(small) + 1000 ||
-            idx * 2 * sizeof(SEGMENT_VALUE_TYPE) > 256 * 1024) {
+            idx * 2 * sizeof(SEGMENT_VALUE_TYPE) > SEGMENT_SMALL_BYTES_MAX) {
             SEGMENT_D_FULL_ *full = SEGMENT_D_FN_(FullFromSmall)(small);
             SEGMENT_D_FN_(SmallFree)(small);
             *seg = SEGMENT_D_TAG_(full, SEGMENT_D_TAG_FULL_);
@@ -227,7 +227,7 @@ void *SEGMENT_D_FN_(NewFromArray)(segmentOp op,
 
     /* The tier Update would keep it in (see Update) */
     if (2 * leaves * sizeof(SEGMENT_VALUE_TYPE) + sizeof(SEGMENT_D_SMALL_) <=
-        256 * 1024) {
+        SEGMENT_SMALL_BYTES_MAX) {
         SEGMENT_D_SMALL_ *small =
             SEGMENT_D_FN_(SmallNewFromArray)(values, (uint32_t)count, op);
         return SEGMENT_D_TAG_(small, SEGMENT_D_TAG_SMALL_);

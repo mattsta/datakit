@@ -1,5 +1,5 @@
 /* Segment Tree - U128 Small Tier (2-TIER SYSTEM)
- * Auto-generated from template. DO NOT EDIT MANUALLY.
+ * segmentCoreImpl.h instantiated for this type.
  */
 
 #include "segmentU128.h"
@@ -11,7 +11,6 @@
 #define SEGMENT_INDEX_TYPE_SMALL uint32_t
 #define SEGMENT_INDEX_TYPE_FULL uint64_t
 #define SEGMENT_SMALL_MAX_COUNT (4 * 1024)
-#define SEGMENT_SMALL_MAX_BYTES (256 * 1024)
 #define SEGMENT_TYPE_MIN 0
 #define SEGMENT_TYPE_MAX ((__uint128_t) - 1)
 #define SEGMENT_IS_SIGNED 0

@@ -92,6 +92,9 @@ static constexpr unsigned CHACHA20_CONST_1 = 0x3320646eu; /* "nd 3" */
 static constexpr unsigned CHACHA20_CONST_2 = 0x79622d32u; /* "2-by" */
 static constexpr unsigned CHACHA20_CONST_3 = 0x6b206574u; /* "te k" */
 
+/* The four keystream blocks the vector paths make per call */
+static constexpr size_t CHACHA20_BLOCK4_LEN = 4 * CHACHA20_BLOCK_LEN;
+
 /* Build the 16-word ChaCha20 state from key, counter, nonce.  Used by
  * the SIMD batched paths which take a pre-built state and produce
  * multiple blocks with sequential counters. */
@@ -190,7 +193,8 @@ poly1305Backend poly1305ActiveBackend(void) {
 
 /* Produce one 64-byte ChaCha20 keystream block.  out must be 64 bytes. */
 static void chacha20Block(const uint8_t key[32], uint32_t counter,
-                          const uint8_t nonce[12], uint8_t out[64]) {
+                          const uint8_t nonce[12],
+                          uint8_t out[CHACHA20_BLOCK_LEN]) {
     uint32_t s0 = CHACHA20_CONST_0, s1 = CHACHA20_CONST_1,
              s2 = CHACHA20_CONST_2, s3 = CHACHA20_CONST_3;
     uint32_t s4 = dkLoadLe32(key + 0);
@@ -287,18 +291,18 @@ static void chacha20XorStream(const uint8_t key[32], uint32_t initial_counter,
          * report available (none today), but the more important branch
          * is: AArch64 host, post-AVX2 fallthrough is impossible because
          * AVX2 probe returns false on AArch64 — backend == NEON. */
-        if (backend == CHACHA20_BACKEND_NEON && len >= 256u) {
-            uint8_t ks[256];
+        if (backend == CHACHA20_BACKEND_NEON && len >= CHACHA20_BLOCK4_LEN) {
+            uint8_t ks[CHACHA20_BLOCK4_LEN];
             uint32_t state[16];
-            while (len >= 256u) {
+            while (len >= CHACHA20_BLOCK4_LEN) {
                 chacha20StateInit(state, key, counter, nonce);
                 chacha20NeonBlock4(state, ks);
-                for (size_t i = 0; i < 256u; i++) {
+                for (size_t i = 0; i < CHACHA20_BLOCK4_LEN; i++) {
                     out[i] = (uint8_t)(in[i] ^ ks[i]);
                 }
-                in += 256u;
-                out += 256u;
-                len -= 256u;
+                in += CHACHA20_BLOCK4_LEN;
+                out += CHACHA20_BLOCK4_LEN;
+                len -= CHACHA20_BLOCK4_LEN;
                 counter += 4u;
             }
             dkSecureZero(ks, sizeof(ks));
@@ -311,10 +315,10 @@ static void chacha20XorStream(const uint8_t key[32], uint32_t initial_counter,
     }
 
     /* Tail / fallback: scalar one-block-at-a-time. */
-    uint8_t block[64];
+    uint8_t block[CHACHA20_BLOCK_LEN];
     while (len > 0) {
         chacha20Block(key, counter, nonce, block);
-        size_t n = len < 64u ? len : 64u;
+        size_t n = len < CHACHA20_BLOCK_LEN ? len : CHACHA20_BLOCK_LEN;
         for (size_t i = 0; i < n; i++) {
             out[i] = (uint8_t)(in[i] ^ block[i]);
         }
@@ -421,12 +425,12 @@ static void poly1305Update(poly1305State *st, const uint8_t *data, size_t len) {
      * dkTestPoly1305SimdParity. */
     const poly1305Backend pbk = poly1305ActiveBackend();
     if (POLY1305_AVX2_BUILD && pbk == POLY1305_BACKEND_AVX2 &&
-        len >= 64u * 4u) {
+        len >= CHACHA20_BLOCK4_LEN) {
         uint32_t r2[5], r3[5], r4[5];
         poly1305AVX2PrecomputePowers(st->r, r2, r3, r4);
-        size_t groups = len / 64u;
+        size_t groups = len / CHACHA20_BLOCK_LEN;
         poly1305AVX2Block4x(st->h, st->r, r2, r3, r4, data, groups);
-        const size_t bulk = groups * 64u;
+        const size_t bulk = groups * CHACHA20_BLOCK_LEN;
         data += bulk;
         len -= bulk;
         dkSecureZero(r2, sizeof(r2));
@@ -556,7 +560,7 @@ static void poly1305Final(poly1305State *st, uint8_t tag[16]) {
  * and taking the first 32 bytes of keystream.  RFC 8439 §2.6. */
 static void deriveOnetimeKey(const uint8_t key[32], const uint8_t nonce[12],
                              uint8_t out_otk[32]) {
-    uint8_t block[64];
+    uint8_t block[CHACHA20_BLOCK_LEN];
     chacha20Block(key, 0, nonce, block);
     memcpy(out_otk, block, 32);
     dkSecureZero(block, sizeof(block));
@@ -753,8 +757,9 @@ static void streamInit(const char *caller, chacha20poly1305StreamCtx *ctx,
     deriveOnetimeKey(key, nonce, otk);
     poly1305Init(streamPoly(ctx), otk);
     dkSecureZero(otk, sizeof(otk));
-    ctx->chacha_counter = 1;  /* block 0 was the OTK; payload starts at 1 */
-    ctx->keystream_used = 64; /* force a fresh block on first Update */
+    ctx->chacha_counter = 1; /* block 0 was the OTK; payload starts at 1 */
+    ctx->keystream_used =
+        CHACHA20_BLOCK_LEN; /* force a fresh block on first Update */
     ctx->phase = CHACHA20_POLY1305_STREAM_PHASE_AAD;
 }
 
@@ -887,9 +892,9 @@ bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
      * untouched here (the bulk path generates its own SIMD keystream
      * on the fly), so we must not have buffered keystream bytes to
      * consume first. */
-    if (ctx->keystream_used >= 64u && len >= 256u &&
-        ctx->chacha_counter != 0u) {
-        size_t bulk_blocks = len / 64u;
+    if (ctx->keystream_used >= CHACHA20_BLOCK_LEN &&
+        len >= CHACHA20_BLOCK4_LEN && ctx->chacha_counter != 0u) {
+        size_t bulk_blocks = len / CHACHA20_BLOCK_LEN;
         /* Don't cross the counter-wrap boundary in one SIMD call.
          * Remaining blocks before wrap: UINT32_MAX - counter + 1 (here
          * `counter != 0` guarantees the +1 cannot overflow). */
@@ -899,7 +904,7 @@ bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
             bulk_blocks = (size_t)blocks_before_wrap;
         }
         if (bulk_blocks >= 4u) {
-            const size_t bulk = bulk_blocks * 64u;
+            const size_t bulk = bulk_blocks * CHACHA20_BLOCK_LEN;
             chacha20XorStream(ctx->key, ctx->chacha_counter, ctx->nonce, in,
                               out, bulk);
             poly1305Update(streamPoly(ctx), out, bulk);
@@ -912,12 +917,12 @@ bool chacha20poly1305SealStreamUpdate(chacha20poly1305StreamCtx *ctx,
     }
 
     while (len > 0) {
-        if (ctx->keystream_used >= 64u) {
+        if (ctx->keystream_used >= CHACHA20_BLOCK_LEN) {
             if (!streamRefillKeystream(ctx)) {
                 return false;
             }
         }
-        const size_t avail = 64u - ctx->keystream_used;
+        const size_t avail = CHACHA20_BLOCK_LEN - ctx->keystream_used;
         const size_t n = (len < avail) ? len : avail;
         for (size_t i = 0; i < n; i++) {
             out[i] =
@@ -974,16 +979,16 @@ bool chacha20poly1305OpenStreamUpdate(chacha20poly1305StreamCtx *ctx,
      * it.  chacha20XorStream supports in == out by reading then
      * writing each byte in order; we Poly1305-feed `in` BEFORE calling
      * it so the bytes are still ciphertext at MAC time. */
-    if (ctx->keystream_used >= 64u && len >= 256u &&
-        ctx->chacha_counter != 0u) {
-        size_t bulk_blocks = len / 64u;
+    if (ctx->keystream_used >= CHACHA20_BLOCK_LEN &&
+        len >= CHACHA20_BLOCK4_LEN && ctx->chacha_counter != 0u) {
+        size_t bulk_blocks = len / CHACHA20_BLOCK_LEN;
         const uint64_t blocks_before_wrap =
             (uint64_t)UINT32_MAX - (uint64_t)ctx->chacha_counter + 1u;
         if ((uint64_t)bulk_blocks > blocks_before_wrap) {
             bulk_blocks = (size_t)blocks_before_wrap;
         }
         if (bulk_blocks >= 4u) {
-            const size_t bulk = bulk_blocks * 64u;
+            const size_t bulk = bulk_blocks * CHACHA20_BLOCK_LEN;
             /* MAC the ciphertext bytes first (Open semantic). */
             poly1305Update(streamPoly(ctx), in, bulk);
             chacha20XorStream(ctx->key, ctx->chacha_counter, ctx->nonce, in,
@@ -997,12 +1002,12 @@ bool chacha20poly1305OpenStreamUpdate(chacha20poly1305StreamCtx *ctx,
     }
 
     while (len > 0) {
-        if (ctx->keystream_used >= 64u) {
+        if (ctx->keystream_used >= CHACHA20_BLOCK_LEN) {
             if (!streamRefillKeystream(ctx)) {
                 return false;
             }
         }
-        const size_t avail = 64u - ctx->keystream_used;
+        const size_t avail = CHACHA20_BLOCK_LEN - ctx->keystream_used;
         const size_t n = (len < avail) ? len : avail;
         /* Tag input is ciphertext (the same bytes we received). */
         poly1305Update(streamPoly(ctx), in, n);

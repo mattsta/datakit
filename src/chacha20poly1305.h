@@ -19,6 +19,8 @@ extern "C" {
 #define CHACHA20_POLY1305_KEY_LEN ((size_t)32)
 #define CHACHA20_POLY1305_NONCE_LEN ((size_t)12)
 #define CHACHA20_POLY1305_TAG_LEN ((size_t)16)
+/* A ChaCha20 keystream block (RFC 8439 section 2.3) */
+#define CHACHA20_BLOCK_LEN ((size_t)64)
 
 /* Upper bound on plaintext length for a single (key, nonce) pair.  RFC
  * 8439's 32-bit block counter starts at 1 for encryption (block 0 is
@@ -119,7 +121,7 @@ typedef struct chacha20poly1305StreamCtx {
     size_t poly_buf_len;
     uint8_t key[CHACHA20_POLY1305_KEY_LEN];
     uint8_t nonce[CHACHA20_POLY1305_NONCE_LEN];
-    uint8_t keystream_buf[64];
+    uint8_t keystream_buf[CHACHA20_BLOCK_LEN];
     uint64_t aad_total;
     uint64_t ct_total;
     uint32_t chacha_counter;

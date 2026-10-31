@@ -1,5 +1,5 @@
 /* Segment Tree - U32 Full Tier (2-TIER SYSTEM)
- * Auto-generated from template. DO NOT EDIT MANUALLY.
+ * segmentCoreFullImpl.h instantiated for this type.
  */
 
 #include "segmentU32.h"

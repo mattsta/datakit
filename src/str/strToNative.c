@@ -324,8 +324,8 @@ static bool strBufToInt128Digits_(const void *buf, const size_t bufLen,
     const uint8_t *s = buf;
     int sign = 1;
 
-    /* A sign and at most 39 digits */
-    if (bufLen == 0 || bufLen > 40) {
+    /* A sign and at most STR_INT128_DIGITS_MAX digits */
+    if (bufLen == 0 || bufLen > 1 + STR_INT128_DIGITS_MAX) {
         return false;
     }
 

@@ -1,5 +1,5 @@
 /* Segment Tree - U64 Full Tier (2-TIER SYSTEM)
- * Auto-generated from template. DO NOT EDIT MANUALLY.
+ * segmentCoreFullImpl.h instantiated for this type.
  */
 
 #include "segmentU64.h"
