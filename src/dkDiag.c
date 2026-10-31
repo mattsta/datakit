@@ -239,7 +239,7 @@ static size_t dkDiagTestCaptureStderr_(dkDiagPrintMode mode, char *buf,
 
 static constexpr int DK_DIAG_TEST_ABORTED = 87;
 [[noreturn]] static void dkDiagTestAbortHandler_(int) {
-    _exit(DK_DIAG_TEST_ABORTED);
+    ctestChildExit(DK_DIAG_TEST_ABORTED);
 }
 
 static void dkDiagTestFatalHook_(const dkDiagnostic *d, void *ctx) {

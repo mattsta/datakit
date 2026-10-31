@@ -1603,7 +1603,7 @@ int OSRegulateTest(int, char *[]) {
         /* The parent waits, so it is alive for the child's whole run */
         const pid_t child = fork();
         if (child == 0) {
-            _exit(OSRegulateParentStillExists() ? 0 : 1);
+            ctestChildExit(OSRegulateParentStillExists() ? 0 : 1);
         }
         int status = 0;
         if (child < 0 || waitpid(child, &status, 0) != child ||

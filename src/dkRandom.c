@@ -212,7 +212,7 @@ static bool dkRandomTestForkedNextWord(uint64_t *childWord,
         const uint64_t word = dkRandom64();
         const ssize_t wrote = write(fds[1], &word, sizeof(word));
         (void)close(fds[1]);
-        _exit(wrote == (ssize_t)sizeof(word) ? 0 : 1);
+        ctestChildExit(wrote == (ssize_t)sizeof(word) ? 0 : 1);
     }
 
     (void)close(fds[1]);

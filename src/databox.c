@@ -1360,7 +1360,7 @@ static int dbTestNaturalOracle_(const uint8_t *a, size_t aLen, const uint8_t *b,
  * /dev/null so the expected message does not clutter the test log. */
 static constexpr int DATABOX_TEST_ABORT_STATUS = 86;
 [[noreturn]] static void databoxTestAbortHandler_(int) {
-    _exit(DATABOX_TEST_ABORT_STATUS);
+    ctestChildExit(DATABOX_TEST_ABORT_STATUS);
 }
 
 static bool databoxTestCompareAborts_(const databox *a, const databox *b) {
@@ -1374,11 +1374,11 @@ static bool databoxTestCompareAborts_(const databox *a, const databox *b) {
     if (kid == 0) {
         (void)signal(SIGABRT, databoxTestAbortHandler_);
         if (!freopen("/dev/null", "w", stderr)) {
-            _exit(2);
+            ctestChildExit(2);
         }
 
         (void)databoxCompare(a, b);
-        _exit(0);
+        ctestChildExit(0);
     }
 
     int status = 0;

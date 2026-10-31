@@ -295,6 +295,11 @@ static void multitierPCrashSinkFn(void *ctx, const flex *rows) {
         multitierPTestSink(c->model, rows);
     }
 }
+/* Counts the rows a sink receives */
+static void multitierPTestCountSink(void *ctx, const flex *rows) {
+    *(size_t *)ctx += flexCount(rows) / 2;
+}
+
 static databox multitierPTestKey(char *buf, size_t len, uint64_t k) {
     const int n = snprintf(buf, len, "key:%06" PRIu64, k);
     return databoxNewBytes(buf, (size_t)n);
@@ -410,6 +415,59 @@ int multitierPTest(int argc, char *argv[]) {
         p = multitierOpenP(ctx, multitierPTestSink, &model);
         if (!p || !multitierPTestSame(p, model)) {
             ERR("%s", "the reopened multitier differs");
+        }
+        multitierCloseP(p);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("a sink set later receives the rows leaving; the counts, stats and "
+         "a sync agree") {
+        /* With no sink, rows leaving the cold level are dropped; after
+         * SetSinkP the sink receives every row leaving, so the rows held
+         * plus the rows received are the keys written since.  No WAL
+         * record is refused.  No multitier: nothing to read or sync */
+        ptestCleanupFiles(basePath);
+        const multitierConfig config = {
+            .hotMaxBytes = 1024,
+            .coldMaxBytes = 1024,
+            .demoteBatch = 8,
+            .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
+        };
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
+        multitierP *p = multitierNewP(ctx, &config);
+        char key[32];
+        char value[64];
+        memset(value, 'v', sizeof(value));
+        const databox v = databoxNewBytes(value, sizeof(value));
+        for (uint64_t i = 0; p && i < 400; i++) {
+            const databox k = multitierPTestKey(key, sizeof(key), i);
+            PTEST_LOGGED(multitierSetP(p, &k, &v, nullptr));
+        }
+        const size_t heldBefore = multitierCountP(p);
+        size_t received = 0;
+        multitierSetSinkP(p, multitierPTestCountSink, &received);
+        for (uint64_t i = 400; p && i < 800; i++) {
+            const databox k = multitierPTestKey(key, sizeof(key), i);
+            PTEST_LOGGED(multitierSetP(p, &k, &v, nullptr));
+        }
+        persistCtxStats stats = {};
+        multitierGetStatsP(p, &stats);
+        const multitier *raw = multitierGetRawP(p);
+        if (!p || heldBefore >= 400 || !received ||
+            multitierCountP(p) + received != heldBefore + 400 || !raw ||
+            multitierCount(raw) != multitierCountP(p) ||
+            multitierSinkLogRefusedP(p) != 0 || stats.totalOps < 800 ||
+            !multitierSyncP(p)) {
+            ERR("held %zu then %zu, %zu received, %" PRIu64 " ops", heldBefore,
+                multitierCountP(p), received, stats.totalOps);
+        }
+        persistCtxStats untouched = {.totalOps = 77};
+        multitierGetStatsP(nullptr, &untouched);
+        if (multitierGetRawP(nullptr) || multitierCountP(nullptr) ||
+            multitierSinkLogRefusedP(nullptr) || multitierSyncP(nullptr) ||
+            untouched.totalOps != 77) {
+            ERR("%s", "a call on no multitier answered");
         }
         multitierCloseP(p);
         persistCtxFree(ctx);

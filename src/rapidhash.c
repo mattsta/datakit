@@ -993,6 +993,36 @@ static const rapidhashFn protectedFns[3] = {
     rapidhashNanoProtectedWithSeed,
 };
 
+/* Every one-shot entry of one variant and mode, and the stream that
+ * computes the same hash */
+typedef struct rapidhashTestEntries {
+    const char *name;
+    uint64_t (*plain)(const void *key, size_t len);
+    rapidhashFn seeded;
+    uint64_t (*secret)(const void *key, size_t len, uint64_t seed,
+                       const uint64_t secret[RAPIDHASH_SECRET_LEN]);
+    rapidhashVariant variant;
+    rapidhashMode mode;
+} rapidhashTestEntries;
+
+static const rapidhashTestEntries rapidhashTestAll[] = {
+    {"main", rapidhash, rapidhashWithSeed, rapidhashWithSecret,
+     RAPIDHASH_VARIANT_MAIN, RAPIDHASH_MODE_FAST},
+    {"micro", rapidhashMicro, rapidhashMicroWithSeed, rapidhashMicroWithSecret,
+     RAPIDHASH_VARIANT_MICRO, RAPIDHASH_MODE_FAST},
+    {"nano", rapidhashNano, rapidhashNanoWithSeed, rapidhashNanoWithSecret,
+     RAPIDHASH_VARIANT_NANO, RAPIDHASH_MODE_FAST},
+    {"main protected", rapidhashProtected, rapidhashProtectedWithSeed,
+     rapidhashProtectedWithSecret, RAPIDHASH_VARIANT_MAIN,
+     RAPIDHASH_MODE_PROTECTED},
+    {"micro protected", rapidhashMicroProtected,
+     rapidhashMicroProtectedWithSeed, rapidhashMicroProtectedWithSecret,
+     RAPIDHASH_VARIANT_MICRO, RAPIDHASH_MODE_PROTECTED},
+    {"nano protected", rapidhashNanoProtected, rapidhashNanoProtectedWithSeed,
+     rapidhashNanoProtectedWithSecret, RAPIDHASH_VARIANT_NANO,
+     RAPIDHASH_MODE_PROTECTED},
+};
+
 static const char *variantName(int idx) {
     static const char *names[3] = {"rapidhash", "rapidhashMicro",
                                    "rapidhashNano"};
@@ -1253,6 +1283,69 @@ int rapidhashTest(int, char *[]) {
             if (isPrime(composites[i])) {
                 ERR("isPrime(%" PRIu64 ") is true", composites[i]);
             }
+        }
+    }
+
+    TEST("every entry of every variant and mode agrees with its seeded "
+         "form and its stream") {
+        /* Per variant and mode, at lengths across every bulk and tail
+         * shape: the unseeded entry is the seeded one at seed 0; a secret
+         * entry given the default secret is the seeded one; given a
+         * derived secret it is the stream over that secret (in 17-byte
+         * pieces) and differs from the default secret's hash */
+        static const size_t lens[] = {0,   1,   3,   4,   8,   15,  16,   17,
+                                      31,  32,  47,  48,  49,  79,  80,   81,
+                                      111, 112, 113, 224, 225, 300, 1000, 5000};
+        cleanerName(zfree, U8) uint8_t *key = zmalloc(5000);
+        rapidhashFillDeterministic(key, 5000);
+        uint64_t derived[RAPIDHASH_SECRET_LEN];
+        rapidhashMakeSecret(0x5eed, derived);
+        const uint64_t *standard = rapidhashGetDefaultSecret();
+        for (size_t e = 0; e < countof(rapidhashTestAll); e++) {
+            const rapidhashTestEntries *t = &rapidhashTestAll[e];
+            for (size_t l = 0; l < countof(lens); l++) {
+                const size_t len = lens[l];
+                const uint64_t seed = 0x9e37 + l;
+                rapidhashCtx ctx;
+                rapidhashStreamInit(&ctx, t->variant, t->mode, seed, derived);
+                for (size_t off = 0; off < len; off += 17) {
+                    rapidhashStreamUpdate(&ctx, key + off,
+                                          len - off < 17 ? len - off : 17);
+                }
+                const uint64_t streamed = rapidhashStreamFinal(&ctx);
+                const uint64_t withDerived = t->secret(key, len, seed, derived);
+                if (t->plain(key, len) != t->seeded(key, len, 0) ||
+                    t->secret(key, len, seed, standard) !=
+                        t->seeded(key, len, seed) ||
+                    withDerived != streamed ||
+                    withDerived == t->seeded(key, len, seed)) {
+                    ERR("%s, %zu bytes: an entry disagrees", t->name, len);
+                }
+            }
+        }
+
+        /* Past the threshold the Main hash runs its unrolled body: every
+         * impl gives the same hash on either side of it */
+        const size_t threshold = rapidhashAutoUnrollThreshold();
+        if (threshold < 224 || threshold >= 5000) {
+            ERR("unroll threshold %zu is outside [224, 5000)", threshold);
+            return err;
+        }
+        const rapidhashImpl saved = rapidhashGetForceImpl();
+        uint64_t got[3][2];
+        static const rapidhashImpl impls[3] = {RAPIDHASH_IMPL_AUTO,
+                                               RAPIDHASH_IMPL_COMPACT,
+                                               RAPIDHASH_IMPL_UNROLLED};
+        for (int i = 0; i < 3; i++) {
+            rapidhashSetForceImpl(impls[i]);
+            got[i][0] = rapidhash(key, threshold);
+            got[i][1] = rapidhash(key, threshold + 1);
+        }
+        rapidhashSetForceImpl(saved);
+        if (got[1][0] != got[0][0] || got[2][0] != got[0][0] ||
+            got[1][1] != got[0][1] || got[2][1] != got[0][1]) {
+            ERR("unroll threshold %zu: the impls disagree around it",
+                threshold);
         }
     }
 

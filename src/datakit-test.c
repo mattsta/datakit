@@ -470,7 +470,7 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
     {
         const pid_t child = fork();
         if (child == 0) {
-            _exit(kChildExitCode);
+            ctestChildExit(kChildExitCode);
         }
 
         PEXPECT(child > 0, "fork for prompt-exit child");
@@ -498,7 +498,7 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
                 while (read(hold[0], &discard, 1) > 0) {
                     /* The parent never writes; drain defensively. */
                 }
-                _exit(0);
+                ctestChildExit(0);
             }
 
             PEXPECT(child > 0, "fork for long-lived child");
@@ -596,7 +596,7 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
             while (read(holdRead, &discard, 1) > 0) {
                 /* The parent never writes. */
             }
-            _exit(kChildExitCode);
+            ctestChildExit(kChildExitCode);
         }
 
         PEXPECT(child > 0, "fork for the bystander child");
@@ -633,11 +633,11 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
             const pid_t target = fork();
             if (target == 0) {
                 (void)poll(nullptr, 0, 300);
-                _exit(kTargetExitCode);
+                ctestChildExit(kTargetExitCode);
             }
 
             if (target < 0) {
-                _exit(2);
+                ctestChildExit(2);
             }
 
             struct rlimit lim;
@@ -652,16 +652,16 @@ static int dkTestProcessExitWaitTest(int, char *[]) {
             }
 
             if (errno != EMFILE) {
-                _exit(3);
+                ctestChildExit(3);
             }
 
             int status = 0;
             const bool reaped =
                 OSRegulateProcessAwaitExitMs(target, kGenerousMs, &status);
-            _exit(reaped && WIFEXITED(status) &&
-                          WEXITSTATUS(status) == kTargetExitCode
-                      ? 0
-                      : 1);
+            ctestChildExit(reaped && WIFEXITED(status) &&
+                                   WEXITSTATUS(status) == kTargetExitCode
+                               ? 0
+                               : 1);
         }
 
         PEXPECT(waiter > 0, "fork for the descriptor-exhausted waiter");
@@ -716,7 +716,7 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
         if (child == 0) {
             close(rd);
             OSRegulateReadyPipeSignal(&wr);
-            _exit(0);
+            ctestChildExit(0);
         }
         REXPECT(child > 0, "fork for signalling child");
         close(fdRelease(&wr));
@@ -739,7 +739,7 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
         const pid_t child = fork();
         if (child == 0) {
             close(rd);
-            _exit(3);
+            ctestChildExit(3);
         }
         REXPECT(child > 0, "fork for unsignalled child");
         close(fdRelease(&wr));
@@ -804,13 +804,13 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
             int rd = -1;
             int wr = -1;
             if (!OSRegulateReadyPipeNew(&rd, &wr)) {
-                _exit(2);
+                ctestChildExit(2);
             }
 
             const bool above = rd > STDERR_FILENO && wr > STDERR_FILENO;
             const bool cloexec = (fcntl(rd, F_GETFD) & FD_CLOEXEC) &&
                                  (fcntl(wr, F_GETFD) & FD_CLOEXEC);
-            _exit(above && cloexec ? 0 : 1);
+            ctestChildExit(above && cloexec ? 0 : 1);
         }
 
         REXPECT(child > 0, "fork for the closed-stdio pair child");
@@ -847,10 +847,10 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
                     if (signals) {
                         OSRegulateDaemonizeSignalReady();
                     }
-                    _exit(0);
+                    ctestChildExit(0);
                 }
 
-                _exit(4);
+                ctestChildExit(4);
             }
 
             REXPECT(launcher > 0, "fork for the daemonize launcher");
@@ -899,7 +899,7 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
             close(holdWrite);
             close(lockedRead);
             if (!OSRegulateWritePidToFile(path)) {
-                _exit(1);
+                ctestChildExit(1);
             }
 
             OSRegulateReadyPipeSignal(&lockedWrite);
@@ -907,7 +907,7 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
             while (read(holdRead, &discard, 1) > 0) {
                 /* The parent never writes. */
             }
-            _exit(0);
+            ctestChildExit(0);
         }
 
         REXPECT(owner > 0, "fork for the pidfile owner");
@@ -953,7 +953,7 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
 
         const pid_t successor = fork();
         if (successor == 0) {
-            _exit(OSRegulateWritePidToFile(path) ? 0 : 1);
+            ctestChildExit(OSRegulateWritePidToFile(path) ? 0 : 1);
         }
 
         REXPECT(successor > 0, "fork for the pidfile successor");
@@ -5806,10 +5806,13 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
 
     const bool pNeonOk = poly1305NeonAvailable();
     const bool pAvx2Ok = poly1305AVX2Available();
+    const poly1305ForceBackend savedPoly = poly1305GetForceBackend();
 
-    /* Pin checks: each force value MUST pin the corresponding backend. */
+    /* Pin checks: each force value MUST pin the corresponding backend,
+     * and reads back as set. */
     poly1305SetForceBackend(POLY1305_FORCE_SCALAR);
-    if (poly1305ActiveBackend() != POLY1305_BACKEND_SCALAR) {
+    if (poly1305ActiveBackend() != POLY1305_BACKEND_SCALAR ||
+        poly1305GetForceBackend() != POLY1305_FORCE_SCALAR) {
         printf("dkTestPoly1305SimdParity: SCALAR force did not pin\n");
         failures++;
     }
@@ -5938,7 +5941,7 @@ static int dkTestPoly1305SimdParityTest(int, char *[]) {
     }
 
 a7_cleanup:
-    poly1305SetForceBackend(POLY1305_FORCE_AUTO);
+    poly1305SetForceBackend(savedPoly);
     chacha20SetForceBackend(CHACHA20_FORCE_AUTO);
 
     if (failures == 0) {

@@ -450,7 +450,7 @@ if(EnableCoverage)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         message(STATUS "Coverage: clang source coverage enabled")
         set(CMAKE_C_FLAGS
-            "${CMAKE_C_FLAGS} -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic")
+            "${CMAKE_C_FLAGS} -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -DDATAKIT_COVERAGE")
         set(CMAKE_EXE_LINKER_FLAGS
             "${CMAKE_EXE_LINKER_FLAGS} -fprofile-instr-generate")
         set(CMAKE_SHARED_LINKER_FLAGS

@@ -439,6 +439,55 @@ int coldmapPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("a coldmap built from a dump: its count, stats and a sync, then a "
+         "reopen holds it") {
+        /* 500 rows from a multimap's dump; two changes are logged and
+         * counted, a sync writes them, and the reopened coldmap holds the
+         * same rows.  No coldmap: count 0, no sync, stats untouched */
+        ptestCleanupFiles(basePath);
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        char key[32];
+        for (uint64_t i = 0; i < 500; i++) {
+            const databox k = coldmapPTestKey(key, sizeof(key), i * 2);
+            const databox *row[2] = {&k, &k};
+            multimapInsert(&m, row);
+        }
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
+        coldmapP *c = coldmapNewFromDumpP(ctx, 2, nullptr, multimapDump(m));
+        const databox odd = coldmapPTestKey(key, sizeof(key), 7);
+        const databox *row[2] = {&odd, &odd};
+        multimapInsert(&m, row);
+        char zeroKey[32];
+        const databox zero = coldmapPTestKey(zeroKey, sizeof(zeroKey), 0);
+        multimapDelete(&m, &zero);
+        persistCtxStats stats = {};
+        persistCtxStats untouched = {.totalOps = 77};
+        const bool built = c && coldmapCountP(c) == 500;
+        const bool changed =
+            built && coldmapInsertP(c, row, nullptr) != PERSIST_LOG_REFUSED &&
+            coldmapDeleteP(c, &zero) != PERSIST_LOG_REFUSED &&
+            coldmapCountP(c) == 500;
+        coldmapGetStatsP(c, &stats);
+        coldmapGetStatsP(nullptr, &untouched);
+        if (!built || !changed || stats.totalOps != 2 || !coldmapSyncP(c) ||
+            coldmapSyncP(nullptr) || coldmapCountP(nullptr) ||
+            untouched.totalOps != 77) {
+            ERR("built %d, changed %d, %" PRIu64 " ops counted", built, changed,
+                stats.totalOps);
+        }
+        coldmapCloseP(c);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxNew(basePath, nullptr);
+        c = coldmapOpenP(ctx);
+        if (!c || coldmapCountP(c) != 500 || !coldmapPTestSame(c, m)) {
+            ERR("%s", "the reopened coldmap differs");
+        }
+        coldmapCloseP(c);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

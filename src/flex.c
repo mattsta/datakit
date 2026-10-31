@@ -9773,12 +9773,12 @@ static constexpr int FLEX_TEST_DEFERRED_PATHS = 4;
 static constexpr int FLEX_TEST_ABORT_STATUS = 86;
 static constexpr int FLEX_TEST_BARE_ABORT_STATUS = 87;
 [[noreturn]] static void flexTestAbortHandler_(int) {
-    _exit(FLEX_TEST_BARE_ABORT_STATUS);
+    ctestChildExit(FLEX_TEST_BARE_ABORT_STATUS);
 }
 
 static void flexTestFatalHook_(const dkDiagnostic *d, void *) {
     if (d->severity == DK_DIAG_FATAL) {
-        _exit(FLEX_TEST_ABORT_STATUS);
+        ctestChildExit(FLEX_TEST_ABORT_STATUS);
     }
 }
 
@@ -9795,7 +9795,7 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
         dkDiagSetHook(&fatalHook);
         (void)signal(SIGABRT, flexTestAbortHandler_);
         if (!freopen("/dev/null", "w", stderr)) {
-            _exit(2);
+            ctestChildExit(2);
         }
 
         cleaner(flexFree) flex *f = flexNew();
@@ -9820,7 +9820,7 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
             break;
         }
 
-        _exit(0);
+        ctestChildExit(0);
     }
 
     int status = 0;
