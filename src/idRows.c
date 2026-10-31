@@ -599,18 +599,56 @@ static bool idRowsDeleteRow_(const idRows *r, flex **ff, const uint32_t slot) {
     return true;
 }
 
+/* Whether 'box' reads bytes inside page 'f' (as an idRowsGet of a row on
+ * it hands out): the write that moves the page's rows would move them */
+static bool idRowsBorrowsFrom_(const flex *f, const databox *box) {
+    if (box->type != DATABOX_BYTES) {
+        return false;
+    }
+    const uintptr_t at = (uintptr_t)box->data.bytes.cstart;
+    const uintptr_t page = (uintptr_t)f;
+    return at >= page && at < page + flexBytes(f);
+}
+
 bool idRowsSet(idRows *r, const uint64_t id, const databox *row[]) {
     flex **ff = idRowsPageFor_(r, id);
     const uint32_t slot = (uint32_t)(id % IDROWS_PAGE);
     const bool present = idRowsIndexOf_(*ff).present >> slot & 1;
+
+    /* Values read from this page (this row or another on it) are copied
+     * first: the delete and insert below move the page's bytes */
+    const uint32_t epr = r->elementsPerRow;
+    cleanerName(zfree, Void) void *copies = nullptr;
+    databox *owned = nullptr;
+    for (uint32_t i = 0; i < epr; i++) {
+        if (!idRowsBorrowsFrom_(*ff, row[i])) {
+            continue;
+        }
+        if (!owned) {
+            copies = zcalloc(epr, sizeof(databox) + sizeof(databox *));
+            owned = copies;
+            const databox **use = (const databox **)(owned + epr);
+            for (uint32_t j = 0; j < epr; j++) {
+                use[j] = row[j];
+            }
+        }
+        owned[i] = databoxCopy(row[i]);
+        ((const databox **)(owned + epr))[i] = &owned[i];
+    }
+    const databox **use = owned ? (const databox **)(owned + epr) : row;
+
     if (present && !idRowsDeleteRow_(r, ff, slot)) {
         /* The page's only row went: its index now holds no row */
         dkStoreLe64(idRowsIndexOf_(*ff).at, 0);
     }
 
-    idRowsInsertRow_(r, ff, slot, row);
+    idRowsInsertRow_(r, ff, slot, use);
     if (!present) {
         r->count++;
+    }
+
+    for (uint32_t i = 0; owned && i < epr; i++) {
+        databoxFreeData(&owned[i]);
     }
 
     return !present;
@@ -670,7 +708,15 @@ bool idRowsReplaceField(idRows *r, const uint64_t id, const uint32_t field,
         return false;
     }
 
+    /* A value read from this page is copied first: the replace moves the
+     * page's bytes */
+    databox copy = {};
+    if (idRowsBorrowsFrom_(*ff, box)) {
+        copy = databoxCopy(box);
+        box = &copy;
+    }
     flexReplaceByType(ff, fe, box);
+    databoxFreeData(&copy);
     idRowsRowResized_(ff, slot, before);
     return true;
 }
@@ -1325,6 +1371,46 @@ static int idRowsTestDifferential_(const idRowsTestIds ids, uint64_t rng) {
 
 int idRowsTest(int, char *[]) {
     int err = 0;
+
+    TEST("a set or replace with values read from the same page") {
+        /* idRowsGet hands out bytes inside the page; writing them back to
+         * a row on it (the same row or a neighbour) stores what was read */
+        cleaner(idRowsFree) idRows *r = idRowsNew(2);
+        char a40[41];
+        char b40[41];
+        char c40[41];
+        memset(a40, 'a', 40);
+        memset(b40, 'b', 40);
+        memset(c40, 'c', 40);
+        a40[40] = b40[40] = c40[40] = 0;
+        const databox a = databoxNewBytesString(a40);
+        const databox b = databoxNewBytesString(b40);
+        const databox c = databoxNewBytesString(c40);
+        const databox *row5[2] = {&a, &b};
+        const databox *row6[2] = {&c, &a};
+        (void)idRowsSet(r, 5, row5);
+        (void)idRowsSet(r, 6, row6);
+
+        /* Row 5 swapped with its own values, then given row 6's */
+        databox g0 = {}, g1 = {};
+        databox *got[2] = {&g0, &g1};
+        (void)idRowsGet(r, 5, got);
+        const databox *swapped[2] = {&g1, &g0};
+        (void)idRowsSet(r, 5, swapped);
+        databox h0 = {}, h1 = {};
+        databox *got5[2] = {&h0, &h1};
+        (void)idRowsGet(r, 5, got5);
+        const bool swapOk = databoxEqual(&h0, &b) && databoxEqual(&h1, &a);
+
+        (void)idRowsGet(r, 6, got);
+        (void)idRowsReplaceField(r, 5, 1, &g0);
+        (void)idRowsGet(r, 5, got5);
+        const bool replaceOk = databoxEqual(&h0, &b) && databoxEqual(&h1, &c);
+        if (!swapOk || !replaceOk) {
+            ERR("row 5 after a swap %s, after a neighbour's field %s",
+                swapOk ? "ok" : "wrong", replaceOk ? "ok" : "wrong");
+        }
+    }
 
     TEST("rows read back by id, across pages, absent ids absent") {
         cleaner(idRowsFree) idRows *r = idRowsNew(2);
