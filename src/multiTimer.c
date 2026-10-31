@@ -248,6 +248,10 @@ bool multiTimerStopAll(multiTimer *t) {
          * each one lazily on encounter. */
         t->stopPending =
             multimapCount(t->scheduled) + multimapCount(t->pendingScheduling);
+        /* That counts entries this batch already ran, which wait for its
+         * bulk delete and are never consumed as stops: the batch's end
+         * recounts exactly */
+        t->stopsMaybeStale = true;
         return true;
     }
 

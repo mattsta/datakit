@@ -26,6 +26,20 @@ typedef struct testCallbackState {
     bool shouldReschedule;
 } testCallbackState;
 
+/* A callback that stops every timer and registers one more, once */
+static bool testStopAllThenRegister(multiTimer *t, multiTimerId id,
+                                    void *clientData) {
+    (void)id;
+    bool *done = clientData;
+    if (!*done) {
+        *done = true;
+        multiTimerStopAll(t);
+        multiTimerRegister(t, UINT64_C(3600000000), 0, testStopAllThenRegister,
+                           done);
+    }
+    return false;
+}
+
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(testCallbackState *, zfree, States);
 defcleaner(multiTimer *, multiTimerFree);
@@ -181,6 +195,26 @@ int multiTimerTest(int, char *[]) {
     /* ================================================================
      * Timer Execution Tests
      * ================================================================ */
+
+    TEST("multiTimer: a StopAll inside a callback, then a register, counts "
+         "the one timer left") {
+        /* A, B, C due now and D later; B stops everything and registers
+         * E: only E is left, and the count says so */
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
+        testCallbackState counting = {};
+        bool done = false;
+        multiTimerRegister(t, 0, 0, testCountingCallback, &counting);
+        multiTimerRegister(t, 0, 0, testStopAllThenRegister, &done);
+        multiTimerRegister(t, 0, 0, testCountingCallback, &counting);
+        multiTimerRegister(t, UINT64_C(3600000000), 0, testCountingCallback,
+                           &counting);
+        sleepUs(1000);
+        multiTimerProcessTimerEvents(t);
+        if (!done || multiTimerCount(t) != 1) {
+            ERR("after the StopAll: %zu timers counted, 1 left",
+                multiTimerCount(t));
+        }
+    }
 
     TEST("multiTimer: timer fires after delay") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
