@@ -2859,7 +2859,7 @@ void flexReplaceByType(flex **const ff, flexEntry *const fe,
 
 void flexReplaceBytes(flex **const ff, flexEntry *const fe, const void *s,
                       const size_t len) {
-    flexInsertReplace_(ff, fe, 0, s, len);
+    flexInsertReplace_(ff, fe, FLEX_STRING_ENCODING(len), s, len);
 }
 
 DK_STATIC void flexForceReplaceSigned__(flex **const ff, flexEntry *const fe,
@@ -2977,10 +2977,6 @@ bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
                       const int64_t incrby, int64_t *newval) {
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
-
-    /* Encoding of '0' here probably means you requested to incr
-     * on a string with length 1, which is bad... */
-    assert(entry.encoding);
 
     /* This entry point takes a 64-bit delta and reports a 64-bit
      * result, so it operates on values that fit 64 bits (native
@@ -3876,12 +3872,12 @@ flexEntry *flexIndexDirect(const flex *f, int32_t index) {
             }
         }
     } else {
+        /* The end is checked before each read: an index past the count
+         * (any index, on an empty flex) stops there */
         fe = (flexEntry *)head;
-        while (index--) {
+        while (index > 0 && fe != end) {
             fe += flexRawEntryLength(fe);
-            if (fe == end) {
-                break;
-            }
+            index--;
         }
     }
 
@@ -4466,34 +4462,6 @@ void flexDeleteRangeDrain(flex **const ff, const int32_t index,
 /* ====================================================================
  * flex compare
  * ==================================================================== */
-/* Compare entry pointer to by 'fe' with 'data' of length 'len'. */
-/* This is unused except for tests */
-#ifdef DATAKIT_TEST
-bool flexCompareBytes(flexEntry *fe, const void *data, const size_t len) {
-    flexEntryData entry;
-    flexEntryDataPopulate(fe, &entry);
-    if (FLEX_IS_STR(entry.encoding)) {
-        /* Raw compare */
-        if (entry.len == len) {
-            return (memcmp(fe + entry.encodingSize, data, len) == 0);
-        }
-
-        return false;
-    }
-
-    if (flexEntryIsIntegerNarrow_(fe)) {
-        /* Try to compare encoded values. Don't compare encoding because
-         * different implementations may encoded integers differently. */
-        int64_t val;
-        if (len <= 32 && StrBufToInt64(data, len, &val)) {
-            int64_t zval = flexLoadSigned(&entry);
-            return zval == val;
-        }
-    }
-    return false;
-}
-#endif
-
 /* The 64-bit integer at 'entry' as a value: true with '*neg' and '*mag'
  * (the magnitude) set, false for any other entry. */
 DK_STATIC bool flexEntryInteger_(const flexEntryData *entry, bool *neg,
@@ -5449,15 +5417,70 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersRep
         replacedOut);
 }
 
+/* The row a reference insert searches with: each reference in 'box'
+ * resolved to the value it stands for (into 'resolved', 'slots' and
+ * 'row', or into one block in '*scratch' for rows wider than the stack's
+ * FLEX_REFERENCE_ROW_STACK_), or 'box' itself when it holds none */
+#define FLEX_REFERENCE_ROW_STACK_ 8
+static const databox **
+flexReferenceRow_(const databox **const box, const uint_fast32_t n,
+                  const multimapAtom *const referenceContainer,
+                  databox *resolved, databoxWide *slots, const databox **row,
+                  void **scratch) {
+    uint_fast32_t i = 0;
+    while (i < n && box[i]->type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
+        i++;
+    }
+    if (i == n) {
+        return box;
+    }
+    if (n > FLEX_REFERENCE_ROW_STACK_) {
+        /* Carved in descending alignment: slots, boxes, pointers */
+        /* @own: caller; free=zfree */
+        *scratch =
+            zmalloc(n * (sizeof(*slots) + sizeof(*resolved) + sizeof(*row)));
+        slots = (databoxWide *)*scratch;
+        resolved = (databox *)(slots + n);
+        row = (const databox **)(resolved + n);
+    }
+    for (i = 0; i < n; i++) {
+        row[i] = box[i];
+        if (box[i]->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
+            resolved[i] = *box[i];
+            flexResolveReferenceInto_(&resolved[i], &slots[i],
+                                      referenceContainer);
+            row[i] = &resolved[i];
+        }
+    }
+    return row;
+}
+
+/* A reference in 'box' is placed by the value it stands for and stored as
+ * the reference: the row searched with is the resolved one, the row
+ * stored is 'box' */
+#define FLEX_REFERENCE_INSERT_(box, elementsPerEntry, referenceContainer,      \
+                               compareRow, storeRow)                           \
+    databox resolved_[FLEX_REFERENCE_ROW_STACK_];                              \
+    databoxWide slots_[FLEX_REFERENCE_ROW_STACK_];                             \
+    const databox *row_[FLEX_REFERENCE_ROW_STACK_];                            \
+    cleaner(zfree) void *scratch_ = nullptr;                                   \
+    const databox **const compareRow =                                         \
+        flexReferenceRow_(box, elementsPerEntry, referenceContainer,           \
+                          resolved_, slots_, row_, &scratch_);                 \
+    const databox *const *const storeRow =                                     \
+        (compareRow) == (box) ? nullptr : (box)
+
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
     flex **const ff, const uint_fast32_t elementsPerEntry,
     const databox **const box, flexEntry **const middleEntry,
     const bool compareUsingKeyElementOnly,
     const struct multimapAtom *const referenceContainer) {
-    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
-        ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
+    FLEX_REFERENCE_INSERT_(box, elementsPerEntry, referenceContainer, compare,
+                           store);
+    return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
+        ff, elementsPerEntry, compare, middleEntry, compareUsingKeyElementOnly,
         true, referenceContainer, false, nullptr, false, nullptr, false,
-        nullptr);
+        nullptr, nullptr, nullptr, nullptr, false, store);
 }
 
 /* TRUE SET insert with atom references — the reference-container
@@ -5466,9 +5489,12 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
     flex **const ff, const uint_fast32_t elementsPerEntry,
     const databox **const box, flexEntry **const middleEntry,
     const struct multimapAtom *const referenceContainer) {
-    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
-        ff, elementsPerEntry, box, middleEntry, false, true, referenceContainer,
-        false, nullptr, false, nullptr, true, nullptr);
+    FLEX_REFERENCE_INSERT_(box, elementsPerEntry, referenceContainer, compare,
+                           store);
+    return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
+        ff, elementsPerEntry, compare, middleEntry, false, true,
+        referenceContainer, false, nullptr, false, nullptr, true, nullptr,
+        nullptr, nullptr, nullptr, false, store);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
@@ -5480,6 +5506,16 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
         true, referenceContainer, true, boxInsertKey, false, nullptr, false,
         nullptr);
+}
+
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const box, const databox *const boxInsertKey,
+    flexEntry **const middleEntry,
+    const struct multimapAtom *const referenceContainer) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
+        ff, elementsPerEntry, box, middleEntry, false, true, referenceContainer,
+        true, boxInsertKey, false, nullptr, true, nullptr);
 }
 
 /* Insert-if-absent for a map of atom references inserting under a
@@ -5899,19 +5935,34 @@ DK_STATIC bool flexEntryCompareProbe__(const flexEntryData *entry,
     return numeric && databoxCompare(&got, probe->number) == 0;
 }
 
-flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip) {
+/* The probe for 'data': its bytes, and its number when they spell one
+ * (held in 'scratch') */
+static flexFindProbe_ flexFindProbeOf_(const void *data, size_t len,
+                                       databoxBig *scratch) {
     const databox bytes = {
-        .data.bytes.custart = vstr, .type = DATABOX_BYTES, .len = vlen};
-    databoxBig scratch;
-    const databox *const canonical = databoxCanonical(&bytes, &scratch);
-    const flexFindProbe_ probe = {
-        .bytes = vstr,
-        .len = vlen,
+        .data.bytes.custart = data, .type = DATABOX_BYTES, .len = len};
+    const databox *const canonical = databoxCanonical(&bytes, scratch);
+    return (flexFindProbe_){
+        .bytes = data,
+        .len = len,
         .number = canonical == &bytes ? nullptr : canonical,
     };
+}
 
+flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip) {
+    databoxBig scratch;
+    const flexFindProbe_ probe = flexFindProbeOf_(vstr, vlen, &scratch);
     return flexFind_(f, flexHead(f), skip, true, (const uint8_t *)&probe,
                      sizeof(probe), flexEntryCompareProbe__);
+}
+
+bool flexCompareBytes(flexEntry *fe, const void *data, size_t len) {
+    databoxBig scratch;
+    const flexFindProbe_ probe = flexFindProbeOf_(data, len, &scratch);
+    flexEntryData entry;
+    flexEntryDataPopulate(fe, &entry);
+    return flexEntryCompareProbe__(&entry, (const uint8_t *)&probe,
+                                   sizeof(probe));
 }
 
 /* ====================================================================
@@ -9864,6 +9915,1417 @@ static size_t flexTestSpellNumber_(const databox *box, char *buf) {
 #define FLEX_TEST_SANITIZED 0
 #endif
 
+#include "dkRandom.h"
+
+/* ====================================================================
+ * The model tests.  The sequence model: an array of values (integers to
+ * 128 bits, letter strings, reals every float width holds, booleans and
+ * null) against which every positional, read, find, replace, delete,
+ * split, merge, factory and fold call is checked, the whole flex compared
+ * after each step.
+ * ==================================================================== */
+typedef enum fxKind_ {
+    FX_INT = 0,
+    FX_BYTES,
+    FX_REAL,
+    FX_TRUE,
+    FX_FALSE,
+    FX_NULL,
+} fxKind_;
+
+typedef struct fxVal_ {
+    fxKind_ kind;
+    uint8_t len;
+    __int128_t i;
+    double d;
+    uint8_t b[40];
+} fxVal_;
+
+static constexpr uint32_t FX_CAP = 600;
+
+typedef struct fxModel_ {
+    uint32_t n;
+    fxVal_ v[FX_CAP];
+} fxModel_;
+
+defcleanerName(fxModel_ *, zfree, FxModel);
+
+static uint64_t fxRng_;
+
+/* The line of the first check that failed, for the failure's report */
+static int fxFailedLine_;
+/* The step's position and value, for the same report */
+static int64_t fxStepAt_;
+static fxVal_ fxStepValue_;
+static bool fxNote_(bool ok, int line) {
+    if (!ok && !fxFailedLine_) {
+        fxFailedLine_ = line;
+    }
+    return ok;
+}
+static uint64_t fxRand_(void) {
+    return dkSplitmix64Next(&fxRng_);
+}
+
+/* A value of a random kind: integers of every width (128-bit ones now and
+ * then), strings of letters (never a numeral), reals of a quarter step
+ * (exact in half, bfloat16, float and double) */
+static fxVal_ fxValue_(void) {
+    const uint64_t r = fxRand_();
+    fxVal_ v = {.kind = (fxKind_)(r % 9 < 3 ? FX_INT : r % 9 - 2)};
+    if (v.kind > FX_NULL) {
+        v.kind = r % 2 ? FX_INT : FX_BYTES;
+    }
+    switch (v.kind) {
+    case FX_INT: {
+        const uint64_t w = (r >> 8) % 6;
+        const int64_t s = (int64_t)(r >> 16);
+        v.i = w == 0   ? (__int128_t)(s % 200 - 100)
+              : w == 1 ? (__int128_t)(s % 70000)
+              : w == 2 ? (__int128_t)s
+              : w == 3 ? (__int128_t)(r | (UINT64_C(1) << 63)) /* > INT64_MAX */
+              : w == 4 ? (__int128_t)s * ((__int128_t)1 << 40) /* 96-bit */
+                       : -(__int128_t)(r >> 1) - ((__int128_t)1 << 64);
+        break;
+    }
+    case FX_BYTES:
+        v.len = (uint8_t)((r >> 8) % 40);
+        for (uint8_t i = 0; i < v.len; i++) {
+            v.b[i] = (uint8_t)('a' + (r >> (i % 48)) % 26);
+        }
+        break;
+    case FX_REAL:
+        v.d = (double)((int64_t)((r >> 8) % 400) - 200) / 4.0;
+        break;
+    default:
+        break;
+    }
+    return v;
+}
+
+/* The value as a box (a databoxBig for any integer) */
+static void fxBox_(const fxVal_ *v, databoxBig *box) {
+    DATABOX_BIG_INIT(box);
+    switch (v->kind) {
+    case FX_INT:
+        if (v->i >= 0 && v->i <= (__int128_t)UINT64_MAX) {
+            box->type = DATABOX_UNSIGNED_64;
+            box->data.u64 = (uint64_t)v->i;
+        } else if (v->i >= INT64_MIN && v->i < 0) {
+            box->type = DATABOX_SIGNED_64;
+            box->data.i64 = (int64_t)v->i;
+        } else if (v->i > 0) {
+            DATABOX_BIG_UNSIGNED_128(box, (__uint128_t)v->i);
+        } else {
+            DATABOX_BIG_SIGNED_128(box, v->i);
+        }
+        break;
+    case FX_BYTES:
+        box->type = DATABOX_BYTES;
+        box->len = v->len;
+        box->data.bytes.custart = v->b;
+        break;
+    case FX_REAL:
+        box->type = DATABOX_DOUBLE_64;
+        box->data.d64 = v->d;
+        break;
+    case FX_TRUE:
+        box->type = DATABOX_TRUE;
+        break;
+    case FX_FALSE:
+        box->type = DATABOX_FALSE;
+        break;
+    case FX_NULL:
+        box->type = DATABOX_NULL;
+        break;
+    }
+}
+
+/* Whether 'got' holds value 'v' */
+static bool fxIs_(const databox *got, const fxVal_ *v) {
+    databoxBig want = {};
+    fxBox_(v, &want);
+    switch (v->kind) {
+    case FX_INT:
+    case FX_REAL:
+        return (DATABOX_IS_NUMERIC(got) || got->type == DATABOX_SIGNED_128 ||
+                got->type == DATABOX_UNSIGNED_128) &&
+               databoxCompare(got, (const databox *)&want) == 0;
+    case FX_BYTES:
+        return DATABOX_IS_BYTES(got) && got->len == v->len &&
+               (v->len == 0 || memcmp(databoxCBytes(got), v->b, v->len) == 0);
+    default:
+        return got->type == want.type;
+    }
+}
+
+/* @model: src/flex.h */
+/* Whether the value is past 64 bits (decoded only into a big box) */
+static bool fxWide_(const fxVal_ *v) {
+    return v->kind == FX_INT &&
+           (v->i < INT64_MIN || v->i > (__int128_t)UINT64_MAX);
+}
+
+/* @model: src/flex.h */
+static bool fxEntryIs_(const flexEntry *fe, const fxVal_ *v) {
+    databoxBig got;
+    flexGetByTypeBig(fe, &got);
+    return fxIs_((const databox *)&got, v);
+}
+
+static void fxInsertAt_(fxModel_ *M, uint32_t at, fxVal_ v) {
+    memmove(&M->v[at + 1], &M->v[at], (M->n - at) * sizeof(M->v[0]));
+    M->v[at] = v;
+    M->n++;
+}
+
+static void fxRemove_(fxModel_ *M, uint32_t at, uint32_t count) {
+    count = at + count > M->n ? M->n - at : count;
+    memmove(&M->v[at], &M->v[at + count],
+            (M->n - at - count) * sizeof(M->v[0]));
+    M->n -= count;
+}
+
+/* @model: src/flex.h */
+/* The flex holds exactly the model's values: forward and backward, by
+ * index and through the validators */
+static bool fxSame_(const flex *f, const fxModel_ *M) {
+    if (flexCount(f) != M->n || flexIsEmpty(f) != (M->n == 0) ||
+        !flexValidateBuffer(f, flexBytes(f)) ||
+        !flexValidateBufferDeep(f, flexBytes(f)) || flexBytesLength(f) == 0) {
+        return fxNote_(false, __LINE__);
+    }
+    size_t claim = 0;
+    if (!flexPeekTotalBytes(f, flexBytes(f), &claim) || claim != flexBytes(f)) {
+        return fxNote_(false, __LINE__);
+    }
+    uint32_t i = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe), i++) {
+        if (i >= M->n || !fxEntryIs_(fe, &M->v[i]) ||
+            !flexEntryIsValid(f, fe)) {
+            return fxNote_(false, __LINE__);
+        }
+    }
+    if (i != M->n) {
+        return fxNote_(false, __LINE__);
+    }
+    if (M->n) {
+        flexEntry *fe = flexTail(f);
+        for (uint32_t j = M->n; j-- > 0;) {
+            if (!fe || !fxEntryIs_(fe, &M->v[j])) {
+                return fxNote_(false, __LINE__);
+            }
+            fe = flexPrev(f, fe);
+        }
+    }
+    return true;
+}
+
+/* A position: in range (from either end) or one past */
+static int32_t fxIndex_(const fxModel_ *M, uint64_t r, int64_t *at) {
+    if (!M->n || r % 9 == 0) {
+        *at = -1;
+        return (r >> 4) % 2 ? (int32_t)M->n + (int32_t)(r % 3)
+                            : -(int32_t)M->n - 1 - (int32_t)(r % 3);
+    }
+    const int64_t pos = (int64_t)((r >> 8) % M->n);
+    *at = pos;
+    return (r >> 4) % 2 ? (int32_t)pos : (int32_t)(pos - (int64_t)M->n);
+}
+
+/* The model's integer fold, as flexAdd/Subtract/Multiply Signed and
+ * Unsigned define it (exact: the model's folds take at most eight values
+ * of magnitude 1000); false where they refuse */
+static bool fxFoldInt_(const fxModel_ *M, int op, bool isSigned,
+                       __int128_t *out) {
+    __int128_t acc = op == 2 ? 1 : 0;
+    const __int128_t lo = isSigned ? INT64_MIN : 0;
+    const __int128_t hi = isSigned ? INT64_MAX : (__int128_t)UINT64_MAX;
+    for (uint32_t i = 0; i < M->n; i++) {
+        if (M->v[i].kind != FX_INT || M->v[i].i < lo || M->v[i].i > hi) {
+            return false;
+        }
+        const __int128_t x = M->v[i].i;
+        if (op == 0) {
+            acc += x;
+        } else if (op == 1) {
+            acc = i == 0 ? x : acc - x;
+        } else {
+            acc *= x;
+        }
+        if (acc < lo || acc > hi) {
+            return false;
+        }
+    }
+    *out = acc;
+    return true;
+}
+
+/* @model: src/flex.h */
+/* One random call against the sequence model; true when it agreed */
+static bool fxStep_(flex **ff, fxModel_ *M, uint32_t op) {
+    const uint64_t r = fxRand_();
+    const flexEndpoint where =
+        (r >> 3) % 2 ? FLEX_ENDPOINT_TAIL : FLEX_ENDPOINT_HEAD;
+    fxVal_ v = fxValue_();
+    databoxBig box;
+    fxBox_(&v, &box);
+    const bool wide =
+        box.type == DATABOX_SIGNED_128 || box.type == DATABOX_UNSIGNED_128;
+    int64_t at = -1;
+    const int32_t idx = fxIndex_(M, r, &at);
+    fxStepAt_ = at;
+    fxStepValue_ = v;
+    const uint32_t endAt = where == FLEX_ENDPOINT_TAIL ? M->n : 0;
+    bool ok = true;
+    switch (op) {
+    case 0: /* the exact pushes */
+        if (wide) {
+            flexPushDataboxBigExact(ff, &box, where);
+        } else {
+            flexPushByTypeExact(ff, (const databox *)&box, where);
+        }
+        fxInsertAt_(M, endAt, v);
+        break;
+    case 1: /* the typed pushes */
+        switch (v.kind) {
+        case FX_INT:
+            if (v.i >= 0 && v.i <= (__int128_t)UINT64_MAX) {
+                flexPushUnsigned(ff, (uint64_t)v.i, where);
+            } else if (v.i >= INT64_MIN && v.i < 0) {
+                flexPushSigned(ff, (int64_t)v.i, where);
+            } else {
+                flexPushDataboxBig(ff, &box, where);
+            }
+            break;
+        case FX_BYTES:
+            flexPushBytesExact(ff, v.b, v.len, where);
+            break;
+        case FX_REAL: {
+            const uint64_t w = (r >> 30) % 4;
+            if (w == 0) {
+                flexPushFloat16(ff, (float)v.d, where);
+            } else if (w == 1) {
+                flexPushFloatB16(ff, (float)v.d, where);
+            } else if (w == 2) {
+                flexPushFloat(ff, (float)v.d, where);
+            } else {
+                flexPushDouble(ff, v.d, where);
+            }
+            break;
+        }
+        default:
+            flexPushByType(ff, (const databox *)&box, where);
+            break;
+        }
+        fxInsertAt_(M, endAt, v);
+        break;
+    case 2: /* the converting pushes: letters stay bytes, numerals turn */
+        if (v.kind == FX_BYTES) {
+            flexPushBytes(ff, v.b, v.len, where);
+        } else if ((r >> 30) % 2) { /* a numeral string becomes a number */
+            char num[24];
+            const int64_t x = (int64_t)(r % 100000);
+            const int n = snprintf(num, sizeof(num), "%" PRId64, x);
+            flexPushBytes(ff, num, (size_t)n, where);
+            v = (fxVal_){.kind = FX_INT, .i = x};
+        } else if (!wide) {
+            flexPushByType(ff, (const databox *)&box, where);
+            if (v.kind == FX_REAL && v.d == (double)(int64_t)v.d) {
+                /* a whole real is stored as the integer it equals */
+                v = (fxVal_){.kind = FX_INT, .i = (int64_t)v.d};
+            }
+        } else {
+            flexPushDataboxBig(ff, &box, where);
+        }
+        fxInsertAt_(M, endAt, v);
+        break;
+    case 3: /* inserts before an entry (on an empty flex, at its head) */
+    case 4: {
+        const uint32_t pos = M->n ? (uint32_t)((r >> 8) % M->n) : 0;
+        flexEntry *fe = M->n ? flexIndex(*ff, (int32_t)pos) : flexHead(*ff);
+        if (op == 3 || wide) {
+            flexInsertByType(ff, fe, (const databox *)&box);
+        } else {
+            switch (v.kind) {
+            case FX_INT:
+                if (v.i >= 0) {
+                    flexInsertUnsigned(ff, fe, (uint64_t)v.i);
+                } else {
+                    flexInsertSigned(ff, fe, (int64_t)v.i);
+                }
+                break;
+            case FX_BYTES:
+                flexInsertBytes(ff, fe, v.b, v.len);
+                break;
+            case FX_REAL: {
+                const uint64_t w = (r >> 30) % 4;
+                if (w == 0) {
+                    flexInsertFloat16(ff, fe, (float)v.d);
+                } else if (w == 1) {
+                    flexInsertFloatB16(ff, fe, (float)v.d);
+                } else if (w == 2) {
+                    flexInsertFloat(ff, fe, (float)v.d);
+                } else {
+                    flexInsertDouble(ff, fe, v.d);
+                }
+                break;
+            }
+            default:
+                flexInsertByType(ff, fe, (const databox *)&box);
+                break;
+            }
+        }
+        fxInsertAt_(M, pos, v);
+        break;
+    }
+    case 5: { /* one deleted: the entry after it named, or not */
+        if (at < 0) {
+            break;
+        }
+        flexEntry *fe = flexIndex(*ff, idx);
+        const uint64_t how = (r >> 30) % 4;
+        if (how == 0) {
+            flexDelete(ff, &fe);
+            ok = fxNote_(at + 1 >= M->n ? true : fxEntryIs_(fe, &M->v[at + 1]),
+                         __LINE__);
+        } else if (how == 1) {
+            flexDeleteDrain(ff, &fe);
+        } else if (how == 2) {
+            flexDeleteNoUpdateEntry(ff, fe);
+        } else if (at == 0) {
+            flexDeleteHead(ff);
+        } else {
+            flexDeleteNoUpdateEntry(ff, fe);
+        }
+        fxRemove_(M, (uint32_t)at, 1);
+        if (how == 3 && M->n && (r >> 40) % 2) {
+            flexDeleteTail(ff);
+            fxRemove_(M, M->n - 1, 1);
+        }
+        break;
+    }
+    case 6: { /* a run deleted: by entry, offset or range, drained or not */
+        if (at < 0) {
+            break;
+        }
+        const uint32_t count = 1 + (uint32_t)((r >> 30) % 6);
+        const uint64_t how = (r >> 40) % 6;
+        flexEntry *fe = flexIndex(*ff, idx);
+        if (how == 0) {
+            flexDeleteCount(ff, &fe, count);
+        } else if (how == 1) {
+            flexDeleteCountDrain(ff, &fe, count);
+        } else if (how == 2) {
+            flexDeleteOffsetCount(ff, idx, count);
+        } else if (how == 3) {
+            flexDeleteOffsetCountDrain(ff, idx, count);
+        } else if (how == 4) {
+            flexDeleteRange(ff, idx, count);
+        } else {
+            flexDeleteRangeDrain(ff, idx, count);
+        }
+        fxRemove_(M, (uint32_t)at, count);
+        break;
+    }
+    case 7: { /* everything up to an entry, and some after */
+        if (at < 0) {
+            break;
+        }
+        flexEntry *fe = flexIndex(*ff, idx);
+        if ((r >> 30) % 2) {
+            flexDeleteUpToInclusive(ff, fe);
+            fxRemove_(M, 0, (uint32_t)at + 1);
+        } else {
+            const int32_t more = (int32_t)((r >> 40) % 3);
+            flexDeleteUpToInclusivePlusN(ff, fe, more);
+            fxRemove_(M, 0, (uint32_t)at + 1 + (uint32_t)more);
+        }
+        break;
+    }
+    case 8: { /* replaced: by type, bytes, or a 64-bit integer in place */
+        if (at < 0) {
+            break;
+        }
+        flexEntry *fe = flexIndex(*ff, idx);
+        const fxVal_ *old = &M->v[at];
+        const uint64_t how = (r >> 30) % 4;
+        if (how == 0) {
+            flexReplaceByType(ff, fe, (const databox *)&box);
+            M->v[at] = v;
+        } else if (how == 1 && v.kind == FX_BYTES) {
+            flexReplaceBytes(ff, fe, v.b, v.len);
+            M->v[at] = v;
+        } else {
+            /* Only a 64-bit integer entry takes a 64-bit replace */
+            const bool isInt64 = old->kind == FX_INT && old->i >= INT64_MIN &&
+                                 old->i <= (__int128_t)UINT64_MAX;
+            const int64_t x = (int64_t)(r % 1000) - 500;
+            const bool done =
+                how == 2 ? flexReplaceSigned(ff, fe, x)
+                         : flexReplaceUnsigned(ff, fe, (uint64_t)(x + 500));
+            ok = fxNote_(done == isInt64, __LINE__);
+            if (done) {
+                M->v[at] = (fxVal_){.kind = FX_INT,
+                                    .i = how == 2 ? x : (__int128_t)(x + 500)};
+            }
+        }
+        break;
+    }
+    case 9: { /* counters: an exact sum or a refusal; bytes resized */
+        if (at < 0) {
+            break;
+        }
+        flexEntry *fe = flexIndex(*ff, idx);
+        fxVal_ *old = &M->v[at];
+        const int64_t by = (int64_t)(r % 2001) - 1000;
+        const uint64_t how = (r >> 30) % 3;
+        if (how == 2) {
+            if (old->kind == FX_BYTES) {
+                const uint8_t len = (uint8_t)((r >> 40) % 40);
+                flexResizeEntry(ff, fe, len);
+                for (uint8_t i = old->len; i < len; i++) {
+                    old->b[i] = 0;
+                }
+                old->len = len;
+            }
+            break;
+        }
+        const bool signedOk = (old->kind == FX_INT && old->i >= INT64_MIN &&
+                               old->i <= (__int128_t)UINT64_MAX) ||
+                              old->kind == FX_TRUE || old->kind == FX_FALSE;
+        __int128_t base = old->kind == FX_TRUE    ? 1
+                          : old->kind == FX_FALSE ? 0
+                                                  : old->i;
+        const __int128_t sum = base + by;
+        if (how == 0) {
+            int64_t nv = 0;
+            const bool fits = signedOk && sum >= INT64_MIN && sum <= INT64_MAX;
+            ok = fxNote_(flexIncrbySigned(ff, fe, by, &nv) == fits &&
+                             (!fits || nv == (int64_t)sum),
+                         __LINE__);
+            if (fits) {
+                *old = (fxVal_){.kind = FX_INT, .i = sum};
+                /* a boolean stays boolean while the result is 0 or 1 */
+                if ((base == 0 || base == 1) && signedOk &&
+                    (M->v[at].i == 0 || M->v[at].i == 1)) {
+                    flexEntry *now = flexIndex(*ff, idx);
+                    databox got = {};
+                    flexGetByType(now, &got);
+                    if (got.type == DATABOX_TRUE || got.type == DATABOX_FALSE) {
+                        old->kind =
+                            got.type == DATABOX_TRUE ? FX_TRUE : FX_FALSE;
+                    }
+                }
+            }
+        } else {
+            uint64_t nv = 0;
+            const bool isInt64 = old->kind == FX_INT && old->i >= INT64_MIN &&
+                                 old->i <= (__int128_t)UINT64_MAX;
+            const bool fits =
+                isInt64 && sum >= 0 && sum <= (__int128_t)UINT64_MAX;
+            ok = fxNote_(flexIncrbyUnsigned(ff, fe, by, &nv) == fits &&
+                             (!fits || nv == (uint64_t)sum),
+                         __LINE__);
+            if (fits) {
+                *old = (fxVal_){.kind = FX_INT, .i = sum};
+            }
+        }
+        break;
+    }
+    case 10: { /* reads at a position, every way to decode it */
+        flexEntry *fe = flexIndex(*ff, idx);
+        if (at < 0) {
+            ok = fxNote_(fe == nullptr, __LINE__);
+            break;
+        }
+        const fxVal_ *want = &M->v[at];
+        flexEntry *direct = flexIndexDirect(*ff, (int32_t)at);
+        flexEntry *anchor = flexIndex(*ff, (int32_t)(M->n / 2));
+        flexEntry *fromAnchor =
+            flexIndexFromAnchor(*ff, (int32_t)at, anchor, (int32_t)(M->n / 2));
+        flexEntry *mid = flexMiddle(*ff, 1);
+        flexEntry *withMid = flexIndexWithMiddle(*ff, 1, (int32_t)at, mid);
+        databox plain = {};
+        databox into = {};
+        databoxWide slot;
+        databox copy = {};
+        databox detached = {};
+        flexGetByType(fe, &plain);
+        flexGetByTypeInto(fe, &into, &slot);
+        flexGetByTypeCopy(fe, &copy);
+        flexGetByTypeDetached(fe, &detached);
+        ok = fxNote_(fe == direct && fe == fromAnchor && fe == withMid &&
+                         fxEntryIs_(fe, want) && fxIs_(&into, want) &&
+                         fxIs_(&copy, want) && fxIs_(&detached, want) &&
+                         (fxWide_(want) || fxIs_(&plain, want)),
+                     __LINE__);
+        databoxFreeData(&copy);
+        databoxFreeData(&detached);
+        /* The integer readers take exactly the 64-bit entries */
+        int64_t s = 0;
+        uint64_t u = 0;
+        const bool isS = want->kind == FX_INT && want->i >= INT64_MIN &&
+                         want->i <= INT64_MAX;
+        const bool isU = want->kind == FX_INT && want->i >= 0 &&
+                         want->i <= (__int128_t)UINT64_MAX;
+        ok = fxNote_(
+            ok && flexGetSigned(fe, &s) == isS && (!isS || s == want->i) &&
+                flexGetUnsigned(fe, &u) == isU && (!isU || u == want->i),
+            __LINE__);
+        flexEntry *cur = fe;
+        ok = fxNote_(
+            ok && flexReadUnsigned(*ff, &cur, &u) == isU &&
+                (isU ? cur == flexNext(*ff, fe) || at + 1 == M->n : cur == fe),
+            __LINE__);
+        /* Next by type steps to the next entry and reads it (false at the
+         * end) */
+        flexEntry *step = fe;
+        databox nb = {};
+        databoxBig nbb;
+        const fxVal_ *next = at + 1 < M->n ? &M->v[at + 1] : nullptr;
+        const bool gotNext = flexGetNextByType(*ff, &step, &nb);
+        ok = fxNote_(ok && gotNext == (next != nullptr) &&
+                         (!next || fxWide_(next) || fxIs_(&nb, next)),
+                     __LINE__);
+        step = fe;
+        const bool gotNextBig = flexGetNextByTypeBig(*ff, &step, &nbb);
+        ok = fxNote_(ok && gotNextBig == (next != nullptr) &&
+                         (!next || fxIs_((const databox *)&nbb, next)),
+                     __LINE__);
+        break;
+    }
+    case 11: { /* finds, either way, every other entry or all */
+        const uint32_t skip = (uint32_t)((r >> 30) % 2);
+        /* The model's answer: the first match visiting entries 0, 1+skip,
+         * ... (or the last, from the tail) */
+        int64_t want = -1;
+        int64_t wantRev = -1;
+        for (uint32_t i = 0; i < M->n; i += 1 + skip) {
+            if (want < 0 && fxIs_((const databox *)&box, &M->v[i]) &&
+                M->v[i].kind == v.kind) {
+                want = i;
+            }
+        }
+        for (int64_t i = (int64_t)M->n - 1; i >= 0; i -= 1 + skip) {
+            if (wantRev < 0 && fxIs_((const databox *)&box, &M->v[i]) &&
+                M->v[i].kind == v.kind) {
+                wantRev = i;
+            }
+        }
+        flexEntry *head = flexHead(*ff);
+        flexEntry *tail = M->n ? flexTail(*ff) : nullptr;
+        if (v.kind == FX_BYTES) {
+            flexEntry *a = flexFindString(*ff, head, v.b, v.len, skip);
+            flexEntry *b =
+                tail ? flexFindStringReverse(*ff, tail, v.b, v.len, skip)
+                     : nullptr;
+            ok = fxNote_(
+                (want < 0 ? !a : a == flexIndex(*ff, (int32_t)want)) &&
+                    (wantRev < 0 ? !b : b == flexIndex(*ff, (int32_t)wantRev)),
+                __LINE__);
+            flexEntry *c = flexFind(*ff, v.b, v.len, skip);
+            ok = fxNote_(
+                ok && (want < 0 ? !c : c == flexIndex(*ff, (int32_t)want)),
+                __LINE__);
+        } else if (v.kind == FX_INT && v.i >= INT64_MIN && v.i <= INT64_MAX &&
+                   v.i < 0) {
+            flexEntry *a = flexFindSigned(*ff, head, (int64_t)v.i, skip);
+            flexEntry *b =
+                tail ? flexFindSignedReverse(*ff, tail, (int64_t)v.i, skip)
+                     : nullptr;
+            ok = fxNote_(
+                (want < 0 ? !a : a == flexIndex(*ff, (int32_t)want)) &&
+                    (wantRev < 0 ? !b : b == flexIndex(*ff, (int32_t)wantRev)),
+                __LINE__);
+        } else if (v.kind == FX_INT && v.i >= 0 &&
+                   v.i <= (__int128_t)UINT64_MAX) {
+            flexEntry *a = flexFindUnsigned(*ff, head, (uint64_t)v.i, skip);
+            flexEntry *b =
+                tail ? flexFindUnsignedReverse(*ff, tail, (uint64_t)v.i, skip)
+                     : nullptr;
+            ok = fxNote_(
+                (want < 0 ? !a : a == flexIndex(*ff, (int32_t)want)) &&
+                    (wantRev < 0 ? !b : b == flexIndex(*ff, (int32_t)wantRev)),
+                __LINE__);
+        } else if (v.kind != FX_REAL && v.kind != FX_INT) {
+            flexEntry *a =
+                flexFindByType(*ff, head, (const databox *)&box, skip);
+            flexEntry *h = flexFindByTypeHead(*ff, (const databox *)&box, skip);
+            flexEntry *b = tail ? flexFindByTypeReverse(
+                                      *ff, tail, (const databox *)&box, skip)
+                                : nullptr;
+            ok = fxNote_(
+                (want < 0 ? !a : a == flexIndex(*ff, (int32_t)want)) &&
+                    a == h &&
+                    (wantRev < 0 ? !b : b == flexIndex(*ff, (int32_t)wantRev)),
+                __LINE__);
+        }
+        /* The comparers, at a position */
+        if (at >= 0) {
+            flexEntry *fe = flexIndex(*ff, idx);
+            const fxVal_ *m = &M->v[at];
+            if (m->kind == FX_BYTES) {
+                ok = fxNote_(ok && flexCompareBytes(fe, m->b, m->len) &&
+                                 flexCompareString(fe, m->b, m->len),
+                             __LINE__);
+            } else if (m->kind == FX_INT && m->i >= 0 &&
+                       m->i <= (__int128_t)UINT64_MAX) {
+                ok = fxNote_(ok && flexCompareUnsigned(fe, (uint64_t)m->i),
+                             __LINE__);
+            } else if (m->kind == FX_INT && m->i >= INT64_MIN && m->i < 0) {
+                ok = fxNote_(ok && flexCompareSigned(fe, (int64_t)m->i),
+                             __LINE__);
+            }
+        }
+        break;
+    }
+    case 12: { /* folds over a flex of the model's small integers */
+        cleanerName(zfree, FxModel) fxModel_ *I = zcalloc(1, sizeof(*I));
+        cleaner(flexFree) flex *nums = flexNew();
+        for (uint32_t i = 0; i < 1 + (r >> 30) % 8; i++) {
+            const int64_t x = (int64_t)(fxRand_() % 2001) - 1000;
+            flexPushSigned(&nums, x, FLEX_ENDPOINT_TAIL);
+            I->v[I->n++] = (fxVal_){.kind = FX_INT, .i = x};
+        }
+        for (int fold = 0; fold < 3; fold++) {
+            __int128_t want = 0;
+            int64_t s = 0;
+            uint64_t u = 0;
+            double d = 0;
+            float fl = 0;
+            const bool sOk = fxFoldInt_(I, fold, true, &want);
+            const bool gotS = fold == 0   ? flexAddSigned(nums, &s)
+                              : fold == 1 ? flexSubtractSigned(nums, &s)
+                                          : flexMultiplySigned(nums, &s);
+            ok = fxNote_(ok && gotS == sOk && (!sOk || s == want), __LINE__);
+            __int128_t wantU = 0;
+            const bool uOk = fxFoldInt_(I, fold, false, &wantU);
+            const bool gotU = fold == 0   ? flexAddUnsigned(nums, &u)
+                              : fold == 1 ? flexSubtractUnsigned(nums, &u)
+                                          : flexMultiplyUnsigned(nums, &u);
+            ok = fxNote_(ok && gotU == uOk && (!uOk || u == wantU), __LINE__);
+            /* the real folds agree with the integer one where a double
+             * holds it exactly */
+            const bool gotD = fold == 0   ? flexAddDouble(nums, &d)
+                              : fold == 1 ? flexSubtractDouble(nums, &d)
+                                          : flexMultiplyDouble(nums, &d);
+            const bool gotF = fold == 0   ? flexAddFloat(nums, &fl)
+                              : fold == 1 ? flexSubtractFloat(nums, &fl)
+                                          : flexMultiplyFloat(nums, &fl);
+            const bool exact = sOk && want < ((__int128_t)1 << 53) &&
+                               want > -((__int128_t)1 << 53);
+            ok = fxNote_(ok && gotD && gotF && (!exact || d == (double)want),
+                         __LINE__);
+        }
+        break;
+    }
+    case 13: { /* split off and merged back, three ways */
+        const uint64_t how = (r >> 30) % 3;
+        cleaner(flexFree) flex *copy = flexDuplicate(*ff);
+        ok = fxNote_(flexEqual(copy, *ff), __LINE__);
+        flex *right = nullptr;
+        if (how == 0 && M->n) { /* a range out of the middle, then back */
+            const uint32_t from = (uint32_t)((r >> 40) % M->n);
+            const uint32_t num = 1 + (uint32_t)((r >> 50) % (M->n - from));
+            right = flexSplitRange(ff, (int32_t)from, num);
+            /* the remainder holds the rest, in order */
+            cleanerName(zfree, FxModel) fxModel_ *rest =
+                zcalloc(1, sizeof(*rest));
+            for (uint32_t i = 0; i < M->n; i++) {
+                if (i < from || i >= from + num) {
+                    rest->v[rest->n++] = M->v[i];
+                }
+            }
+            ok = fxNote_(ok && fxSame_(*ff, rest) && flexCount(right) == num,
+                         __LINE__);
+            flexFree(*ff);
+            /* @own: caller; free=flexFree */
+            *ff = flexDuplicate(copy);
+            flexFree(right);
+            right = nullptr;
+        } else if (how == 1 && M->n > 1) {
+            right = (r >> 40) % 2 ? flexSplit(ff, 1)
+                                  : flexSplitMiddle(ff, 1, flexMiddle(*ff, 1));
+            flex *joined = flexMerge(ff, &right);
+            *ff = joined;
+        } else if (M->n > 1) {
+            right = flexSplit(ff, 1);
+            const flex *const both[2] = {*ff, right};
+            flex *merged = flexBulkMergeFlex(both, 2);
+            flexFree(right);
+            flexFree(*ff);
+            *ff = merged;
+        }
+        ok = fxNote_(ok && flexEqual(*ff, copy), __LINE__);
+        break;
+    }
+    case 14: { /* built whole by every factory: the same flex */
+        cleaner(flexFree) flex *exactOne = flexNewFromDataboxExact(
+            wide ? &DATABOX_BOX_NULL : (const databox *)&box);
+        cleaner(flexFree) flex *one = flexNewFromDatabox(
+            wide ? &DATABOX_BOX_NULL : (const databox *)&box);
+        cleaner(flexFree) flex *big = flexNewFromDataboxBig(&box);
+        cleaner(flexFree) flex *bigExact = flexNewFromDataboxBigExact(&box);
+        databox single = {};
+        databoxBig singleBig;
+        ok = fxNote_(
+            flexCount(one) == 1 && flexCount(exactOne) == 1 &&
+                flexGetSingleDataboxBig(big, flexBytes(big), &singleBig) &&
+                fxIs_((const databox *)&singleBig, &v) &&
+                flexGetSingleDataboxBig(bigExact, flexBytes(bigExact),
+                                        &singleBig) &&
+                (wide || (flexGetSingleDatabox(exactOne, flexBytes(exactOne),
+                                               &single) &&
+                          fxIs_(&single, &v))),
+            __LINE__);
+        /* Two values: a pair */
+        fxVal_ w = fxValue_();
+        databoxBig wbox;
+        fxBox_(&w, &wbox);
+        const databox *pair[2] = {(const databox *)&box,
+                                  (const databox *)&wbox};
+        const databox pairVals[2] = {*(const databox *)&box,
+                                     *(const databox *)&wbox};
+        cleaner(flexFree) flex *two = flexNewFromDataboxPtrsExact(pair, 2);
+        cleaner(flexFree) flex *twoVals =
+            flexNewFromDataboxesExact(pairVals, 2);
+        cleaner(flexFree) flex *twoConv = flexNewFromDataboxPtrs(pair, 2);
+        cleaner(flexFree) flex *twoValsConv = flexNewFromDataboxes(pairVals, 2);
+        uint8_t enc[512];
+        const size_t encLen =
+            flexEncodeDataboxPtrsExact(enc, sizeof(enc), pair, 2);
+        databoxBig a;
+        databoxBig b;
+        ok = fxNote_(
+            ok && flexEqual(two, twoVals) && flexEqual(twoConv, twoValsConv) &&
+                encLen == flexBytes(two) && memcmp(enc, two, encLen) == 0 &&
+                flexGetTwoDataboxesBig(two, flexBytes(two), &a, &b) &&
+                fxIs_((const databox *)&a, &v) &&
+                fxIs_((const databox *)&b, &w),
+            __LINE__);
+        databox pa = {};
+        databox pb = {};
+        const bool narrowPair =
+            flexGetTwoDataboxes(two, flexBytes(two), &pa, &pb);
+        const bool anyWide = wide || wbox.type == DATABOX_SIGNED_128 ||
+                             wbox.type == DATABOX_UNSIGNED_128;
+        ok = fxNote_(ok && narrowPair == !anyWide, __LINE__);
+        /* A row: the appends write what the pushes do */
+        cleaner(flexFree) flex *rowFlex = flexNew();
+        cleaner(flexFree) flex *pushed = flexNew();
+        flexRow row = FLEX_ROW_INIT;
+        flexRowSigned(&row, -7);
+        flexRowUnsigned(&row, 9);
+        flexRowBytes(&row, "row", 3);
+        flexRowAdd(&row, pair[1]);
+        flexRowAppendExact(&rowFlex, &row);
+        flexPushSigned(&pushed, -7, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&pushed, 9, FLEX_ENDPOINT_TAIL);
+        flexPushBytesExact(&pushed, "row", 3, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&pushed, pair[1], FLEX_ENDPOINT_TAIL);
+        ok = fxNote_(ok && flexEqual(rowFlex, pushed), __LINE__);
+        flexRowBytes(&row, "12", 2);
+        flexRowAppend(&rowFlex, &row);
+        flexPushBytes(&pushed, "12", 2, FLEX_ENDPOINT_TAIL);
+        const databox *multi[2] = {pair[0], pair[1]};
+        flexAppendMultipleExact(&rowFlex, 2, multi);
+        flexAppendMultiple(&rowFlex, 2, multi);
+        flexPushByTypeExact(&pushed, pair[0], FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&pushed, pair[1], FLEX_ENDPOINT_TAIL);
+        if (wide) {
+            flexPushDataboxBig(&pushed, &box, FLEX_ENDPOINT_TAIL);
+        } else {
+            flexPushByType(&pushed, pair[0], FLEX_ENDPOINT_TAIL);
+        }
+        flexPushByType(&pushed, pair[1], FLEX_ENDPOINT_TAIL);
+        ok = fxNote_(ok && flexEqual(rowFlex, pushed), __LINE__);
+        /* Bulk byte members land as the pushes put them */
+        cleaner(flexFree) flex *members = flexNew();
+        cleaner(flexFree) flex *byPush = flexNew();
+        const flexBytesMember bm[3] = {{"x", 1}, {"77", 2}, {v.b, v.len}};
+        flexBulkPushBytesMembers(&members, bm, 3);
+        for (int i = 0; i < 3; i++) {
+            flexPushBytes(&byPush, bm[i].data, bm[i].len, FLEX_ENDPOINT_TAIL);
+        }
+        ok = fxNote_(ok && flexEqual(members, byPush), __LINE__);
+        /* The whole flex appended to its copy: twice the values */
+        cleaner(flexFree) flex *doubled = flexDuplicate(*ff);
+        flexBulkAppendFlex(&doubled, *ff);
+        ok = fxNote_(ok && flexCount(doubled) == 2 * M->n, __LINE__);
+        break;
+    }
+    case 15: { /* compressed and back */
+        const size_t cap = flexBytes(*ff) * 2 + 64;
+        cleanerName(zfree, Bytes) uint8_t *c = zmalloc(cap);
+        const bool level = (r >> 30) % 2;
+        const bool packed =
+            level ? flexConvertToCFlexLevel(*ff, c, cap,
+                                            (cflexLevel)((r >> 40) % 14))
+                  : flexConvertToCFlex(*ff, c, cap);
+        if (packed) {
+            cleanerName(zfree, Bytes) uint8_t *dupc = cflexDuplicate(c);
+            size_t outLen = 0;
+            flex *out = nullptr;
+            ok = fxNote_(cflexValidateBuffer(c, cflexBytes(c)) &&
+                             cflexBytesCompressed(c) <= cflexBytes(c) &&
+                             cflexConvertToFlex(dupc, &out, &outLen) &&
+                             flexEqual(out, *ff),
+                         __LINE__);
+            flexFree(out);
+        }
+        break;
+    }
+    default: { /* the growth slack, set and put back */
+        uint32_t pct = 0;
+        uint32_t minB = 0;
+        uint32_t maxB = 0;
+        flexGrowthSlack(&pct, &minB, &maxB);
+        ok = fxNote_(
+            flexSetGrowthSlack(5, 16, 128) &&
+                !flexSetGrowthSlack(FLEX_GROWTH_SLACK_PERCENT_MAX + 1, 0, 0),
+            __LINE__);
+        flexPushSigned(ff, 1, FLEX_ENDPOINT_TAIL);
+        fxInsertAt_(M, M->n, (fxVal_){.kind = FX_INT, .i = 1});
+        ok = fxNote_(ok && flexSetGrowthSlack(pct, minB, maxB) &&
+                         flexTailWithElements(*ff, 1) == flexTail(*ff),
+                     __LINE__);
+        break;
+    }
+    }
+    return ok;
+}
+
+/* The model's values, beside flexRepr's view of the flex, for a failure */
+static void fxValuePrint_(const char *label, const fxVal_ *v) {
+    printf("  %s kind %d int %" PRId64 ":%" PRIu64 " real %g bytes %.*s\n",
+           label, (int)v->kind, (int64_t)(v->i >> 64), (uint64_t)v->i, v->d,
+           (int)v->len, (const char *)v->b);
+}
+
+static void fxModelPrint_(const fxModel_ *M) {
+    printf("  step position %" PRId64 "\n", fxStepAt_);
+    fxValuePrint_("step value", &fxStepValue_);
+    for (uint32_t i = 0; i < M->n; i++) {
+        char label[16];
+        snprintf(label, sizeof(label), "[%" PRIu32 "]", i);
+        fxValuePrint_(label, &M->v[i]);
+    }
+}
+
+/* @model: src/flex.h */
+static int flexTestModelSequence_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, FxModel) fxModel_ *M = zcalloc(1, sizeof(*M));
+    flex *f = flexNew();
+    fxRng_ = seed;
+    if (flexFactorySelfTest() != 0) {
+        ERR("%s", "the factory self-test failed");
+    }
+    for (uint32_t step = 0; step < 6000 && !err; step++) {
+        uint32_t op = (uint32_t)(fxRand_() % 17);
+        if (M->n + 40 >= FX_CAP && op <= 4) {
+            op = 6; /* a run deleted: the model stays in its array */
+        }
+        fxFailedLine_ = 0;
+        if (!fxStep_(&f, M, op) || !fxSame_(f, M)) {
+            ERR("sequence model step %" PRIu32 ": op %" PRIu32 " disagreed "
+                "at line %d (%" PRIu32 " values, seed %" PRIu64 ")",
+                step, op, fxFailedLine_, M->n, seed);
+            fxModelPrint_(M);
+            flexRepr(f);
+            break;
+        }
+        if (step % 1500 == 1499) {
+            flexReset(&f);
+            M->n = 0;
+        }
+    }
+    flexFree(f);
+    return err;
+}
+
+/* The sorted model: rows of 1 to 3 elements in order, as a map (one row
+ * per key), a bag (rows repeat) or a set (each row once), keyed by
+ * integers or by words stored as references into a multimapAtom.  Every
+ * sorted insert, find, compare and delete is checked against it, and the
+ * middle each call keeps must be the flex's middle. */
+typedef enum fsShape_ {
+    FS_MAP = 0,
+    FS_BAG,
+    FS_SET,
+} fsShape_;
+
+typedef struct fsRow_ {
+    int64_t k; /* the key, or the word's index */
+    int64_t a;
+    uint8_t blen;
+    char b[4];
+} fsRow_;
+
+static constexpr uint32_t FS_CAP = 400;
+static constexpr uint32_t FS_WORDS = 24;
+
+typedef struct fsModel_ {
+    uint32_t n;
+    uint32_t e;
+    fsShape_ shape;
+    bool refs;
+    multimapAtom *atoms;
+    char word[FS_WORDS][8];
+    databox ref[FS_WORDS];
+    fsRow_ v[FS_CAP];
+} fsModel_;
+
+static void fsModelFree_(fsModel_ *M) {
+    if (M) {
+        multimapAtomFree(M->atoms);
+        zfree(M);
+    }
+}
+
+defcleaner(fsModel_ *, fsModelFree_);
+
+/* The row's values as boxes (a word as its bytes); 'asRefs': the key as
+ * its reference */
+static void fsBoxes_(const fsModel_ *M, const fsRow_ *row, databox box[3],
+                     bool asRefs) {
+    if (M->refs) {
+        box[0] =
+            asRefs ? M->ref[row->k] : databoxNewBytesString(M->word[row->k]);
+    } else {
+        box[0] = databoxNewSigned(row->k);
+    }
+    box[1] = databoxNewSigned(row->a);
+    box[2] = databoxNewBytes(row->b, row->blen);
+}
+
+/* Rows compared on their first 'width' elements */
+static int fsCmp_(const fsModel_ *M, const fsRow_ *x, const fsRow_ *y,
+                  uint32_t width) {
+    databox bx[3];
+    databox by[3];
+    fsBoxes_(M, x, bx, false);
+    fsBoxes_(M, y, by, false);
+    for (uint32_t i = 0; i < width; i++) {
+        const int c = databoxCompare(&bx[i], &by[i]);
+        if (c) {
+            return c;
+        }
+    }
+    return 0;
+}
+
+/* The first row at or past 'row' on 'width' elements (n when none) */
+static uint32_t fsLowerBound_(const fsModel_ *M, const fsRow_ *row,
+                              uint32_t width) {
+    uint32_t i = 0;
+    while (i < M->n && fsCmp_(M, &M->v[i], row, width) < 0) {
+        i++;
+    }
+    return i;
+}
+
+static bool fsHas_(const fsModel_ *M, const fsRow_ *row, uint32_t width) {
+    const uint32_t i = fsLowerBound_(M, row, width);
+    return i < M->n && fsCmp_(M, &M->v[i], row, width) == 0;
+}
+
+static void fsInsertAt_(fsModel_ *M, uint32_t at, const fsRow_ *row) {
+    memmove(&M->v[at + 1], &M->v[at], (M->n - at) * sizeof(M->v[0]));
+    M->v[at] = *row;
+    M->n++;
+}
+
+static void fsRemoveAt_(fsModel_ *M, uint32_t at) {
+    memmove(&M->v[at], &M->v[at + 1], (M->n - at - 1) * sizeof(M->v[0]));
+    M->n--;
+}
+
+/* The row an entry starts: its index, n at the end, -1 inside a row or
+ * for NULL */
+static int64_t fsRowOf_(const flex *f, uint32_t e, const flexEntry *fe) {
+    if (!fe) {
+        return -1;
+    }
+    if (fe == GET_END(f)) {
+        return (int64_t)(flexCount(f) / e);
+    }
+    int64_t i = 0;
+    for (flexEntry *at = flexHeadIfAny(f); at; at = flexNext(f, at), i++) {
+        if (at == fe) {
+            return i % e ? -1 : i / e;
+        }
+    }
+    return -1;
+}
+
+/* @model: src/flex.h */
+/* The flex holds the model's rows, every key read back through its
+ * reference when it is one */
+static bool fsSame_(const flex *f, const fsModel_ *M) {
+    if (flexCount(f) != (size_t)M->n * M->e ||
+        !flexValidateBufferDeep(f, flexBytes(f))) {
+        return fxNote_(false, __LINE__);
+    }
+    flexEntry *fe = flexHeadIfAny(f);
+    for (uint32_t r = 0; r < M->n; r++) {
+        databox want[3];
+        fsBoxes_(M, &M->v[r], want, false);
+        for (uint32_t i = 0; i < M->e; i++) {
+            if (!fe) {
+                return fxNote_(false, __LINE__);
+            }
+            databox got = {};
+            databoxWide slot;
+            if (!M->refs) {
+                flexGetByType(fe, &got);
+            } else if ((r + i) % 2) {
+                flexGetByTypeWithReference(fe, &got, M->atoms);
+            } else {
+                flexGetByTypeIntoWithReference(fe, &got, &slot, M->atoms);
+            }
+            if (databoxCompare(&got, &want[i]) != 0 ||
+                (DATABOX_IS_BYTES(&got) != DATABOX_IS_BYTES(&want[i]))) {
+                return fxNote_(false, __LINE__);
+            }
+            fe = flexNext(f, fe);
+        }
+    }
+    return fe == nullptr;
+}
+
+static fsRow_ fsRandomRow_(const fsModel_ *M) {
+    const uint64_t r = fxRand_();
+    fsRow_ row = {
+        .k = M->refs ? (int64_t)(r % FS_WORDS) : (int64_t)(r % 61) - 30,
+        .a = (int64_t)((r >> 8) % 4),
+        .blen = (uint8_t)((r >> 12) % 3),
+    };
+    for (uint8_t i = 0; i < row.blen; i++) {
+        row.b[i] = (char)('p' + (r >> (16 + i)) % 3);
+    }
+    return row;
+}
+
+static void fsAbsent_(void *ctx) {
+    (*(uint32_t *)ctx)++;
+}
+
+/* @model: src/flex.h */
+/* One insert of the model's shape; the model follows */
+static bool fsInsert_(flex **ff, fsModel_ *M, flexEntry **mid, uint64_t r) {
+    const fsRow_ row = fsRandomRow_(M);
+    const uint32_t e = M->e;
+    databox vals[3];
+    databox refBoxes[3];
+    fsBoxes_(M, &row, vals, false);
+    fsBoxes_(M, &row, refBoxes, true);
+    const databox *valp[3] = {&vals[0], &vals[1], &vals[2]};
+    const databox *refp[3] = {&refBoxes[0], &refBoxes[1], &refBoxes[2]};
+    const bool hasKey = fsHas_(M, &row, 1);
+    const bool hasRow = fsHas_(M, &row, e);
+    const uint32_t keyAt = fsLowerBound_(M, &row, 1);
+    const uint32_t variant = (uint32_t)(r % 5);
+    bool ok = true;
+    switch (M->shape) {
+    case FS_MAP: {
+        bool found = false;
+        flexEntry *foundEntry = nullptr;
+        databox replaced[2] = {};
+        bool keyOnlyKept = false; /* the row was left as it was */
+        if (!M->refs) {
+            void *recovered = nullptr;
+            if (variant == 0) {
+                found = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+                    ff, e, valp, mid, true);
+            } else if (variant == 1) {
+                found =
+                    flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+                        ff, e, valp, mid, true, replaced);
+            } else if (variant == 2) {
+                found =
+                    flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
+                        ff, e, valp, mid, true, &recovered);
+            } else if (variant == 3) {
+                found =
+                    flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(
+                        ff, e, valp, mid, true, &recovered, replaced);
+            } else {
+                const bool lowest = (r >> 8) % 2;
+                found = flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
+                    ff, e, valp, mid, &foundEntry, lowest);
+                keyOnlyKept = true;
+            }
+            ok = fxNote_(recovered == nullptr, __LINE__);
+        } else if (variant < 2) {
+            found = flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
+                ff, e, refp, mid, true, M->atoms);
+        } else if (variant < 4) {
+            found =
+                flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+                    ff, e, valp, &refBoxes[0], mid, true, M->atoms);
+        } else {
+            uint32_t absentRuns = 0;
+            found =
+                flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
+                    ff, e, valp, &refBoxes[0], mid, M->atoms, &foundEntry,
+                    fsAbsent_, &absentRuns);
+            keyOnlyKept = true;
+            ok = fxNote_(absentRuns == (hasKey ? 0u : 1u), __LINE__);
+        }
+        ok = fxNote_(ok && found == hasKey, __LINE__);
+        if (keyOnlyKept && hasKey) {
+            ok = fxNote_(ok && fsRowOf_(*ff, e, foundEntry) == keyAt, __LINE__);
+        } else if (hasKey) {
+            /* the values replaced, and reported when asked */
+            if ((variant == 1 || variant == 3) && !M->refs && e > 1) {
+                const databox oldA = databoxNewSigned(M->v[keyAt].a);
+                ok = fxNote_(ok && databoxCompare(&replaced[0], &oldA) == 0 &&
+                                 (e < 3 || DATABOX_IS_BYTES(&replaced[1])),
+                             __LINE__);
+            }
+            M->v[keyAt] = row;
+        } else {
+            if ((variant == 1 || variant == 3) && !M->refs && e > 1) {
+                ok = fxNote_(ok && replaced[0].type == DATABOX_VOID, __LINE__);
+            }
+            fsInsertAt_(M, keyAt, &row);
+        }
+        break;
+    }
+    case FS_BAG: {
+        bool found = false;
+        if (!M->refs) {
+            if (e == 1 && variant == 3) {
+                flexInsertByTypeSorted(ff, valp[0]);
+                *mid = flexMiddle(*ff, e); /* this one keeps no middle */
+                found = hasRow;
+            } else if (e == 1 && variant == 4) {
+                found = flexInsertByTypeSortedWithMiddle(ff, valp[0], mid);
+            } else if (variant % 3 == 0) {
+                found = flexInsertByTypeSortedWithMiddleMultiDirect(ff, e, valp,
+                                                                    mid);
+            } else if (variant % 3 == 1) {
+                found = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+                    ff, e, valp, mid, false);
+            } else {
+                databox replaced[2] = {};
+                found =
+                    flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+                        ff, e, valp, mid, false, replaced);
+                ok = fxNote_(e == 1 || replaced[0].type == DATABOX_VOID,
+                             __LINE__);
+            }
+        } else if (e == 1 && variant == 4) {
+            /* a reference or a plain word: placed by value, stored as given */
+            flexInsertByTypeSortedWithReference(
+                ff, (r >> 9) % 2 ? refp[0] : valp[0], M->atoms);
+            *mid = flexMiddle(*ff, e);
+            found = hasRow;
+        } else if (variant % 3 == 0) {
+            found = flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
+                ff, e, refp, mid, false, M->atoms);
+        } else if (variant % 3 == 1) {
+            flexInsertByTypeSortedWithMiddleMultiWithReferenceStoring(
+                ff, e, valp, refp, mid, M->atoms);
+            found = hasRow;
+        } else {
+            found =
+                flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+                    ff, e, valp, &refBoxes[0], mid, false, M->atoms);
+        }
+        ok = fxNote_(ok && found == hasRow, __LINE__);
+        fsInsertAt_(M, fsLowerBound_(M, &row, e), &row);
+        break;
+    }
+    case FS_SET: {
+        /* By reference: the row of references, or the values under the
+         * key's reference (the surrogate form) */
+        const bool found =
+            !M->refs ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+                           ff, e, valp, mid)
+            : variant % 2
+                ? flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
+                      ff, e, valp, &refBoxes[0], mid, M->atoms)
+                : flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
+                      ff, e, refp, mid, M->atoms);
+        ok = fxNote_(found == hasRow, __LINE__);
+        if (!hasRow) {
+            fsInsertAt_(M, fsLowerBound_(M, &row, e), &row);
+        }
+        break;
+    }
+    }
+    return ok;
+}
+
+/* @model: src/flex.h */
+/* The finds for a key and for a whole row, checked against the model */
+static bool fsFind_(const flex *f, const fsModel_ *M, const flexEntry *mid) {
+    const fsRow_ probe = fsRandomRow_(M);
+    const uint32_t e = M->e;
+    databox vals[3];
+    fsBoxes_(M, &probe, vals, false);
+    const databox *valp[3] = {&vals[0], &vals[1], &vals[2]};
+    const bool hasKey = fsHas_(M, &probe, 1);
+    const int64_t lowest = fsLowerBound_(M, &probe, 1);
+    bool ok = true;
+    /* A key's row: any row with the key, or its first */
+    const flexEntry *any[3];
+    const flexEntry *first;
+    const flexEntry *position;
+    const flexEntry *atOrPast;
+    if (M->refs) {
+        any[0] = flexFindByTypeSortedWithMiddleWithReference(f, e, valp[0], mid,
+                                                             M->atoms);
+        any[1] = any[0];
+        any[2] = any[0];
+        first = flexFindByTypeSortedWithMiddleLowestWithReference(
+            f, e, valp[0], mid, M->atoms);
+        position = flexGetByTypeSortedWithMiddleWithReference(f, e, valp[0],
+                                                              mid, M->atoms);
+        atOrPast = first ? first : position;
+    } else {
+        any[0] = flexFindByTypeSorted(f, e, valp[0]);
+        any[1] = flexFindByTypeSortedWithMiddle(f, e, valp[0], mid);
+        any[2] = any[1];
+        first = flexFindByTypeSortedWithMiddleLowest(f, e, valp[0], mid);
+        position = flexGetByTypeSortedWithMiddle(f, e, valp[0], mid);
+        atOrPast = flexFindByTypeSortedWithMiddleGetEntry(f, e, valp[0], mid);
+    }
+    for (int i = 0; i < 3; i++) {
+        const int64_t row = fsRowOf_(f, e, any[i]);
+        ok = fxNote_(ok && (hasKey ? row >= 0 && row < (int64_t)M->n &&
+                                         M->v[row].k == probe.k
+                                   : any[i] == nullptr),
+                     __LINE__);
+    }
+    const int64_t positionRow = fsRowOf_(f, e, position);
+    ok = fxNote_(
+        ok && (hasKey ? fsRowOf_(f, e, first) == lowest : first == nullptr) &&
+            fsRowOf_(f, e, atOrPast) == lowest &&
+            (hasKey ? positionRow >= lowest && positionRow < (int64_t)M->n &&
+                          M->v[positionRow].k == probe.k
+                    : positionRow == lowest),
+        __LINE__);
+    /* A whole row: present or absent */
+    const fsRow_ *whole =
+        M->n && fxRand_() % 2 ? &M->v[fxRand_() % M->n] : &probe;
+    databox wvals[3];
+    fsBoxes_(M, whole, wvals, false);
+    const databox *wp[3] = {&wvals[0], &wvals[1], &wvals[2]};
+    const bool hasRow = fsHas_(M, whole, e);
+    const flexEntry *full[2];
+    if (M->refs) {
+        full[0] = flexFindByTypeSortedWithMiddleFullWidthWithReference(
+            f, e, wp, mid, M->atoms);
+        full[1] = full[0];
+    } else {
+        full[0] = flexFindByTypeSortedFullWidth(f, e, wp);
+        full[1] = flexFindByTypeSortedWithMiddleFullWidth(f, e, wp, mid);
+    }
+    for (int i = 0; i < 2; i++) {
+        const int64_t row = fsRowOf_(f, e, full[i]);
+        ok = fxNote_(ok && (hasRow ? row >= 0 && row < (int64_t)M->n &&
+                                         fsCmp_(M, &M->v[row], whole, e) == 0
+                                   : full[i] == nullptr),
+                     __LINE__);
+    }
+    /* A row compared with the probe, as the model orders them */
+    if (M->n && !M->refs) {
+        const uint32_t at = (uint32_t)(fxRand_() % M->n);
+        const int got = flexCompareEntries(f, valp, e, (int_fast32_t)at);
+        const int want = fsCmp_(M, &M->v[at], &probe, e);
+        ok = fxNote_(ok && (got > 0) == (want > 0) && (got < 0) == (want < 0),
+                     __LINE__);
+    }
+    return ok;
+}
+
+/* The model's rows (a word key as its letters), for a failure */
+static void fsModelPrint_(const fsModel_ *M) {
+    for (uint32_t i = 0; i < M->n; i++) {
+        const fsRow_ *v = &M->v[i];
+        printf("  [%" PRIu32 "] key %" PRId64 " %s a %" PRId64 " b %.*s\n", i,
+               v->k, M->refs ? M->word[v->k] : "", v->a, (int)v->blen, v->b);
+    }
+}
+
+/* @model: src/flex.h */
+static int flexTestModelSorted_(uint64_t seed) {
+    int err = 0;
+    cleaner(fsModelFree_) fsModel_ *M = zcalloc(1, sizeof(*M));
+    M->refs = seed >= 9;
+    const uint64_t s = M->refs ? seed - 9 : seed;
+    M->e = M->refs ? 1 + (uint32_t)(s % 2) : 1 + (uint32_t)(s % 3);
+    M->shape = (fsShape_)(M->refs ? (s / 2) % 3 : (s / 3) % 3);
+    /* @own: container; free=multimapAtomFree */
+    M->atoms = multimapAtomNew();
+    for (uint32_t i = 0; i < FS_WORDS; i++) {
+        /* words of one to five letters, interned */
+        const uint32_t len = 1 + (i * 7) % 5;
+        for (uint32_t j = 0; j < len; j++) {
+            M->word[i][j] = (char)('a' + (i * 11 + j * 5) % 26);
+        }
+        M->ref[i] = databoxNewBytesString(M->word[i]);
+        multimapAtomInsertConvert(M->atoms, &M->ref[i]);
+    }
+    cleaner(flexFree) flex *f = flexNew();
+    flexEntry *mid = flexMiddle(f, M->e);
+    fxRng_ = seed * 7919;
+    for (uint32_t step = 0; step < 2500 && !err; step++) {
+        const uint64_t r = fxRand_();
+        uint32_t op = (uint32_t)(r % 10);
+        if (M->n > 150 && op < 6) {
+            op = 7;
+        }
+        fxFailedLine_ = 0;
+        bool ok = true;
+        if (op < 5) {
+            ok = fsInsert_(&f, M, &mid, r >> 8);
+        } else if (op < 7) {
+            ok = fsFind_(f, M, mid);
+        } else if (op < 9 && M->n) { /* one row, by its entry */
+            const uint32_t at = (uint32_t)((r >> 8) % M->n);
+            flexEntry *fe = flexIndex(f, (int32_t)(at * M->e));
+            flexDeleteSortedValueWithMiddle(&f, M->e, fe, &mid);
+            fsRemoveAt_(M, at);
+        } else if (op == 9 && (!M->refs || (r >> 8) % 8 == 0)) {
+            /* a key range, each bound open or not (rows of references:
+             * the whole flex) */
+            const int64_t a = (int64_t)((r >> 10) % 61) - 30;
+            const int64_t b = a + (int64_t)((r >> 20) % 12);
+            const databox lo = databoxNewSigned(a);
+            const databox hi = databoxNewSigned(b);
+            const bool openLo = M->refs || (r >> 30) % 4 == 0;
+            const bool openHi = M->refs || (r >> 32) % 4 == 0;
+            const size_t gone = flexDeleteSortedKeyRange(
+                &f, M->e, openLo ? nullptr : &lo, openHi ? nullptr : &hi, mid);
+            size_t want = 0;
+            for (uint32_t i = M->n; i-- > 0;) {
+                if ((openLo || M->v[i].k >= a) && (openHi || M->v[i].k <= b)) {
+                    fsRemoveAt_(M, i);
+                    want++;
+                }
+            }
+            ok = fxNote_(gone == want, __LINE__);
+            mid = flexMiddle(f, M->e); /* the range delete keeps no middle */
+        }
+        if (!ok || !fxNote_(mid == flexMiddle(f, M->e), __LINE__) ||
+            !fsSame_(f, M)) {
+            ERR("sorted model step %" PRIu32 ": op %" PRIu32 " disagreed at "
+                "line %d (%" PRIu32 " rows of %" PRIu32 ", shape %d, refs %d, "
+                "seed %" PRIu64 ")",
+                step, op, fxFailedLine_, M->n, M->e, (int)M->shape,
+                (int)M->refs, seed);
+            fsModelPrint_(M);
+            flexRepr(f);
+        }
+    }
+    return err;
+}
+
 int32_t flexTest(int32_t argc, char **argv) {
     /* If an argument is given, use it as the random seed. */
     if (argc == 4) {
@@ -9881,6 +11343,39 @@ int32_t flexTest(int32_t argc, char **argv) {
     cleaner(flexFree) flex *f = nullptr;
     flexEntry *fe = nullptr;
     int err = 0;
+
+    TEST("a replace with an empty string stores the empty string") {
+        for (int how = 0; how < 2; how++) {
+            flex *e = flexNew();
+            flexPushBytesExact(&e, "abc", 3, FLEX_ENDPOINT_TAIL);
+            flexPushSigned(&e, 5, FLEX_ENDPOINT_TAIL);
+            const databox empty = databoxNewBytes("", 0);
+            if (how) {
+                flexReplaceByType(&e, flexHead(e), &empty);
+            } else {
+                flexReplaceBytes(&e, flexHead(e), "", 0);
+            }
+            databox got = {};
+            flexGetByType(flexHead(e), &got);
+            if (!flexValidateBufferDeep(e, flexBytes(e)) ||
+                !DATABOX_IS_BYTES(&got) || got.len != 0 || flexCount(e) != 2) {
+                ERR("replace %d: the empty string did not land", how);
+            }
+            flexFree(e);
+        }
+    }
+
+    TEST("model: sorted maps, bags and sets, direct and by reference") {
+        for (uint64_t seed = 0; seed < 15; seed++) {
+            err += flexTestModelSorted_(seed);
+        }
+    }
+
+    TEST("model: a sequence of every kind through every call") {
+        for (uint64_t seed = 1; seed <= 6; seed++) {
+            err += flexTestModelSequence_(seed);
+        }
+    }
 
     TEST("decoding never writes through or yields an untrusted pointer") {
         const __uint128_t wideU = (__uint128_t)1 << 80;

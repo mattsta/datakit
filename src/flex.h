@@ -203,8 +203,10 @@ void flexBulkPushBytesMembers(flex **ff, const flexBytesMember *members,
  *
  *   Auto-convert (flexPushBytes, flexPushByType, flexNewFromDatabox*,
  *   flexPushDataboxBig): bytes content that spells a numeral is stored as that
- *   number (databoxCanonical in databox.h): "22" is stored and read back as the
- *   integer 22.
+ *   number, and a real box holding a whole number as that integer
+ *   (databoxCanonical in databox.h): "22" is stored and read back as the
+ *   integer 22, and so is the double 22.0.  The typed pushes
+ *   (flexPushDouble, flexPushFloat, ...) store the real as given.
  *
  *   Exact (the *Exact functions): stores exactly the value given.  Only the
  *   same-type minimal width applies (integer width, lossless double-to-float);
@@ -379,6 +381,10 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
 bool flexInsertByTypeSortedWithMiddleMultiDirectIfAbsent(
     flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
     flexEntry **middleEntry, flexEntry **foundEntry, bool foundLowest);
+/* The two inserts into rows of references below (the set form, and the
+ * map or bag form after it) take a row of values, references or both: a
+ * reference is placed by the value it stands for and stored as the
+ * reference. */
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
     flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
     flexEntry **middleEntry, const struct multimapAtom *referenceContainer);
@@ -395,6 +401,14 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
     const databox *boxInsertKey, flexEntry **middleEntry,
     bool compareUsingKeyElementOnly,
     const struct multimapAtom *const referenceContainer);
+/* The set form of the surrogate-key insert: the row 'box' (every element
+ * compared, stored references resolved through 'referenceContainer') goes
+ * in under 'boxInsertKey' only when no row equals it.  True when one did
+ * (the flex unchanged). */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    const databox *boxInsertKey, flexEntry **middleEntry,
+    const struct multimapAtom *referenceContainer);
 /* Runs once an insert-if-absent knows its key is absent, before the new
  * entry goes in; it must not change the flex being inserted into. */
 typedef void(flexWhenAbsent)(void *ctx);
@@ -696,8 +710,10 @@ bool flexIncrbySigned(flex **ff, flexEntry *fe, int64_t incrby,
 bool flexIncrbyUnsigned(flex **ff, flexEntry *fe, int64_t incrby,
                         uint64_t *newval);
 
-/* Compares */
-bool flexCompareBytes(flex *fe, const void *data, size_t len);
+/* Compares.  flexCompareBytes matches the entry at 'fe' as flexFind
+ * matches each entry (exactly these bytes, or a number the bytes spell);
+ * flexCompareString takes only a string entry with exactly these bytes. */
+bool flexCompareBytes(flexEntry *fe, const void *data, size_t len);
 bool flexCompareString(flexEntry *fe, const void *str, size_t len);
 bool flexCompareUnsigned(flexEntry *fe, uint64_t val);
 bool flexCompareSigned(flexEntry *fe, int64_t val);
