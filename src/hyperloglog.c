@@ -1651,6 +1651,7 @@ hyperloglog *hyperloglogNewUnion(const hyperloglog *const *hlls, size_t n) {
 #include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+#include "dkRandom.h" /* dkSplitmix64Next */
 #include "timeUtil.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
@@ -1670,6 +1671,132 @@ defcleaner(hllBenchSet, hllBenchSetFree);
 /* Register-access cycles; the approximation test adds 10000x as many
  * elements (10M), still crossing every sparse/dense checkpoint */
 static constexpr int HLL_TEST_CYCLES = 1000;
+/* ====================================================================
+ * The model test: the same elements added to a sparse, a dense and a
+ * default sketch, which must agree exactly (an add's result, every
+ * count), and every union, merge, copy and batch add of them must agree
+ * with the others; the estimate stays near the true distinct count
+ * ==================================================================== */
+static uint64_t hllModelRng_;
+
+/* @model: src/hyperloglog.h */
+/* Three sketches of the same elements count the same, within the
+ * estimate's bound of the 'distinct' elements added */
+static bool hllModelSame_(hyperloglog *s, hyperloglog *d, hyperloglog *n,
+                          uint64_t distinct) {
+    bool bad = false;
+    const uint64_t cs = hyperloglogCount(s, &bad);
+    const uint64_t cd = hyperloglogCount(d, &bad);
+    const uint64_t cn = hyperloglogCount(n, &bad);
+    const uint64_t off = cn > distinct ? cn - distinct : distinct - cn;
+    return !bad && cs == cd && cd == cn && hyperloglogDetect(s) &&
+           hyperloglogDetect(d) && hyperloglogDetect(n) &&
+           off <= 3 + distinct / 20;
+}
+
+/* @model: src/hyperloglog.h */
+static int hyperloglogTestModel_(uint64_t seed) {
+    int err = 0;
+    cleaner(hyperloglogFree) hyperloglog *s = hyperloglogNewSparse();
+    cleaner(hyperloglogFree) hyperloglog *d = hyperloglogNewDense();
+    cleaner(hyperloglogFree) hyperloglog *n = hyperloglogNew();
+    /* A second set of elements, for the unions */
+    cleaner(hyperloglogFree) hyperloglog *x = hyperloglogNewSparse();
+    hllModelRng_ = seed;
+    uint64_t distinct = 0; /* ids 0 .. distinct - 1 are added */
+    uint64_t otherFrom = UINT64_C(1) << 40;
+    uint64_t otherN = 0;
+    for (uint32_t step = 0; step < 400 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&hllModelRng_);
+        bool ok = true;
+        switch (r % 6) {
+        case 0:
+        case 1: { /* new elements one by one, and a repeat */
+            const uint64_t many = 1 + (r >> 8) % (step < 100 ? 8 : 200);
+            for (uint64_t i = 0; ok && i < many; i++) {
+                const uint64_t id = distinct++;
+                const hyperloglogAddResult rs = hyperloglogAdd(&s, &id, 8);
+                const hyperloglogAddResult rd = hyperloglogAdd(&d, &id, 8);
+                const hyperloglogAddResult rn = hyperloglogAdd(&n, &id, 8);
+                ok = rs == rd && rd == rn && rs != HYPERLOGLOG_ADD_CORRUPT &&
+                     hyperloglogAdd(&n, &id, 8) == HYPERLOGLOG_ADD_UNCHANGED;
+            }
+            break;
+        }
+        case 2: { /* a batch: as many changed as the adds one by one */
+            const void *data[32];
+            size_t lens[32];
+            static uint64_t ids[32];
+            const size_t many = 1 + (r >> 8) % 32;
+            int64_t changed = 0;
+            for (size_t i = 0; i < many; i++) {
+                ids[i] = distinct++;
+                data[i] = &ids[i];
+                lens[i] = 8;
+                changed +=
+                    hyperloglogAdd(&s, &ids[i], 8) == HYPERLOGLOG_ADD_CHANGED;
+                (void)hyperloglogAdd(&d, &ids[i], 8);
+            }
+            ok = hyperloglogAddMany(&n, data, lens, many) == changed;
+            break;
+        }
+        case 3: { /* a union three ways, and through a raw scratch */
+            const uint64_t more = (r >> 8) % 300;
+            for (uint64_t i = 0; i < more; i++) {
+                const uint64_t id = otherFrom + otherN++;
+                (void)hyperloglogAdd(&x, &id, 8);
+            }
+            const hyperloglog *const both[2] = {n, x};
+            bool bad = false;
+            const uint64_t direct = hyperloglogCountUnion(both, 2, &bad);
+            cleaner(hyperloglogFree) hyperloglog *made =
+                hyperloglogNewUnion(both, 2);
+            cleaner(hyperloglogFree) hyperloglog *into = hyperloglogCopy(s);
+            const bool merged = hyperloglogMergeInto(&into, x);
+            hllStatic raw = {};
+            hyperloglog *scratch = toHLL(raw);
+            scratch->encoding = HLL_RAW;
+            const bool folded =
+                hyperloglogMerge(scratch, d) && hyperloglogMerge(scratch, x);
+            cleaner(hyperloglogFree) hyperloglog *fromRaw =
+                hyperloglogNewFromRaw(scratch, (r >> 20) % 2);
+            const uint64_t total = distinct + otherN;
+            const uint64_t off =
+                direct > total ? direct - total : total - direct;
+            ok = !bad && made && merged && folded && fromRaw &&
+                 hyperloglogCount(made, &bad) == direct &&
+                 hyperloglogCount(into, &bad) == direct &&
+                 hyperloglogCount(fromRaw, &bad) == direct && !bad &&
+                 off <= 3 + total / 20;
+            break;
+        }
+        case 4: { /* a copy counts the same; a dropped cache recounts so */
+            cleaner(hyperloglogFree) hyperloglog *copy = hyperloglogCopy(d);
+            bool bad = false;
+            const uint64_t before = hyperloglogCount(d, &bad);
+            hyperloglogInvalidateCache(d);
+            ok = hyperloglogCount(copy, &bad) == before &&
+                 hyperloglogCount(d, &bad) == before && !bad;
+            break;
+        }
+        default: { /* an empty union is an empty sketch */
+            cleaner(hyperloglogFree) hyperloglog *none =
+                hyperloglogNewUnion(nullptr, 0);
+            bool bad = false;
+            ok = none && hyperloglogCount(none, &bad) == 0 &&
+                 hyperloglogCountUnion(nullptr, 0, &bad) == 0 && !bad;
+            break;
+        }
+        }
+        if (!ok || !hllModelSame_(s, d, n, distinct)) {
+            ERR("model step %" PRIu32 ": op %" PRIu64 " disagreed (%" PRIu64
+                " distinct, seed %" PRIu64 ")",
+                step, r % 6, distinct, seed);
+        }
+    }
+    return err;
+}
+
 int hyperloglogTest(int, char *[]) {
     uint32_t sseed = time(nullptr) ^ getpid();
     uint32_t shash = HYPERHASH(&sseed, sizeof(sseed), 0xadc83b19ULL);
@@ -1686,6 +1813,13 @@ int hyperloglogTest(int, char *[]) {
 
     /* Every register is accessible, and setting one keeps its value without
      * touching its neighbours */
+    TEST("model: sparse, dense and default sketches of the same elements "
+         "agree, with every union and merge") {
+        for (uint64_t seed = 1; seed <= 3; seed++) {
+            err += hyperloglogTestModel_(seed);
+        }
+    }
+
     TEST("register access: each register holds its value") {
         for (uint32_t j = 0; j < HLL_TEST_CYCLES; j++) {
             if (j % 5000 == 0) {
