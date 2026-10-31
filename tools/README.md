@@ -373,9 +373,10 @@ gate before a milestone.
   list that leaves it out) is reported on a `missing` line, apart from
   real failures, with a `hint` naming the targets to add.
 - `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check`, `spell`, `idioms`, `magic` and `testchecks` then
-  run on the exported tree with the tree's own dktools (the `alloc`,
-  `atomic`, `output`, `spell`, `idioms`, `magic` and `checks` lines).
+  `outputaudit check`, `spell`, `idioms`, `magic`, `modelcover` and
+  `testchecks` then run on the exported tree with the tree's own dktools
+  (the `alloc`, `atomic`, `output`, `spell`, `idioms`, `magic`, `models`
+  and `checks` lines).
 - Prints a result block (tree hash, build with its warning-line and
   linker-note counts, ctest, sanitizer reports from the test output,
   allocaudit, failing test names, log paths), also kept in
@@ -448,8 +449,8 @@ uv run --project tools dktools validate [--rev REV] \
   set per configuration.
 - Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
   output, `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check`, `spell`, `idioms`, `magic` and `testchecks` on
-  the exported tree, and the leakage
+  `outputaudit check`, `spell`, `idioms`, `magic`, `modelcover` and
+  `testchecks` on the exported tree, and the leakage
   gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
 - `--python` also builds the Python package's wheel from the exported
@@ -832,12 +833,14 @@ uv run --project tools dktools modelcover [HEADER ...]
   should make every public call.
 - The model test's functions carry a marker comment right before them,
   `/* @model: src/multidict.h */`; the calls their bodies make count for
-  that header. Each public call of a modeled header that no marked
+  that header, and a `cleaner(fn)` or `cleanerName(fn, ...)` scope counts
+  as a call of `fn`. Each public call of a modeled header that no marked
   function makes is reported, unless `tools/modelcover-allow.txt` has a
   `HEADER CALL REASON` line for it; a line that no longer matches fails
   too. The summary counts the headers with no model test yet.
 - Exits 0 when every gap is allowed and every allow line is used, 1
-  otherwise.
+  otherwise. `verify` and `validate` run it (the `models` line), so a
+  call added to a modeled header needs the model to make it or a reason.
 
 ## headers — every header compiles on its own
 

@@ -138,7 +138,7 @@ class ValidateRun(unittest.TestCase):
                 self.assertIn(f"{label} {step}", names)
         self.assertFalse(any(LIBRARY_ONLY in name for name in names))
         self.assertEqual(
-            names[-8:],
+            names[-9:],
             [
                 "allocaudit",
                 "atomicaudit",
@@ -146,6 +146,7 @@ class ValidateRun(unittest.TestCase):
                 "spell",
                 "idioms",
                 "magic",
+                "modelcover",
                 "headers",
                 "testchecks",
             ],
@@ -153,6 +154,7 @@ class ValidateRun(unittest.TestCase):
         self.assertIn("## Spelling\n\n", out)
         self.assertIn("## Idioms\n\n", out)
         self.assertIn("## Named numbers\n\n", out)
+        self.assertIn("## Model tests\n\n", out)
         self.assertIn("## Headers\n\n", out)
         self.assertIn("## Test checks\n\n", out)
 
@@ -476,6 +478,7 @@ class ValidateRun(unittest.TestCase):
             "spell",
             "idioms",
             "magic",
+            "modelcover",
             "headers",
             "testchecks",
         ):

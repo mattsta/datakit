@@ -41,6 +41,8 @@ SPELL_TIMEOUT = 10 * 60
 #: The idiom gate is lexical, one pass over the sources.
 IDIOMS_TIMEOUT = 10 * 60
 MAGIC_TIMEOUT = 10 * 60
+#: The model-cover gate is lexical too: one pass over the sources.
+MODELCOVER_TIMEOUT = 10 * 60
 #: The header gate compiles each header alone, syntax only, in parallel.
 HEADERS_TIMEOUT = 10 * 60
 #: The test-check gate is lexical too: one pass, plus every header's
@@ -606,6 +608,12 @@ def magic_command(uv: str, tree: Path) -> list[str]:
     """The named-numbers gate (a limit written twice, a format read by
     position, with the tree's allow list)."""
     return tree_dktools(uv, tree, "magic")
+
+
+def modelcover_command(uv: str, tree: Path) -> list[str]:
+    """The model-cover gate (each modeled header's public calls its model
+    test never makes, with the tree's allow list)."""
+    return tree_dktools(uv, tree, "modelcover")
 
 
 def testchecks_command(uv: str, tree: Path) -> list[str]:
