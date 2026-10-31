@@ -783,6 +783,17 @@ void persistClose(persist *p) {
     zfree(p);
 }
 
+/* The next WAL sequence is past 'seen' (a snapshot's watermark, a WAL
+ * header's first sequence): an entry numbered below the watermark reads
+ * as folded into the snapshot and is skipped, so a session that reopens
+ * after a compaction (a WAL holding only its header) must not start
+ * numbering from 1 again */
+static void persistWALSequenceAtLeast_(persist *p, uint64_t seen) {
+    if (seen > p->walSequence) {
+        p->walSequence = seen;
+    }
+}
+
 /* ============================================================================
  * Snapshot Operations
  * ============================================================================
@@ -1167,6 +1178,7 @@ void *persistRestore(persist *p) {
      * rebuilding from the WAL alone applies every entry. */
     if (structure) {
         p->snapshotWalSequence = header.walSequence;
+        persistWALSequenceAtLeast_(p, header.walSequence);
     }
     return structure;
 }
@@ -1300,6 +1312,7 @@ static bool persistWALInit(persist *p) {
     persistWALHeader header;
     if (persistWALReadVerifyHeader(p, &header)) {
         p->walKeyId = header.keyId;
+        persistWALSequenceAtLeast_(p, header.startSequence);
         int64_t goodEnd = 0;
         const int rc = persistWALWalk(p, nullptr, nullptr, &goodEnd);
         return persistWALResume(p, goodEnd, rc);
@@ -2059,6 +2072,7 @@ bool persistReplayWAL(persist *p, void *structure) {
     if (!persistWALReadVerifyHeader(p, &walHdr)) {
         return false;
     }
+    persistWALSequenceAtLeast_(p, walHdr.startSequence);
     /* Cross-key safety: same contract as snapshot verify. A WAL keyed
      * under a different id than the currently-attached key would still
      * have produced VERIFY_FAILED on the very first envelope, but the

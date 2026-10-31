@@ -969,6 +969,54 @@ int flexPTest(int, char *[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("flexP writes after a compaction, a close and a reopen survive the "
+         "next reopen") {
+        /* The reopen finds the snapshot's watermark past every entry and a
+         * WAL holding only its header: the next writes must be numbered
+         * past the watermark, or the following recovery skips them as
+         * folded into the snapshot */
+        ptestCleanupFiles(basePath);
+        ptestBoxTracker tracker;
+        ptestBoxTrackerInit(&tracker);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
+        flexP *f = flexNewP(ctx);
+        for (int i = 0; i < 300; i++) {
+            databox box = DATABOX_SIGNED(i);
+            PTEST_LOGGED(flexPushTailP(f, &box));
+            ptestBoxTrackerPushTail(&tracker, &box);
+        }
+        if (!flexCompactP(f)) {
+            ERR("%s", "compaction failed");
+        }
+        flexCloseP(f);
+        persistCtxFree(ctx);
+
+        for (int round = 0; round < 2; round++) {
+            ctx = persistCtxOpen(basePath, nullptr);
+            f = flexOpenP(ctx);
+            if (!f) {
+                ERR("round %d: reopen failed", round);
+                persistCtxFree(ctx);
+                break;
+            }
+            databox box = DATABOX_SIGNED(1000 + round);
+            PTEST_LOGGED(flexPushTailP(f, &box));
+            ptestBoxTrackerPushTail(&tracker, &box);
+            flexCloseP(f);
+            persistCtxFree(ctx);
+        }
+
+        ctx = persistCtxOpen(basePath, nullptr);
+        f = flexOpenP(ctx);
+        if (!f || !verifyFlexMatchesTracker(f, &tracker)) {
+            ERR("the writes after the reopen were lost: %zu values",
+                f ? flexCountP(f) : 0);
+        }
+        flexCloseP(f);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST("flexP statistics tracking") {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, nullptr);
