@@ -1375,6 +1375,11 @@ static bool persistWALInit(persist *p) {
     persistWALHeader header;
     if (persistWALReadVerifyHeader(p, &header)) {
         p->walKeyId = header.keyId;
+        /* Entries under another key would all fail their checks here and
+         * read as damage: refused before the walk, the WAL as it is */
+        if (!persistCheckHeaderKeyId(p, header.keyId)) {
+            return false;
+        }
         persistWALSequenceAtLeast_(p, header.startSequence);
         int64_t goodEnd = 0;
         const int rc = persistWALWalk(p, nullptr, nullptr, &goodEnd);
@@ -2221,7 +2226,9 @@ bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx,
     }
 
     p->walCursorMoved = true;
-    if (!persistWALReadVerifyHeader(p, nullptr)) {
+    persistWALHeader walHdr;
+    if (!persistWALReadVerifyHeader(p, &walHdr) ||
+        !persistCheckHeaderKeyId(p, walHdr.keyId)) {
         return false;
     }
 
@@ -10784,6 +10791,57 @@ int persistTest(int, char *[]) {
                 compacted, appended, again, after, members);
         }
         persistClose(p);
+    }
+
+    TEST("a WAL opened under another key is refused before it is read") {
+        /* Bound to key 1: a snapshot and 3 entries.  Opened again (as a
+         * restart does) bound to key 2: the WAL's header names key 1, so
+         * the open and an iteration refuse with the key id mismatch and
+         * leave the WAL as it is; bound back to key 1, all 3 recover */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t k1[32] = {1, 1, 1};
+        const uint8_t k2[32] = {2, 2, 2};
+        hmacKeyringInstallUnsalted(ring, 1u, &hmacAlgoSHA256, k1, sizeof(k1));
+        hmacKeyringInstallUnsalted(ring, 2u, &hmacAlgoSHA256, k2, sizeof(k2));
+        persistConfig config = persistDefaultConfig();
+        config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+        persist *p = persistCreate(&persistOpsIntset, &config);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        persistAttachKeyring(p, ring, 1u);
+        cleaner(intsetFree) intset *live = intsetNew();
+        persistSnapshot(p, live);
+        for (int64_t v = 1; v <= 3; v++) {
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
+        }
+        persistSync(p);
+        const int64_t walBytes = p->walStore->size(p->walStore->ctx);
+
+        /* The restart: the WAL not yet opened, the other key bound */
+        p->walInitialized = false;
+        (void)persistRebindKeyring(p, ring, 2u);
+        const int64_t four = 4;
+        const bool refused = persistLogOp(p, PERSIST_OP_INSERT, &four, 1) ==
+                                 PERSIST_LOG_REFUSED &&
+                             persistLastError(p) == PERSIST_ERR_KEY_ID_MISMATCH;
+        persistTestWalCount count = {.stopAfter = SIZE_MAX};
+        const bool iterRefused =
+            !persistIterateWAL(p, persistTestCountEntries, &count, nullptr) &&
+            count.seen == 0;
+        const bool untouched = p->walStore->size(p->walStore->ctx) == walBytes;
+        (void)persistRebindKeyring(p, ring, 1u);
+        intset *got = persistRecover(p);
+        const size_t members = got ? (size_t)intsetCount(got) : 0;
+        if (got) {
+            intsetFree(got);
+        }
+        if (!refused || !iterRefused || !untouched || members != 3) {
+            ERR("open refused %d, iteration refused %d, WAL untouched %d, "
+                "%zu of 3 recovered",
+                refused, iterRefused, untouched, members);
+        }
+        persistClose(p);
+        hmacKeyringFree(ring);
     }
 
     TEST("rebinding to a new key mid-WAL keeps everything recoverable") {
