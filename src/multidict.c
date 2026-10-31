@@ -1073,7 +1073,9 @@ bool multidictExpand(multidict *d, uint64_t newSlots) {
  * since part of the hash table may be composed of empty spaces, it is not
  * guaranteed that this function will rehash even a single slot. */
 bool multidictRehash(multidict *d, int32_t n) {
-    if (!multidictIsRehashing(d)) {
+    /* A safe iterator holds a slot of the old table: the rehash waits
+     * (still in progress) until every iterator is released */
+    if (!multidictIsRehashing(d) || d->iterators) {
         return d->rehashing;
     }
 
@@ -1200,6 +1202,9 @@ bool multidictRehash(multidict *d, int32_t n) {
 
 /* Rehash for an amount of time between ms milliseconds and ms+1 milliseconds */
 int64_t multidictRehashMilliseconds(multidict *d, int64_t ms) {
+    if (d->iterators) {
+        return 0; /* paused while a safe iterator is open */
+    }
     int64_t start = timeUtilMs();
     int32_t rehashes = 0;
 
@@ -3464,7 +3469,8 @@ void multidictEmpty(multidict *d) {
     _multidictClearHt(d, HT(d, 1));
     d->rehashidx = MULTIDICT_REHASHIDX_INVALID;
     d->rehashing = false;
-    d->iterators = 0;
+    /* Open iterators stay counted: each release balances its own (an
+     * emptied dict has nothing left for one to return) */
     if (lruLevels) {
         multidictEnableLRU(d, lruLevels);
         d->evictPolicy = policy;
@@ -5899,6 +5905,7 @@ typedef struct testCiOracle {
 
 defcleanerName(testCiOracle *, zfree, CiOracle);
 defcleanerName(uint8_t *, zfree, CiSnap);
+defcleanerName(bool *, zfree, PausedSeen);
 
 /* Key 'base' with the case of its first three letters set from 'flips' */
 static uint32_t testCiKey_(uint32_t base, uint32_t flips, uint8_t *out) {
@@ -5979,6 +5986,75 @@ static bool mdTestCountVisit_(void *ctx, const databox *key, size_t level) {
     (void)level;
     (*(size_t *)ctx)++;
     return true;
+}
+
+/* With a safe iterator open part way through a rehash, the calls that
+ * step a rehash themselves (Rehash, RehashMilliseconds, GetSomeKeys)
+ * pause it: the iteration sees every key once.  Emptying with an
+ * iterator open keeps the open count, so the release balances it and
+ * the dict resizes again */
+static int multidictTestRehashPausedForIterators_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 11);
+    const int keys = 2000;
+    char key[32];
+    for (int i = 0; i < keys; i++) {
+        const int n = snprintf(key, sizeof(key), "paused-%d", i);
+        const databox k = databoxNewBytes(key, (size_t)n);
+        const databox v = databoxNewSigned(i);
+        (void)multidictAdd(d, &k, &v);
+    }
+    while (multidictIsRehashing(d)) {
+        (void)multidictRehash(d, 100);
+    }
+    multidictExpand(d, multidictSlotCount(d) * 8);
+    if (!multidictIsRehashing(d)) {
+        ERR("%s", "the expansion did not start a rehash");
+    }
+
+    cleanerName(zfree, PausedSeen) bool *seen = zcalloc(keys, sizeof(bool));
+    multidictIterator it;
+    multidictIteratorGetSafe(d, &it);
+    multidictEntry e;
+    int visited = 0;
+    int twice = 0;
+    while (multidictIteratorNext(&it, &e)) {
+        const int64_t at = e.val.data.i;
+        twice += seen[at];
+        seen[at] = true;
+        visited++;
+        if (visited % 50 == 0) {
+            (void)multidictRehash(d, 1000);
+            (void)multidictRehashMilliseconds(d, 1);
+            databox some[8];
+            (void)multidictGetSomeKeys(d, some, countof(some));
+        }
+    }
+    multidictIteratorRelease(&it);
+    if (visited != keys || twice) {
+        ERR("an iteration over a paused rehash saw %d of %d keys, %d twice",
+            visited, keys, twice);
+    }
+
+    /* Empty with an iterator open: the release balances its count */
+    multidictIteratorGetSafe(d, &it);
+    (void)multidictIteratorNext(&it, &e);
+    multidictEmpty(d);
+    multidictIteratorRelease(&it);
+    for (int i = 0; i < keys; i++) {
+        const int n = snprintf(key, sizeof(key), "again-%d", i);
+        const databox k = databoxNewBytes(key, (size_t)n);
+        const databox v = databoxNewSigned(i);
+        (void)multidictAdd(d, &k, &v);
+    }
+    if (multidictSlotCount(d) < 64) {
+        ERR("after an empty with an iterator open the dict stayed at %" PRIu64
+            " slots for %d keys",
+            multidictSlotCount(d), keys);
+    }
+    return err;
 }
 
 /* An LRU-tracked dict emptied and refilled tracks only what it holds,
@@ -8995,6 +9071,11 @@ int multidictTest(int, char *[]) {
     TEST("9.9b an emptied LRU dict tracks only what it holds; a freed one "
          "gives back every byte") {
         err += multidictTestLRUEmptyFree_();
+    }
+
+    TEST("9.9c a safe iterator pauses every rehash step; an empty with one "
+         "open keeps the count balanced") {
+        err += multidictTestRehashPausedForIterators_();
     }
 
     /* ================================================================

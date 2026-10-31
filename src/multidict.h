@@ -266,11 +266,12 @@ typedef struct multidictSlotIterator {
 static_assert(sizeof(multidictSlotIterator) == 144,
               "multidictSlotIterator carries three wide slots at its tail");
 
-/* If safe is set to 1 this is a safe iterator, that means, you can call
- * multidictAdd, multidictFind, and other functions against the multidictionary
- * even while iterating.
- * Otherwise it is a non safe iterator, and only multidictNext()
- * should be called while iterating. */
+/* A safe iterator (multidictIteratorGetSafe) pauses rehashing while it is
+ * open, so lookups (Find, Exists, Touch and the other reads) may run
+ * between its Next calls.  A write (an add, replace, increment or delete)
+ * may rewrite the slot the iterator is reading and ends the iteration:
+ * collect the keys first, release the iterator, then write.  An unsafe
+ * iterator allows only multidictIteratorNext until it is released. */
 typedef struct multidictIterator {
     multidict *d;
     multidictSlotIterator iter;
@@ -475,6 +476,9 @@ bool multidictGetRandomKey(multidict *d, databox *keybox);
  * than 'count' and may return a key more than once.  For eviction-style
  * sampling, not enumeration (use multidictScan or an iterator). */
 uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count);
+/* Every entry gone (LRU tracking starts over empty, its levels and the
+ * eviction policy kept).  An open iterator ends: release it without
+ * another Next. */
 void multidictEmpty(multidict *d);
 void multidictPrintStats(multidict *d);
 void multidictResizeEnable(multidict *d);
@@ -499,6 +503,9 @@ bool multidictSetDefaultLoadFactors(uint32_t expandPercent,
                                     uint32_t shrinkPercent);
 void multidictDefaultLoadFactors(uint32_t *expandPercent,
                                  uint32_t *shrinkPercent);
+/* Up to 'n' steps of an incremental rehash (or for about 'ms'
+ * milliseconds); true while it is still in progress.  With a safe
+ * iterator open a rehash waits: nothing moves. */
 bool multidictRehash(multidict *d, int32_t n);
 int64_t multidictRehashMilliseconds(multidict *d, int64_t ms);
 /* A new seed for an empty dict (any 32 bits); false, unchanged, when the
