@@ -572,6 +572,9 @@ typedef enum multidictEvictPolicy {
  * tracking it.  Calls that name no existing key never promote: a miss,
  * iteration, scans, random keys, persistence, rehashing, the value read
  * for an eviction callback, and multidictGetLRULevel (an inspector). */
+/* Enabling (an empty dict only) makes a RANDOM policy LRU; disabling
+ * makes LRU RANDOM again and keeps LFU and SIZE_LRU, so a disable and
+ * enable keep the policy */
 bool multidictEnableLRU(multidict *d, size_t levels);
 void multidictDisableLRU(multidict *d);
 bool multidictHasLRU(multidict *d);

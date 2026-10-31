@@ -2645,8 +2645,10 @@ void multidictDisableLRU(multidict *d) {
     }
 
     d->lruEnabled = false;
-    /* A policy that needs the tracking falls back to the default */
-    if (mdEvictNeedsLRU_(d->evictPolicy)) {
+    /* LRU, the policy enabling makes the default, goes back to the default;
+     * LFU and SIZE_LRU stay chosen (without tracking they take a random
+     * entry), so a disable and enable keep any policy */
+    if (d->evictPolicy == MULTIDICT_EVICT_LRU) {
         d->evictPolicy = MULTIDICT_EVICT_RANDOM;
     }
 }
@@ -6982,6 +6984,21 @@ static int multidictTestLRUToggle_(void) {
         multidictGetEvictPolicy(d) != MULTIDICT_EVICT_RANDOM ||
         multidictEnableLRU(d, 4) || multidictCount(d) != 50) {
         ERR("LRU toggle: disabling a populated dict");
+    }
+    /* A chosen policy survives a disable and enable */
+    static const multidictEvictPolicy kept[] = {
+        MULTIDICT_EVICT_LRU, MULTIDICT_EVICT_LFU, MULTIDICT_EVICT_SIZE_LRU};
+    for (size_t i = 0; i < countof(kept); i++) {
+        cleaner(multidictFree) multidict *t =
+            multidictNew(&multidictTypeExactKey, qdc, 8);
+        (void)multidictEnableLRU(t, 4);
+        multidictSetEvictPolicy(t, kept[i]);
+        multidictDisableLRU(t);
+        (void)multidictEnableLRU(t, 4);
+        if (multidictGetEvictPolicy(t) != kept[i]) {
+            ERR("LRU toggle: policy %d came back as %d", (int)kept[i],
+                (int)multidictGetEvictPolicy(t));
+        }
     }
     for (uint64_t k = 0; k < 50; k++) {
         const databox key = DATABOX_UNSIGNED(k);
