@@ -824,6 +824,7 @@ typedef struct s16 {
 defcleanerName(s16 *, zfree, S16);
 defcleaner(multiarray *, multiarrayFree);
 
+/* @model: src/multiarray.h */
 /* Every element read back through iterators (both directions, from both
  * ends and from 'at') and CopyTo matches 'oracle' */
 static int multiarrayOracleCheck_(const multiarray *m, const s16 *oracle,
@@ -1163,8 +1164,228 @@ static int multiarrayDrainCheck_(multiarrayDrainBy by, uint64_t seed) {
     return err;
 }
 
+/* ====================================================================
+ * The model test: random sequences of every public container call
+ * against a plain array, every read checked, through every tier, with
+ * calls outside the array refused and reported
+ * ==================================================================== */
+static constexpr uint32_t MA_MODEL_CAP = 2000;
+
+typedef struct maModel_ {
+    uint32_t n;
+    int64_t nextId;
+    uint32_t events[4];
+    s16 e[MA_MODEL_CAP];
+} maModel_;
+
+defcleanerName(maModel_ *, zfree, MaModel);
+
+static uint64_t maModelRng_;
+static uint32_t maModelRand_(void) {
+    return (uint32_t)splitmix64(&maModelRng_);
+}
+
+static s16 maModelElement_(maModel_ *M) {
+    const int64_t id = M->nextId++;
+    return (s16){.a = id, .b = ~id};
+}
+
+static void maModelInsertAt_(maModel_ *M, uint32_t at, s16 v) {
+    memmove(&M->e[at + 1], &M->e[at], (M->n - at) * sizeof(M->e[0]));
+    M->e[at] = v;
+    M->n++;
+}
+
+static void maModelRemove_(maModel_ *M, uint32_t at, uint32_t count) {
+    memmove(&M->e[at], &M->e[at + count],
+            (M->n - at - count) * sizeof(M->e[0]));
+    M->n -= count;
+}
+
+/* @model: src/multiarray.h */
+/* One random call against the model; true when it agreed (a call outside
+ * the array must change nothing and report once) */
+static bool maModelStep_(multiarray **m, maModel_ *M, uint32_t op) {
+    const uint32_t r = maModelRand_();
+    const uint32_t at = M->n ? r % M->n : 0;
+    s16 v = maModelElement_(M);
+    const uint64_t diag = dkDiagCount();
+    bool ok = true;
+    switch (op) {
+    case 0: /* anywhere up to the count (the append) */
+        multiarrayInsert(m, r % (M->n + 1), &v);
+        maModelInsertAt_(M, r % (M->n + 1), v);
+        break;
+    case 1:
+        if (M->n) {
+            multiarrayDelete(m, at);
+            maModelRemove_(M, at, 1);
+        }
+        break;
+    case 2:
+        if (M->n) {
+            s16 out = {};
+            multiarrayPop(m, at, &out);
+            ok = out.a == M->e[at].a && out.b == M->e[at].b;
+            maModelRemove_(M, at, 1);
+        }
+        break;
+    case 3: { /* a range inside the array, empty ones included */
+        const uint32_t count = M->n ? (r >> 8) % (M->n - at + 1) % 40 : 0;
+        multiarrayDeleteRange(m, at, count);
+        maModelRemove_(M, at, count);
+        break;
+    }
+    case 4:
+        if (M->n) {
+            multiarrayReplace(*m, at, &v);
+            M->e[at] = v;
+        }
+        break;
+    case 5: { /* by index, head and tail */
+        const s16 *got = M->n ? multiarrayGet(*m, at) : nullptr;
+        const s16 *head = multiarrayGetHead(*m);
+        const s16 *tail = multiarrayGetTail(*m);
+        ok = M->n ? got && got->a == M->e[at].a && head &&
+                        head->a == M->e[0].a && tail &&
+                        tail->a == M->e[M->n - 1].a
+                  : !head && !tail;
+        break;
+    }
+    case 6:
+        multiarrayRotate(m);
+        if (M->n > 1) {
+            const s16 last = M->e[M->n - 1];
+            maModelRemove_(M, M->n - 1, 1);
+            maModelInsertAt_(M, 0, last);
+        }
+        break;
+    case 7: { /* outside the array: refused, reported, nothing changed */
+        const uint32_t past = M->n + 1 + r % 3;
+        s16 out = {.a = 7, .b = 7};
+        switch ((r >> 8) % 5) {
+        case 0:
+            multiarrayInsert(m, past, &v);
+            break;
+        case 1:
+            multiarrayDelete(m, M->n + r % 3);
+            break;
+        case 2:
+            multiarrayPop(m, M->n + r % 3, &out);
+            break;
+        case 3:
+            multiarrayDeleteRange(m, at, M->n - at + 1 + r % 3);
+            break;
+        default:
+            ok = multiarrayGet(*m, M->n + r % 3) == nullptr;
+            break;
+        }
+        ok = ok && out.a == 7 && dkDiagCount() == diag + 1;
+        break;
+    }
+    default: { /* what it reports of itself */
+        dkTierStats st = {};
+        multiarrayStats(*m, &st);
+        ok = st.count == M->n && multiarrayCount(*m) == M->n &&
+             multiarrayBytes(*m) == M->n * sizeof(s16) &&
+             multiarrayElementLen(*m) == sizeof(s16);
+        break;
+    }
+    }
+    return ok;
+}
+
+/* @model: src/multiarray.h */
+static int multiarrayTestModel_(uint16_t rowMax, uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, MaModel) maModel_ *M = zcalloc(1, sizeof(*M));
+    multiarray *m = multiarrayNew(sizeof(s16), rowMax);
+    maModelRng_ = seed;
+    uint32_t tiers = 0;
+    const uint32_t steps = 5000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        const bool draining = step >= steps * 2 / 3;
+        uint32_t op = maModelRand_() % 9;
+        if (!draining && op >= 1 && op <= 3 && maModelRand_() % 3) {
+            op = 0; /* an insert instead, to grow */
+        } else if (draining && op == 0 && maModelRand_() % 2) {
+            op = 1 + maModelRand_() % 3; /* a delete instead */
+        }
+        if (M->n + 2 >= MA_MODEL_CAP && op == 0) {
+            op = 3;
+        }
+        if (!maModelStep_(&m, M, op)) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " (%" PRIu32
+                " elements, tier %d, rowMax %u)",
+                step, op, M->n, (int)_multiarrayType(m), (unsigned)rowMax);
+            break;
+        }
+        tiers |= 1u << _multiarrayType(m);
+        if (step % 25 == 24) {
+            err += multiarrayOracleCheck_(m, M->e, M->n, maModelRand_(),
+                                          "a model step");
+        }
+        if (step % 83 != 82) {
+            continue;
+        }
+        /* A configuration event, with the array as the steps left it */
+        const uint32_t event = maModelRand_() % countof(M->events);
+        M->events[event]++;
+        switch (event) {
+        case 0: {
+            cleaner(multiarrayFree) multiarray *copy = multiarrayCopy(m);
+            err += multiarrayOracleCheck_(copy, M->e, M->n, step, "a copy");
+            break;
+        }
+        case 1:
+            multiarrayCompact(&m);
+            break;
+        case 2: { /* rebuilt from its own elements, taken in its place */
+            cleanerName(zfree, S16) s16 *flat =
+                zcalloc(M->n ? M->n : 1, sizeof(s16));
+            multiarrayCopyTo(m, flat);
+            multiarray *back =
+                multiarrayNewFromArray(sizeof(s16), rowMax, flat, M->n);
+            multiarrayFree(m);
+            m = back;
+            break;
+        }
+        default: /* emptied, now and then */
+            if (maModelRand_() % 4 == 0) {
+                multiarrayReset(&m);
+                M->n = 0;
+            }
+            break;
+        }
+        if (multiarrayRowMax(m) != rowMax) {
+            ERR("step %" PRIu32 ": rowMax %u, made with %u", step,
+                (unsigned)multiarrayRowMax(m), (unsigned)rowMax);
+        }
+        err += multiarrayOracleCheck_(m, M->e, M->n, step, "an event");
+    }
+    err += multiarrayOracleCheck_(m, M->e, M->n, steps, "the run");
+    multiarrayFree(m);
+    if (!(tiers & (1u << MULTIARRAY_TYPE_LARGE)) ||
+        !(tiers & (1u << MULTIARRAY_TYPE_SMALL))) {
+        ERR("the model did not run through every tier (seen %#x)", tiers);
+    }
+    for (size_t e = 0; e < countof(M->events); e++) {
+        if (!M->events[e]) {
+            ERR("configuration event %zu never ran", e);
+        }
+    }
+    return err;
+}
+
 int multiarrayTest(int, char *[]) {
     int err = 0;
+
+    TEST("model: every container call against a plain array, every tier") {
+        static const uint16_t rowMaxes[] = {4, 7, 10};
+        for (size_t i = 0; i < countof(rowMaxes); i++) {
+            err += multiarrayTestModel_(rowMaxes[i], 100 + i);
+        }
+    }
 
     TEST("a drained array moves back down its tiers, never flapping") {
         err += multiarrayDrainCheck_(MULTIARRAY_DRAIN_POP_TAIL, 11);
