@@ -335,6 +335,8 @@ bool flexInsertByTypeSortedWithMiddle(flex **ff, const databox *box,
 /* Insert 'box' at its sorted place in a sorted set (one element per
  * entry), searching from the flex's own middle; duplicates are kept */
 void flexInsertByTypeSorted(flex **ff, const databox *box);
+/* The first row whose key is at or past 'compareAgainst' (the first of
+ * several rows with the key), or the flex's end */
 flexEntry *flexFindByTypeSortedWithMiddleGetEntry(
     const flex *const f, const uint_fast32_t elementsPerEntry,
     const databox *compareAgainst, const flexEntry *middleFE);
@@ -426,6 +428,8 @@ bool flexInsertByTypeSortedWithMiddleMultiDirect(flex **ff,
                                                  uint_fast32_t elementsPerEntry,
                                                  const databox *box[],
                                                  flexEntry **middleEntry);
+/* The bytes entry 'fe' at 'newLenForEntry' bytes: its first bytes kept
+ * (as many as fit), the rest zeros */
 void flexResizeEntry(flex **ff, flexEntry *fe, size_t newLenForEntry);
 
 /* Append the 'elementsPerEntry' values of 'box' to the tail in one

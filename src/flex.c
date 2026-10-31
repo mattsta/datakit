@@ -2348,16 +2348,25 @@ flexResizeEntry____(flex **const ff, flexEntry *const fe, size_t newLenForEntry,
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
 
+    /* The bytes kept (as many of the old as fit), then zeros, written from
+     * a copy: the replace may move the flex before it copies them in */
+    const size_t keep = entry.len < newLenForEntry ? entry.len : newLenForEntry;
+    uint8_t stackBytes[256];
+    cleanerName(zfree, Bytes) uint8_t *heapBytes =
+        newLenForEntry > sizeof(stackBytes) ? zmalloc(newLenForEntry) : nullptr;
+    uint8_t *bytes = heapBytes ? heapBytes : stackBytes;
+    if (keep) {
+        memcpy(bytes, FLEX_ENTRY_DATA(&entry), keep);
+    }
+    memset(bytes + keep, 0, newLenForEntry - keep);
+
     /* Bytes at the new length: an empty entry is its own type, as every
      * other bytes write stores it */
-    flexInsertContents content = {
-        .encoding = FLEX_STRING_ENCODING(newLenForEntry),
-        .data = FLEX_ENTRY_DATA(&entry), /* copy existing data to new size */
-        .len = newLenForEntry}; /* use new len instead of current len */
+    flexInsertContents content = {.encoding =
+                                      FLEX_STRING_ENCODING(newLenForEntry),
+                                  .data = bytes,
+                                  .len = newLenForEntry};
     flexInsertContents *contents[1] = {&content};
-
-    /* If entry grows larger (i.e. gets more space allocated for it),
-     * the new space larger than the current size has arbitrary contents */
     flexInsertReplace_____(ff, fe, contents, 1, 0, headerChangedBy);
 }
 
@@ -5677,11 +5686,12 @@ flexEntry *flexFindByTypeSortedWithMiddle(const flex *const f,
 flexEntry *flexFindByTypeSortedWithMiddleGetEntry(
     const flex *const f, const uint_fast32_t elementsPerEntry,
     const databox *compareAgainst, const flexEntry *middleFE) {
+    /* The first of several rows with the key (a set's): the position is
+     * fixed by the rows, not by where the search lands */
     bool found = false;
-    flexEntry *fe = flexFindPositionByTypeSortedDirect_(
-        f, elementsPerEntry, &compareAgainst, &found, middleFE, 1);
-
-    return fe;
+    return abstractFindPositionByTypeSortedDirect(
+        f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, false,
+        nullptr, true);
 }
 
 flexEntry *flexFindByTypeSortedWithMiddleWithReference(
@@ -12737,6 +12747,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                 const size_t want = r == 1 ? to : (size_t)(5 + r);
                 same = k.data.i64 == r + 1 && v.data.i64 == r + 10 &&
                        DATABOX_IS_BYTES(&b) && b.len == want;
+                /* The kept bytes, then zeros */
+                for (size_t i = 0; same && i < b.len; i++) {
+                    const uint8_t c = databoxCBytes(&b)[i];
+                    same = c == (r == 1 && i >= 6 ? 0 : 'q');
+                }
             }
             if (!same) {
                 ERR("a resize to %zu bytes: %zu entries, not the rows around "
