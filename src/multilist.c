@@ -1694,6 +1694,411 @@ static const char *mlfDequeFuzz(mflexState *state, const uint64_t seed,
     return nullptr;
 }
 
+/* ====================================================================
+ * The model test: random sequences of every public call against a plain
+ * array of element ids, every read checked, through every tier.  An id
+ * stands for one value: a multiple of 3 an integer, else bytes of 4 to 60.
+ * ==================================================================== */
+static constexpr uint32_t ML_MODEL_CAP = 3000;
+
+typedef struct mlModel_ {
+    uint32_t n;
+    uint32_t nextId;
+    uint32_t events[5];
+    uint32_t id[ML_MODEL_CAP];
+} mlModel_;
+
+defcleanerName(mlModel_ *, zfree, MlModel);
+
+static uint64_t mlModelRng_;
+/* What the last disagreeing step saw, for its report */
+static char mlModelWhy_[160];
+static uint32_t mlModelRand_(void) {
+    return (uint32_t)dkSplitmix64Next(&mlModelRng_);
+}
+
+/* The value of 'id' ('buf' holds bytes) */
+static databox mlModelBox_(uint32_t id, uint8_t buf[64]) {
+    if (id % 3 == 0) {
+        return DATABOX_SIGNED((int64_t)id);
+    }
+    const uint32_t len = 4 + id % 57;
+    for (uint32_t i = 0; i < len; i++) {
+        buf[i] = (uint8_t)('a' + (id + i) % 26);
+    }
+    return databoxNewBytes(buf, len);
+}
+
+static bool mlModelIs_(const databox *b, uint32_t id) {
+    uint8_t buf[64];
+    const databox want = mlModelBox_(id, buf);
+    if (id % 3 == 0) {
+        return (b->type == DATABOX_SIGNED_64 && b->data.i64 == (int64_t)id) ||
+               (b->type == DATABOX_UNSIGNED_64 && b->data.u64 == id);
+    }
+    return DATABOX_IS_BYTES(b) && b->len == want.len &&
+           memcmp(databoxCBytes(b), buf, want.len) == 0;
+}
+
+static void mlModelInsertAt_(mlModel_ *M, uint32_t at, uint32_t id) {
+    memmove(&M->id[at + 1], &M->id[at], (M->n - at) * sizeof(M->id[0]));
+    M->id[at] = id;
+    M->n++;
+}
+
+static void mlModelRemoveAt_(mlModel_ *M, uint32_t at) {
+    memmove(&M->id[at], &M->id[at + 1], (M->n - at - 1) * sizeof(M->id[0]));
+    M->n--;
+}
+
+/* A list index from 'r', in range or (one time in eight) not, negative
+ * half the time; '*at' is the position it names (-1: none) */
+static mlOffsetId mlModelIndex_(const mlModel_ *M, uint32_t r, int64_t *at) {
+    const int64_t n = M->n;
+    const bool fromTail = (r >> 8) % 2;
+    if (n == 0 || r % 8 == 7) { /* outside: past the tail or before the head */
+        *at = -1;
+        const int64_t past = (int64_t)(r % 5);
+        return fromTail ? -(n + 1 + past) : n + past;
+    }
+    const int64_t pos = (int64_t)(r % (uint32_t)n);
+    *at = pos;
+    return fromTail ? pos - n : pos;
+}
+
+/* @model: src/multilist.h */
+/* The list holds exactly the model's elements, in order */
+static int mlModelVerify_(const multilist *ml, mflexState *s[2],
+                          const mlModel_ *M, uint32_t step) {
+    int err = 0;
+    multilistIterator it;
+    multilistIteratorInitReadOnly(ml, s, &it, true);
+    multilistEntry e;
+    uint32_t i = 0;
+    bool same = true;
+    while (multilistNext(&it, &e)) {
+        if (i >= M->n || !mlModelIs_(&e.box, M->id[i])) {
+            same = false;
+        }
+        i++;
+    }
+    multilistIteratorRelease(&it);
+    if (!same || i != M->n || multilistCount(ml) != M->n) {
+        ERR("model step %" PRIu32 ": the list holds %" PRIu32 " elements "
+            "(%s), the model %" PRIu32,
+            step, i, same ? "in order" : "not the model's", M->n);
+    }
+    return err;
+}
+
+/* @model: src/multilist.h */
+/* One random call against the model; true when it agreed */
+static bool mlModelStep_(multilist **ml, mflexState *s[2], mlModel_ *M,
+                         uint32_t op) {
+    uint8_t buf[64];
+    const uint32_t id = M->nextId++;
+    const databox box = mlModelBox_(id, buf);
+    const uint32_t r = mlModelRand_();
+    int64_t at = -1;
+    const mlOffsetId idx = mlModelIndex_(M, r, &at);
+    bool ok = true;
+    switch (op) {
+    case 0:
+        multilistPushByTypeHead(ml, s[0], &box);
+        mlModelInsertAt_(M, 0, id);
+        break;
+    case 1:
+        multilistPushByTypeTail(ml, s[0], &box);
+        mlModelInsertAt_(M, M->n, id);
+        break;
+    case 2: { /* a batch onto the tail */
+        databox boxes[6];
+        uint8_t bufs[6][64];
+        const uint32_t count = 1 + r % 6;
+        for (uint32_t i = 0; i < count; i++) {
+            const uint32_t bid = i ? M->nextId++ : id;
+            boxes[i] = mlModelBox_(bid, bufs[i]);
+            mlModelInsertAt_(M, M->n, bid);
+        }
+        multilistBulkPushByTypeTail(ml, s[0], boxes, count);
+        break;
+    }
+    case 3:
+    case 4: { /* next to an element found by index (an empty list's head) */
+        const uint32_t pos = M->n ? r % M->n : 0;
+        multilistEntry entry;
+        const bool found = multilistIndexGet(*ml, s[0], pos, &entry);
+        ok = found == (M->n > 0);
+        if (found || M->n == 0) {
+            if (op == 3) {
+                multilistInsertByTypeAfter(ml, s, &entry, &box);
+                mlModelInsertAt_(M, M->n ? pos + 1 : 0, id);
+            } else {
+                multilistInsertByTypeBefore(ml, s, &entry, &box);
+                mlModelInsertAt_(M, pos, id);
+            }
+        }
+        break;
+    }
+    case 5: { /* up to three deleted through a writable iterator */
+        if (at < 0) {
+            break;
+        }
+        const bool forward = r % 2;
+        multilistIterator it;
+        ok = multilistIteratorInitAtIdx(ml, s, &it, idx, forward, false);
+        uint32_t pos = (uint32_t)at;
+        for (uint32_t k = 0; ok && k < 1 + (r >> 4) % 3; k++) {
+            multilistEntry e;
+            if (!multilistNext(&it, &e)) {
+                ok = forward ? pos >= M->n : M->n == 0;
+                break;
+            }
+            ok = mlModelIs_(&e.box, M->id[pos]);
+            multilistDelEntry(&it, &e);
+            mlModelRemoveAt_(M, pos);
+            if (!forward) {
+                if (pos == 0) {
+                    break;
+                }
+                pos--;
+            }
+        }
+        multilistIteratorRelease(&it);
+        break;
+    }
+    case 6: { /* a range: from a start, up to a count, clamped */
+        const int64_t values = (int64_t)((r >> 4) % 12) - 1;
+        uint32_t gone = 0;
+        if (at >= 0 && values > 0) {
+            while (gone < values && (uint32_t)at < M->n) {
+                mlModelRemoveAt_(M, (uint32_t)at);
+                gone++;
+            }
+        }
+        ok = multilistDelRange(ml, s[0], idx, values) == (gone > 0);
+        break;
+    }
+    case 7:
+        ok = multilistReplaceByTypeAtIndex(ml, s[0], idx, &box) == (at >= 0);
+        if (at >= 0) {
+            M->id[at] = id;
+        }
+        break;
+    case 8: { /* by index: opened, checked only, or read whole */
+        multilistEntry e;
+        databoxWide slot;
+        const uint32_t how = (r >> 4) % 3;
+        const bool found = how < 2
+                               ? multilistIndex(*ml, s[0], idx, &e, how == 0)
+                               : multilistIndexWide(*ml, s[0], idx, &e, &slot);
+        ok = found == (at >= 0) &&
+             (!found || how == 1 || mlModelIs_(&e.box, M->id[at]));
+        break;
+    }
+    case 9: { /* from an anchor found first */
+        if (M->n == 0) {
+            break;
+        }
+        const uint32_t apos = (r >> 4) % M->n;
+        multilistEntry anchor;
+        multilistEntry e;
+        databoxWide slot;
+        ok = multilistIndexGet(*ml, s[0], apos, &anchor);
+        const bool wide = (r >> 12) % 2;
+        const bool found =
+            wide ? multilistIndexNearWide(*ml, s[0], idx, &anchor, apos, &e,
+                                          &slot)
+                 : multilistIndexNear(*ml, s[0], idx, &anchor, apos, &e, true);
+        ok = ok && found == (at >= 0) &&
+             (!found || mlModelIs_(&e.box, M->id[at])) &&
+             multilistIndexNearCheck(*ml, s[0], idx, &anchor, apos, &e) ==
+                 (at >= 0);
+        break;
+    }
+    case 10:
+        multilistRotate(ml, s);
+        if (M->n > 1) {
+            const uint32_t last = M->id[M->n - 1];
+            mlModelRemoveAt_(M, M->n - 1);
+            mlModelInsertAt_(M, 0, last);
+        }
+        break;
+    case 11: { /* popped from either end */
+        databox got = {};
+        const bool tail = r % 2;
+        const bool popped = multilistPop(ml, s[0], &got, tail);
+        ok = popped == (M->n > 0);
+        if (popped) {
+            const uint32_t pos = tail ? M->n - 1 : 0;
+            ok = mlModelIs_(&got, M->id[pos]);
+            mlModelRemoveAt_(M, pos);
+            databoxFreeData(&got);
+        }
+        break;
+    }
+    case 12: { /* a whole walk either way, then a rewind and a few again */
+        const bool forward = r % 2;
+        multilistIterator it;
+        if ((r >> 4) % 2) {
+            multilistIteratorInit(ml, s, &it, forward, (r >> 5) % 2);
+        } else {
+            multilistIteratorInitReadOnly(*ml, s, &it, forward);
+        }
+        multilistEntry e;
+        uint32_t i = 0;
+        while (ok && multilistNext(&it, &e)) {
+            ok = i < M->n &&
+                 mlModelIs_(&e.box, M->id[forward ? i : M->n - 1 - i]);
+            i++;
+        }
+        ok = ok && i == M->n;
+        if (forward) {
+            multilistRewind(ml, &it);
+        } else {
+            multilistRewindTail(ml, &it);
+        }
+        for (i = 0; ok && i < 3 && i < M->n; i++) {
+            ok = multilistNext(&it, &e) &&
+                 mlModelIs_(&e.box, M->id[forward ? i : M->n - 1 - i]);
+        }
+        multilistIteratorRelease(&it);
+        break;
+    }
+    case 13: { /* a read-only walk from an index */
+        const bool forward = r % 2;
+        multilistIterator it;
+        const bool started =
+            multilistIteratorInitAtIdxReadOnly(*ml, s, &it, idx, forward);
+        ok = started == (at >= 0);
+        multilistEntry e;
+        int64_t failedAt = -1;
+        for (int64_t pos = at; ok && started && pos >= 0 &&
+                               pos < (int64_t)M->n && llabs(pos - at) < 4;
+             pos += forward ? 1 : -1) {
+            ok = multilistNext(&it, &e) && mlModelIs_(&e.box, M->id[pos]);
+            if (!ok) {
+                failedAt = pos;
+            }
+        }
+        snprintf(mlModelWhy_, sizeof(mlModelWhy_),
+                 "walk from index %" PRId64 " (position %" PRId64 ", %s): "
+                 "started %d, failed at %" PRId64,
+                 (int64_t)idx, at, forward ? "forward" : "reverse", started,
+                 failedAt);
+        if (started) {
+            multilistIteratorRelease(&it);
+        }
+        break;
+    }
+    default: { /* what it reports of itself */
+        dkTierStats st = {};
+        multilistStats(*ml, &st);
+        ok = st.count == M->n && (M->n == 0 || multilistBytes(*ml));
+        break;
+    }
+    }
+    return ok;
+}
+
+/* @model: src/multilist.h */
+static int multilistTestModel_(flexCapSizeLimit limit, uint32_t depth,
+                               uint32_t seed) {
+    int err = 0;
+    cleanerName(zfree, MlModel) mlModel_ *M = zcalloc(1, sizeof(*M));
+    cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
+    cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();
+    mflexState *s[2] = {s0, s1};
+    multilist *ml = seed % 2 ? multilistNewLimit(limit, depth) : multilistNew();
+    const flexCapSizeLimit madeLimit = multilistLimit(ml);
+    const uint32_t madeDepth = multilistDepth(ml);
+    mlModelRng_ = seed;
+    uint32_t tiers = 0;
+    const uint32_t steps = 6000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        const bool draining = step >= steps * 2 / 3;
+        uint32_t op = mlModelRand_() % 16;
+        if (draining && op <= 4 && mlModelRand_() % 3) {
+            op = 5 + mlModelRand_() % 2; /* a delete instead */
+        } else if (!draining && (op == 5 || op == 6 || op == 11) &&
+                   mlModelRand_() % 3) {
+            op = mlModelRand_() % 3; /* a push instead, to grow */
+        }
+        if (M->n + 8 >= ML_MODEL_CAP && op <= 4) {
+            op = 6;
+        }
+        if (!mlModelStep_(&ml, s, M, op)) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " (%" PRIu32
+                " elements, tier %d, seed %" PRIu32 "): %s",
+                step, op, M->n, (int)_multilistType(ml), seed, mlModelWhy_);
+            break;
+        }
+        tiers |= 1u << _multilistType(ml);
+        if (step % 25 == 24 && mlModelVerify_(ml, s, M, step)) {
+            ERR("model step %" PRIu32 ": after op %" PRIu32 " (seed %" PRIu32
+                ")",
+                step, op, seed);
+            break;
+        }
+        if (step % 89 != 88) {
+            continue;
+        }
+        /* A configuration event, with the list as the steps left it */
+        const uint32_t event = mlModelRand_() % countof(M->events);
+        M->events[event]++;
+        switch (event) {
+        case 0: {
+            cleaner(multilistFree) multilist *copy = multilistCopy(ml);
+            err += mlModelVerify_(copy, s, M, step);
+            break;
+        }
+        case 1: { /* a dump rebuilt, and taken in its place */
+            multilist *back = multilistNewFromDump(madeLimit, madeDepth, s[0],
+                                                   multilistDump(ml, s[0]));
+            multilistFree(ml);
+            ml = back;
+            break;
+        }
+        case 2: { /* a list made from the dump's flex */
+            multilist *back = multilistNewFromFlex(madeLimit, madeDepth,
+                                                   multilistDump(ml, s[0]));
+            multilistFree(ml);
+            ml = back;
+            break;
+        }
+        case 3:
+            multilistCompact(&ml, s[0]);
+            break;
+        default: /* emptied, now and then */
+            if (mlModelRand_() % 4 == 0) {
+                multilistReset(&ml);
+                M->n = 0;
+            }
+            break;
+        }
+        if (multilistLimit(ml) != madeLimit ||
+            multilistDepth(ml) != madeDepth) {
+            ERR("step %" PRIu32 ": limit %d depth %" PRIu32 ", made with %d "
+                "and %" PRIu32,
+                step, (int)multilistLimit(ml), multilistDepth(ml),
+                (int)madeLimit, madeDepth);
+        }
+        err += mlModelVerify_(ml, s, M, step);
+    }
+    err += mlModelVerify_(ml, s, M, steps);
+    multilistFree(ml);
+    const uint32_t top = seed % 2 ? 3u : 2u; /* the default limit: Medium */
+    if (!(tiers & (1u << top)) || !(tiers & (1u << 1))) {
+        ERR("the model did not run through every tier (seen %#x)", tiers);
+    }
+    for (size_t e = 0; e < countof(M->events); e++) {
+        if (!M->events[e]) {
+            ERR("configuration event %zu never ran", e);
+        }
+    }
+    return err;
+}
+
 int multilistTest(int, char *[]) {
     uint32_t err = 0;
 
@@ -4432,6 +4837,12 @@ int multilistTest(int, char *[]) {
 
         if (!sawMedium) {
             ERR("Sweep never reached Medium tier - sizing is wrong");
+        }
+    }
+
+    TEST("model: every public call against an array of ids, every tier") {
+        for (uint32_t seed = 1; seed <= 6; seed++) {
+            err += multilistTestModel_(FLEX_CAP_LEVEL_512, seed % 3, seed);
         }
     }
 
