@@ -176,7 +176,8 @@ typedef struct ownedArena {
 } ownedArena;
 
 /* A declaration without nowUs leaves the arena uninitialised: Drain and
- * Destruct do nothing and Retire applies the OOM policy. */
+ * Destruct do nothing and Retire applies the OOM policy.  For a fresh
+ * arena only: Init over a live one forgets its rows (Destruct it first). */
 void ownedArenaInit(ownedArena *arena, const ownedArenaDecl *decl);
 
 /* Release every remaining row (held rows included), free the array and
@@ -270,7 +271,8 @@ typedef struct ownedCell {
 
 /* `decl` must outlive the cell. `owner` is passed to writer_ok and
  * note_violation and is never dereferenced here. `arena` is ignored by
- * an INLINE cell. */
+ * an INLINE cell.  For a fresh cell only: Init over a live one drops its
+ * value without retiring it. */
 void ownedCellInit(ownedCell *c, const ownedCellDecl *decl, void *owner,
                    ownedArena *arena);
 
@@ -402,6 +404,8 @@ typedef struct ownedSlot {
 
 /* Static initialiser. */
 #define OWNED_SLOT_INIT(declPtr) {.word = OWNED_SLOT_EMPTY, .decl = (declPtr)}
+/* For a fresh slot only: Init over a claimed one empties it under its
+ * claimant */
 void ownedSlotInit(ownedSlot *s, const ownedSlotDecl *decl);
 
 /* Acquire load of the state. */
@@ -543,7 +547,9 @@ typedef struct ownedSeq {
  * 16 + roundup8(version_bytes) (stamp word, length word, payload words).
  * The storage stays the caller's and is never freed here. A static
  * instance uses OWNED_SEQ_INIT over a zero-filled static block; a
- * runtime one uses ownedSeqInit, which zeroes the block. */
+ * runtime one uses ownedSeqInit, which zeroes the block (so only before
+ * any reader or writer uses it: Init over a live sequence erases versions
+ * under its readers). */
 size_t ownedSeqStorageBytes(const ownedSeqDecl *decl);
 /* The same size in words, as a constant expression for static storage:
  * `static _Atomic uint64_t storage[OWNED_SEQ_STORAGE_WORDS(N, B)]`. The
