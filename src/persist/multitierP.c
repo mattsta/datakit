@@ -79,7 +79,11 @@ multitierP *multitierNewP(persistCtx *ctx, const multitierConfig *config) {
 
 multitierP *multitierOpenP(persistCtx *ctx, multitierSinkFn *sink,
                            void *sinkCtx) {
+    /* Replay's sweeps (with logged uses) give their rows to the caller's
+     * own sink: logging them now would write into the WAL being read */
+    multitierSetRecoverySink(sink, sinkCtx);
     multitier *t = persistCtxStartRecovered(ctx, &persistOpsMultitier);
+    multitierSetRecoverySink(nullptr, nullptr);
     if (!t) {
         return nullptr;
     }
@@ -257,6 +261,40 @@ static void multitierPTestSink(void *ctx, const flex *rows) {
     }
 }
 
+/* A sink that, once armed, "dies" inside its call: it keeps the WAL file
+ * as it stands (the op that pushed the rows out is logged, the rows' own
+ * BULK_DELETE is not) and leaves the model as it was (the rows never
+ * reached it).  Unarmed it takes the rows out of the model. */
+typedef struct multitierPCrashSink {
+    multimap **model;
+    const char *walPath;
+    bool armed;
+    bool died;
+    uint8_t *wal;
+    size_t walLen;
+} multitierPCrashSink;
+
+static void multitierPCrashSinkFn(void *ctx, const flex *rows) {
+    multitierPCrashSink *c = ctx;
+    if (c->armed && !c->died) {
+        c->died = true;
+        FILE *fp = fopen(c->walPath, "rb");
+        if (fp) {
+            fseek(fp, 0, SEEK_END);
+            const long size = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+            c->walLen = size > 0 ? (size_t)size : 0;
+            /* @own: container; free=zfree */
+            c->wal = zmalloc(c->walLen ? c->walLen : 1);
+            c->walLen = fread(c->wal, 1, c->walLen, fp);
+            fclose(fp);
+        }
+        return;
+    }
+    if (!c->died) {
+        multitierPTestSink(c->model, rows);
+    }
+}
 static databox multitierPTestKey(char *buf, size_t len, uint64_t k) {
     const int n = snprintf(buf, len, "key:%06" PRIu64, k);
     return databoxNewBytes(buf, (size_t)n);
@@ -372,6 +410,80 @@ int multitierPTest(int argc, char *argv[]) {
         p = multitierOpenP(ctx, multitierPTestSink, &model);
         if (!p || !multitierPTestSame(p, model)) {
             ERR("%s", "the reopened multitier differs");
+        }
+        multitierCloseP(p);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("with logged uses, rows a crash kept from the sink reach the "
+         "recovery sink: never lost") {
+        ptestCleanupFiles(basePath);
+        cleaner(multimapFree) multimap *model = multimapNew(2);
+        char walPath[PATH_MAX + sizeof(".wal")];
+        snprintf(walPath, sizeof(walPath), "%s.wal", basePath);
+        multitierPCrashSink crash = {.model = &model, .walPath = walPath};
+        const multitierConfig config = {
+            .hotMaxBytes = 2048,
+            .coldMaxBytes = 4096,
+            .demoteBatch = 8,
+            .logUses = true,
+            .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
+            .sink = multitierPCrashSinkFn,
+            .sinkCtx = &crash,
+        };
+        persistCtxConfig cc = persistCtxDefaultConfig();
+        cc.syncMode = PERSIST_CTX_SYNC_ALWAYS;
+        cc.walBufferSize = 0;
+        cc.compactAfterOps = 0;
+        cc.compactAfterBytes = 0;
+        cc.compactRatio = 0;
+        persistCtx *ctx = persistCtxNew(basePath, &cc);
+        multitierP *p = multitierNewP(ctx, &config);
+        char key[32];
+        char value[48];
+        for (uint64_t i = 0; i < 4000 && p && !crash.died; i++) {
+            /* Arm once the cold level has started giving rows up */
+            crash.armed = i >= 1500;
+            const databox k = multitierPTestKey(key, sizeof(key), i);
+            const int vn =
+                snprintf(value, sizeof(value), "{\"v\":%" PRIu64 "}", i);
+            const databox v = databoxNewBytes(value, (size_t)vn);
+            const databox *row[2] = {&k, &v};
+            multimapInsert(&model, row);
+            PTEST_LOGGED(multitierSetP(p, &k, &v, nullptr));
+        }
+        if (!crash.died || !crash.wal) {
+            ERR("%s", "the sink never died");
+        }
+
+        /* The crash: the files as they stood inside the sink */
+        persistCtxFree(ctx);
+        multitierFree(p->t);
+        zfree(p);
+        FILE *fp = fopen(walPath, "wb");
+        if (fp) {
+            (void)fwrite(crash.wal, 1, crash.walLen, fp);
+            fclose(fp);
+        }
+        zfree(crash.wal);
+
+        crash.armed = false;
+        crash.died = false;
+        ctx = persistCtxNew(basePath, &cc);
+        p = multitierOpenP(ctx, multitierPCrashSinkFn, &crash);
+        size_t lost = 0;
+        multimapIterator it;
+        databox mk = {};
+        databox mv = {};
+        databox *pair[2] = {&mk, &mv};
+        multimapIteratorInit(model, &it, true);
+        while (p && multimapIteratorNext(&it, pair)) {
+            databox got = {};
+            lost += !multitierPeekP(p, &mk, &got);
+        }
+        if (!p || lost) {
+            ERR("%zu rows neither held nor delivered after the crash", lost);
         }
         multitierCloseP(p);
         persistCtxFree(ctx);

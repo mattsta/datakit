@@ -133,6 +133,14 @@ size_t coldmapSweepBlock(coldmap *cm, size_t index, coldmapSweepFn *fn,
  * key order as a dump-form flex the caller frees; NULL past the end */
 [[nodiscard]] flex *coldmapRemoveBlock(coldmap *cm, size_t index);
 size_t coldmapBlockCount(const coldmap *cm);
+/* The block whose key range holds 'key': the last block whose first key is
+ * at most 'key' (0 when 'key' is below every block, or there are none).
+ * A position kept as a key survives the splits and merges that move block
+ * indices. */
+size_t coldmapBlockFor(const coldmap *cm, const databox *key);
+/* Block 'index''s first key, as an owned flex of that one entry; NULL past
+ * the last block */
+[[nodiscard]] flex *coldmapBlockFirstKey(const coldmap *cm, size_t index);
 /* Delete 'key's row; false when there is none */
 bool coldmapDelete(coldmap *cm, const databox *key);
 /* Delete the rows whose keys lie in [lo, hi] (a NULL bound: open at that

@@ -1344,15 +1344,16 @@ extern const persistOps persistOpsColdmap;
 /* persistOpsMultitier (multitier.c), format 1:
  *   snapshot: flex [hot limit, LRU levels, demotion batch, cold limit,
  *             logged uses, cold raw limit, stored target, required saving,
- *             LZ4 level; the clock's hand (the cold block it sweeps next),
- *             hot hits, cold hits, misses, demotions, rows sunk, blocks
- *             swept; then as BYTES the hot level's persistOpsMultidict
+ *             LZ4 level; hot hits, cold hits, misses, demotions, rows
+ *             sunk, blocks swept; the clock's key (the first it has not
+ *             passed this turn, null at a turn's start); then as BYTES the
+ *             hot level's persistOpsMultidict
  *             snapshot (its use history included), the batch's and the
  *             shadowed keys' multimap dumps, and the cold level's
  *             persistOpsColdmap snapshot (rows [key, value, recent] under
  *             a cold limit, [key, value] without)]: the whole state
- *   restore:  refuses a config out of range, a hand past the cold blocks,
- *             any part its own restore refuses, and levels that disagree
+ *   restore:  refuses a config out of range, any part its own restore
+ *             refuses, and levels that disagree
  *             (a key both hot and in the batch, a shadowed key not in the
  *             cold level and above it, another cold key above it).
  *   WAL (args: const databox *const *):
@@ -1361,10 +1362,12 @@ extern const persistOps persistOpsColdmap;
  *     BULK_DELETE [keys...]      the rows a sink took, each deleted
  *     USE         [key]          multitierGet (logged with logUses)
  *     FLUSH                      multitierFlush (logged with logUses)
- *   Replay never calls the sink.  With logged uses it repeats every move
- *   the live multitier made, so a restore is exact; without, rows leave
- *   for the sink only where BULK_DELETE says, and levels and use history
- *   are the last snapshot's plus the logged writes.  The limits are fixed
+ *   With logged uses replay repeats every move the live multitier made,
+ *   so a restore is exact, and gives the rows its sweeps take to the sink
+ *   multitierSetRecoverySink named (which may receive a row twice);
+ *   without, replay sweeps nothing, rows leave only where BULK_DELETE
+ *   says, and levels and use history are the last snapshot's plus the
+ *   logged writes.  The limits are fixed
  *   at creation, so there is no newEmpty. */
 extern const persistOps persistOpsMultitier;
 

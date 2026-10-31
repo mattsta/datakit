@@ -754,6 +754,21 @@ size_t coldmapBlockCount(const coldmap *cm) {
     return cm->blockCount;
 }
 
+size_t coldmapBlockFor(const coldmap *cm, const databox *key) {
+    size_t at;
+    return coldmapRoute_(cm, key, &at) ? at : 0;
+}
+
+flex *coldmapBlockFirstKey(const coldmap *cm, size_t index) {
+    if (index >= cm->blockCount) {
+        return nullptr;
+    }
+    /* @own: caller; free=flexFree */
+    flex *key = flexNew();
+    flexPushByTypeExact(&key, &cm->blocks[index].first, FLEX_ENDPOINT_TAIL);
+    return key;
+}
+
 size_t coldmapCount(const coldmap *cm) {
     return cm->rows;
 }

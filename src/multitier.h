@@ -63,8 +63,14 @@ typedef struct multitierConfig {
 [[nodiscard]] multitier *multitierNew(const multitierConfig *config);
 void multitierFree(multitier *t);
 /* The sink rows leaving the cold level go to (NULL: dropped); a restored
- * multitier has none until set */
+ * multitier has the recovery sink until set */
 void multitierSetSink(multitier *t, multitierSinkFn *sink, void *sinkCtx);
+/* The sink the next restores (persistOpsMultitier) on this thread give the
+ * multitiers they build, for their replay: with logged uses replay repeats
+ * each sweep, and the rows it takes go here rather than nowhere (a crash
+ * may have come before the live sink saw them; a row may arrive twice).
+ * NULL clears it.  multitierOpenP sets it around its recovery. */
+void multitierSetRecoverySink(multitierSinkFn *sink, void *sinkCtx);
 /* The config in force, defaults resolved */
 void multitierGetConfig(const multitier *t, multitierConfig *config);
 

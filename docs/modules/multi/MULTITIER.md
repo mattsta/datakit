@@ -18,17 +18,17 @@ losing them silently. With no limits it is a multidict with LRU tracking.
 
 ## API
 
-| Call                                                      | Does                                                                     |
-| --------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `multitierNew(config)` / `multitierFree(t)`               | make and free (config NULL: no limits)                                   |
-| `multitierSet(t, key, value)`                             | set in the hot level; a copy below goes (true: the key is new)           |
-| `multitierGet(t, key, value)`                             | the value, moving a lower row up to the hot level (one LRU use)          |
-| `multitierPeek(t, key, value)`                            | the value where it is: no move, no LRU use                               |
-| `multitierDelete(t, key)`                                 | from whichever level holds it                                            |
-| `multitierFlush(t)`                                       | the rows waiting for the cold level, put into it now                     |
-| `multitierWalk(t, visit, ctx)`                            | every live row once with its level (hot, batch, cold); moves nothing     |
-| `multitierCount` / `multitierBytes` / `multitierGetStats` | rows, memory at every level, per-level rows, bytes and counters          |
-| `multitierSetSink` / `multitierGetConfig`                 | the sink (a restored multitier has none until set) / the config in force |
+| Call                                                      | Does                                                                       |
+| --------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `multitierNew(config)` / `multitierFree(t)`               | make and free (config NULL: no limits)                                     |
+| `multitierSet(t, key, value)`                             | set in the hot level; a copy below goes (true: the key is new)             |
+| `multitierGet(t, key, value)`                             | the value, moving a lower row up to the hot level (one LRU use)            |
+| `multitierPeek(t, key, value)`                            | the value where it is: no move, no LRU use                                 |
+| `multitierDelete(t, key)`                                 | from whichever level holds it                                              |
+| `multitierFlush(t)`                                       | the rows waiting for the cold level, put into it now                       |
+| `multitierWalk(t, visit, ctx)`                            | every live row once with its level (hot, batch, cold); moves nothing       |
+| `multitierCount` / `multitierBytes` / `multitierGetStats` | rows, memory at every level, per-level rows, bytes and counters            |
+| `multitierSetSink` / `multitierGetConfig`                 | the sink (a restore has the recovery sink until set) / the config in force |
 
 `multitierConfig`: `hotMaxBytes` (0: no limit, nothing leaves the hot level), `hotLevels` (LRU
 levels, 1-64, 0: 4), `demoteBatch` (rows waiting before they go cold, at least; 0: 64), `coldMaxBytes`
@@ -169,7 +169,8 @@ a present key, the rows its sink takes as they leave (whichever call pushed them
 So a clean close and reopen restores everything, use history included. After a crash, with
 `logUses` replay repeats every move the live multitier made and the restore is exact; without
 it, replay keeps every row (rows leave for the sink only where BULK_DELETE says) on the last
-snapshot's levels and use history plus the logged writes, at no log cost per read. Replay never
-calls the sink. The sink receives rows before their record is written, so a crash between the
+snapshot's levels and use history plus the logged writes, at no log cost per read. With
+`logUses`, replay's sweeps give their rows to the sink `multitierOpenP` was given (a crash may
+have come before the live sink saw them), so a row can arrive twice but is never lost. The sink receives rows before their record is written, so a crash between the
 two, or a refused record (`multitierSinkLogRefusedP` counts them), leaves the rows in the files
 as well: they come back on the next open, held twice and never lost.

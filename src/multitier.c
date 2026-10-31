@@ -38,10 +38,16 @@ struct multitier {
     coldmap *cold;
     mflexState *state; /* the cold level's reads */
     multitierConfig config;
-    uint64_t hand;       /* the clock: the cold block it sweeps next */
+    /* The clock: the first key it has not passed this turn, as a flex of
+     * that one entry (NULL: the turn starts at the first block).  A key,
+     * not a block index, so splits and merges cannot move it. */
+    flex *hand;
+    const databox
+        *clockFrom;      /* during a sweep: rows below it stay as they are */
     const databox *keep; /* the key the running Set or Get just placed */
-    /* Applying a WAL: the sink is not called; without logged uses, no row
-     * leaves for it at all (the log records the ones that did) */
+    /* Applying a WAL.  Without logged uses no row leaves for the sink (the
+     * log records the ones that did); with them replay repeats each sweep
+     * and gives its rows to the sink, which may see a row twice */
     bool replaying;
     uint64_t hotHits;
     uint64_t coldHits;
@@ -70,10 +76,15 @@ static bool multitierOnEvict_(void *privdata, const databox *key,
 }
 
 /* The clock's test of each row of a block it sweeps: an old row goes, as
- * does a row a copy above supersedes; a recent row turns old */
+ * does a row a copy above supersedes; a recent row turns old.  Rows below
+ * where the clock stood (a block that took swept rows in a merge) wait
+ * for the next turn as they are. */
 static coldmapSweepAction multitierClock_(void *ctx, const databox *const row[],
                                           databox *last) {
     const multitier *t = ctx;
+    if (t->clockFrom && databoxCompare(row[0], t->clockFrom) < 0) {
+        return COLDMAP_SWEEP_KEEP;
+    }
     if (row[2]->type != DATABOX_TRUE || multimapExists(t->shadowed, row[0])) {
         return COLDMAP_SWEEP_REMOVE;
     }
@@ -103,10 +114,21 @@ static void multitierColdPressure_(multitier *t) {
      * them */
     uint64_t budget = 2 * (uint64_t)cs.blocks + 1;
     while (cs.storedBytes > target && cs.blocks && budget--) {
+        /* The block holding the clock's key, from that key on */
+        databoxBig from;
+        size_t at = 0;
+        t->clockFrom = nullptr;
+        if (t->hand) {
+            DATABOX_BIG_INIT(&from);
+            flexGetByTypeBig(flexHead(t->hand), &from);
+            t->clockFrom = (const databox *)&from;
+            at = coldmapBlockFor(t->cold, t->clockFrom);
+        }
         size_t next;
-        coldmapSweepBlock(t->cold, (size_t)t->hand, multitierClock_, t,
-                          &removed, &next);
-        t->hand = next;
+        coldmapSweepBlock(t->cold, at, multitierClock_, t, &removed, &next);
+        t->clockFrom = nullptr;
+        flexFree(t->hand);
+        t->hand = next ? coldmapBlockFirstKey(t->cold, next) : nullptr;
         t->sweptBlocks++;
         coldmapGetStats(t->cold, &cs);
     }
@@ -127,7 +149,9 @@ static void multitierColdPressure_(multitier *t) {
         }
     }
 
-    if (t->config.sink && !t->replaying && flexCount(sunk)) {
+    /* Replay sweeps only with logged uses, and then delivers too: the
+     * live run may have died before its sink saw these rows */
+    if (t->config.sink && flexCount(sunk)) {
         t->config.sink(t->config.sinkCtx, sunk);
     }
     t->sunkRows += flexCount(sunk) / 2;
@@ -251,6 +275,7 @@ void multitierFree(multitier *t) {
     multimapFree(t->shadowed);
     coldmapFree(t->cold);
     mflexStateFree(t->state);
+    flexFree(t->hand);
     zfree(t);
 }
 
@@ -465,7 +490,6 @@ typedef enum multitierPersistField_ {
     MT_PF_COLD_STORED_TARGET,
     MT_PF_COLD_MIN_SAVING,
     MT_PF_COLD_LEVEL,
-    MT_PF_HAND, /* the clock: the cold block it sweeps next */
     MT_PF_HOT_HITS,
     MT_PF_COLD_HITS,
     MT_PF_MISSES,
@@ -474,9 +498,22 @@ typedef enum multitierPersistField_ {
     MT_PF_SWEPT_BLOCKS,
     MT_PF_COUNT
 } multitierPersistField_;
-/* Then the hot level, the batch, the shadowed keys and the cold level,
- * each the bytes of its own snapshot or dump */
+/* Then the clock's key (a null entry when its turn starts at the first
+ * block), then the hot level, the batch, the shadowed keys and the cold
+ * level, each the bytes of its own snapshot or dump */
 static constexpr uint32_t MULTITIER_PERSIST_PARTS = 4;
+
+/* The sink a restore on this thread gives the multitier it builds: with
+ * logged uses, replay repeats each sweep and delivers its rows there */
+static thread_local struct {
+    multitierSinkFn *sink;
+    void *sinkCtx;
+} multitierRecoverySink_;
+
+void multitierSetRecoverySink(multitierSinkFn *sink, void *sinkCtx) {
+    multitierRecoverySink_.sink = sink;
+    multitierRecoverySink_.sinkCtx = sinkCtx;
+}
 
 /* One part's bytes, as a BYTES entry */
 static void multitierPersistPart_(flex **out, const void *bytes, size_t len) {
@@ -500,7 +537,6 @@ static uint8_t *multitierPersistSnapshot_(const void *structure, size_t *len) {
         [MT_PF_COLD_STORED_TARGET] = c->cold.storedTarget,
         [MT_PF_COLD_MIN_SAVING] = c->cold.minSavingPercent,
         [MT_PF_COLD_LEVEL] = c->cold.level,
-        [MT_PF_HAND] = t->hand,
         [MT_PF_HOT_HITS] = t->hotHits,
         [MT_PF_COLD_HITS] = t->coldHits,
         [MT_PF_MISSES] = t->misses,
@@ -515,6 +551,14 @@ static uint8_t *multitierPersistSnapshot_(const void *structure, size_t *len) {
         flexRowUnsigned(&head, fields[i]);
     }
     flexRowAppendExact(&out, &head);
+    databoxBig hand;
+    DATABOX_BIG_INIT(&hand);
+    if (t->hand) {
+        flexGetByTypeBig(flexHead(t->hand), &hand);
+    } else {
+        ((databox *)&hand)->type = DATABOX_NULL;
+    }
+    flexPushByTypeExact(&out, (const databox *)&hand, FLEX_ENDPOINT_TAIL);
 
     size_t hotLen = 0;
     cleanerName(zfree, TierBytes) uint8_t *hot =
@@ -617,7 +661,7 @@ static void *multitierPersistRestore_(const uint8_t *data, size_t len) {
         v[MT_PF_COLD_STORED_TARGET] > UINT32_MAX ||
         v[MT_PF_COLD_MIN_SAVING] > UINT8_MAX ||
         v[MT_PF_COLD_LEVEL] > UINT8_MAX ||
-        flexCount(f) != countof(v) + MULTITIER_PERSIST_PARTS) {
+        flexCount(f) != countof(v) + 1 + MULTITIER_PERSIST_PARTS) {
         return nullptr;
     }
 
@@ -636,7 +680,19 @@ static void *multitierPersistRestore_(const uint8_t *data, size_t len) {
     if (!t) {
         return nullptr;
     }
-    t->hand = v[MT_PF_HAND];
+    /* The clock's key: any key routes to a block, so none is refused */
+    databoxBig hand;
+    DATABOX_BIG_INIT(&hand);
+    flexGetByTypeBig(fe, &hand);
+    fe = flexNext(f, fe);
+    if (hand.type != DATABOX_NULL) {
+        /* @own: container; free=multitierFree */
+        t->hand = flexNew();
+        flexPushByTypeExact(&t->hand, (const databox *)&hand,
+                            FLEX_ENDPOINT_TAIL);
+    }
+    t->config.sink = multitierRecoverySink_.sink;
+    t->config.sinkCtx = multitierRecoverySink_.sinkCtx;
     t->hotHits = v[MT_PF_HOT_HITS];
     t->coldHits = v[MT_PF_COLD_HITS];
     t->misses = v[MT_PF_MISSES];
@@ -699,7 +755,6 @@ static void *multitierPersistRestore_(const uint8_t *data, size_t len) {
         coldConfig.storedTarget != config.cold.storedTarget ||
         coldConfig.minSavingPercent != config.cold.minSavingPercent ||
         coldConfig.level != config.cold.level ||
-        (t->hand && t->hand >= coldmapBlockCount(cold)) ||
         !multitierPersistConsistent_(t)) {
         return nullptr;
     }
@@ -1015,6 +1070,62 @@ int multitierTest(int argc, char *argv[]) {
         cleaner(multitierFree) multitier *ok = multitierNew(&most);
         if (multitierNew(&tooMany) || !ok) {
             ERR("%s", "levels past the most taken, or the most refused");
+        }
+    }
+
+    TEST("a snapshot restores at every point of a run that sweeps, deletes "
+         "and merges cold blocks, and snapshots the same again") {
+        const multitierConfig config = {
+            .hotMaxBytes = 2048,
+            .coldMaxBytes = 4096,
+            .demoteBatch = 8,
+            .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
+        };
+        cleaner(multitierFree) multitier *t = multitierNew(&config);
+        char key[32];
+        char value[48];
+        uint64_t rng = 0xc10c4a7d;
+        size_t restored = 0;
+        for (int step = 0; step < 4000; step++) {
+            const uint64_t r = dkSplitmix64Next(&rng);
+            const databox k = multitierTestKey_(key, sizeof(key), r % 900);
+            if (r % 10 < 6) {
+                const int vn =
+                    snprintf(value, sizeof(value),
+                             "{\"step\":%d,\"pad\":\"abcdef\"}", step);
+                const databox v = databoxNewBytes(value, (size_t)vn);
+                multitierSet(t, &k, &v);
+            } else if (r % 10 < 9) {
+                (void)multitierDelete(t, &k);
+            } else {
+                databox got = {};
+                (void)multitierGet(t, &k, &got);
+            }
+            if (step % 100 == 99) {
+                size_t len = 0;
+                cleanerName(zfree, TierBytes) uint8_t *snap =
+                    persistOpsMultitier.snapshot(t, &len);
+                multitier *back = persistOpsMultitier.restore(snap, len);
+                size_t againLen = 0;
+                cleanerName(zfree, TierBytes) uint8_t *again =
+                    back ? persistOpsMultitier.snapshot(back, &againLen)
+                         : nullptr;
+                if (!back || againLen != len || memcmp(again, snap, len) != 0) {
+                    ERR("step %d: the snapshot %s", step,
+                        back ? "restored to a different state"
+                             : "did not restore");
+                } else {
+                    restored++;
+                }
+                multitierFree(back);
+            }
+        }
+        multitierStats st;
+        multitierGetStats(t, &st);
+        if (restored != 40 || !st.sweptBlocks || !st.sunkRows) {
+            ERR("%zu of 40 restores, %" PRIu64 " blocks swept, %" PRIu64
+                " rows sunk",
+                restored, st.sweptBlocks, st.sunkRows);
         }
     }
 
