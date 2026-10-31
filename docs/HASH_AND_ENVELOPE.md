@@ -1006,6 +1006,7 @@ instructions, use ChaCha20-Poly1305.
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `aeadNonceLogCreate`    | A log of at least `min_capacity` slots (rounded to a power of two, at least 64); NULL past `AEAD_NONCE_LOG_MAX_CAP`.    |
 | `aeadNonceLogObserve`   | Record a (key id, nonce) pair: false when it is already in the window (do not seal) or the key id is 0.                 |
+| `aeadNonceLogObserveAt` | The same for the key the id held at a keyring generation: a rotated key's nonces are not reuses of the old key's.       |
 | `aeadNonceLogClearKey`  | Forget every pair of a key id, when the key retires.                                                                    |
 | `aeadNonceLogSize`      | Pairs held now (at most 7/8 of the capacity; past it the oldest pair is forgotten).                                     |
 | `aeadNonceLogCapacity`  | The capacity after rounding.                                                                                            |

@@ -66,9 +66,16 @@ void aeadNonceLogFree(aeadNonceLog *log);
  * `key_id` must not be HMAC_KEY_ID_INVALID (which returns false). */
 bool aeadNonceLogObserve(aeadNonceLog *log, hmacKeyId key_id,
                          const uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN]);
+/* aeadNonceLogObserve of the key `key_id` held at `generation` (the
+ * keyring's hmacKeyringGetGeneration; aeadNonceLogObserve is generation
+ * 0): the key a rotation installs under the same id is another key, and
+ * its nonces are not reuses of the old key's */
+bool aeadNonceLogObserveAt(aeadNonceLog *log, hmacKeyId key_id,
+                           uint64_t generation,
+                           const uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN]);
 
-/* Remove every entry whose key_id matches. Call on key retire so the
- * window doesn't keep memory of a retired key. */
+/* Remove every entry whose key_id matches, at every generation. Call on
+ * key retire so the window doesn't keep memory of a retired key. */
 void aeadNonceLogClearKey(aeadNonceLog *log, hmacKeyId key_id);
 
 /* Current number of distinct entries tracked. */
@@ -81,11 +88,12 @@ size_t aeadNonceLogCapacity(const aeadNonceLog *log);
  *
  * Wire format (a single flex):
  * Entry 0: capacity (unsigned, post-round-up cap from create)
- * Then one 2-entry record per tracked tuple, oldest first:
+ * Then one 3-entry record per tracked tuple, oldest first:
  * (a) nonce (12 bytes)
  * (b) key_id (unsigned, 1..UINT32_MAX)
+ * (c) generation (unsigned)
  *
- * The flex entry count is 1 + 2N for N tuples. */
+ * The flex entry count is 1 + 3N for N tuples. */
 
 /* Serialize the log into `out`. If `out == NULL` returns the required
  * buffer size and does not modify anything. Otherwise writes at most

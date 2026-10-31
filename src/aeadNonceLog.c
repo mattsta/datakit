@@ -47,8 +47,9 @@
 #define AEAD_NONCE_LOG_NIL ((size_t)SIZE_MAX)
 
 typedef struct aeadNonceLogSlot {
-    uint64_t hash;    /* aeadNonceLogHash(key_id, nonce) */
-    hmacKeyId key_id; /* HMAC_KEY_ID_INVALID (0) marks an empty slot */
+    uint64_t hash;       /* aeadNonceLogHash(key_id, generation, nonce) */
+    uint64_t generation; /* which key key_id named (0: not told) */
+    hmacKeyId key_id;    /* HMAC_KEY_ID_INVALID (0) marks an empty slot */
     uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
 } aeadNonceLogSlot;
 
@@ -98,21 +99,26 @@ static size_t aeadNonceLogLoadLimit(size_t cap) {
     return cap - (cap >> 3u);
 }
 
-/* Hash the (key_id || nonce) tuple with splitmix64's finalizer:
- * non-cryptographic, but it spreads the bits over the buckets. */
-static uint64_t aeadNonceLogHash(hmacKeyId key_id, const uint8_t *nonce) {
+/* Hash the (key_id, generation, nonce) tuple with splitmix64's
+ * finalizer: non-cryptographic, but it spreads the bits over the
+ * buckets. */
+static uint64_t aeadNonceLogHash(hmacKeyId key_id, uint64_t generation,
+                                 const uint8_t *nonce) {
     uint64_t lo, hi;
     memcpy(&lo, nonce, 8);
     uint32_t hi32 = 0;
     memcpy(&hi32, nonce + 8, 4);
     hi = ((uint64_t)hi32 << 32) | (uint64_t)key_id;
-    return dkSplitmix64Mix(lo ^ dkSplitmix64Mix(hi));
+    return dkSplitmix64Mix(lo ^
+                           dkSplitmix64Mix(hi ^ dkSplitmix64Mix(generation)));
 }
 
-/* The occupied slot `s` holds (key_id, nonce), whose hash is `h` */
+/* The occupied slot `s` holds (key_id, generation, nonce), whose hash is
+ * `h` */
 static bool aeadNonceLogSlotMatches(const aeadNonceLogSlot *s, uint64_t h,
-                                    hmacKeyId key_id, const uint8_t *nonce) {
-    return s->hash == h && s->key_id == key_id &&
+                                    hmacKeyId key_id, uint64_t generation,
+                                    const uint8_t *nonce) {
+    return s->hash == h && s->key_id == key_id && s->generation == generation &&
            dkCtMemEq(s->nonce, nonce, AEAD_NONCE_LOG_NONCE_LEN);
 }
 
@@ -269,8 +275,8 @@ static size_t aeadNonceLogRemoveSlot(aeadNonceLog *log, size_t idx) {
  * run (SIZE_MAX only if the table has no empty slot, which the load
  * limit rules out). */
 static bool aeadNonceLogFind(const aeadNonceLog *log, uint64_t h,
-                             hmacKeyId key_id, const uint8_t *nonce,
-                             size_t *empty) {
+                             hmacKeyId key_id, uint64_t generation,
+                             const uint8_t *nonce, size_t *empty) {
     size_t idx = (size_t)(h & log->mask);
     for (size_t step = 0; step < log->cap; step++) {
         const aeadNonceLogSlot *s = &log->slots[idx];
@@ -278,7 +284,7 @@ static bool aeadNonceLogFind(const aeadNonceLog *log, uint64_t h,
             *empty = idx;
             return false;
         }
-        if (aeadNonceLogSlotMatches(s, h, key_id, nonce)) {
+        if (aeadNonceLogSlotMatches(s, h, key_id, generation, nonce)) {
             return true;
         }
         idx = (idx + 1u) & log->mask;
@@ -289,9 +295,11 @@ static bool aeadNonceLogFind(const aeadNonceLog *log, uint64_t h,
 
 /* Fill the empty slot `idx` and append it to the FIFO tail */
 static void aeadNonceLogPlace(aeadNonceLog *log, size_t idx, uint64_t h,
-                              hmacKeyId key_id, const uint8_t *nonce) {
+                              hmacKeyId key_id, uint64_t generation,
+                              const uint8_t *nonce) {
     aeadNonceLogSlot *s = &log->slots[idx];
     s->hash = h;
+    s->generation = generation;
     s->key_id = key_id;
     memcpy(s->nonce, nonce, AEAD_NONCE_LOG_NONCE_LEN);
     aeadNonceLogFifoPushTail(log, idx);
@@ -300,15 +308,21 @@ static void aeadNonceLogPlace(aeadNonceLog *log, size_t idx, uint64_t h,
 
 bool aeadNonceLogObserve(aeadNonceLog *log, hmacKeyId key_id,
                          const uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN]) {
+    return aeadNonceLogObserveAt(log, key_id, 0, nonce);
+}
+
+bool aeadNonceLogObserveAt(aeadNonceLog *log, hmacKeyId key_id,
+                           uint64_t generation,
+                           const uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN]) {
     if (log == nullptr || nonce == nullptr || key_id == 0u) {
         return false;
     }
-    const uint64_t h = aeadNonceLogHash(key_id, nonce);
+    const uint64_t h = aeadNonceLogHash(key_id, generation, nonce);
     pthread_mutex_lock(&log->lock);
 
     /* Probe first: a duplicate leaves the table untouched */
     size_t empty = SIZE_MAX;
-    if (aeadNonceLogFind(log, h, key_id, nonce, &empty)) {
+    if (aeadNonceLogFind(log, h, key_id, generation, nonce, &empty)) {
         pthread_mutex_unlock(&log->lock);
         return false;
     }
@@ -328,7 +342,7 @@ bool aeadNonceLogObserve(aeadNonceLog *log, hmacKeyId key_id,
     /* No empty slot means a broken table: refuse, as for a reuse */
     const bool placed = empty != SIZE_MAX;
     if (placed) {
-        aeadNonceLogPlace(log, empty, h, key_id, nonce);
+        aeadNonceLogPlace(log, empty, h, key_id, generation, nonce);
     }
     pthread_mutex_unlock(&log->lock);
     return placed;
@@ -372,8 +386,8 @@ size_t aeadNonceLogCapacity(const aeadNonceLog *log) {
  * Persistence (flex serialization + persistOps descriptor)
  * ======================================================================== */
 
-/* Entries per record in the serialized flex: nonce, key_id */
-#define AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD ((size_t)2)
+/* Entries per record in the serialized flex: nonce, key_id, generation */
+#define AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD ((size_t)3)
 
 /* Build the flex encoding under the lock: [capacity], then each entry
  * oldest first.  Caller owns and frees via flexFree. */
@@ -391,6 +405,7 @@ static flex *anlBuildSnapshotFlex(const aeadNonceLog *log) {
         const aeadNonceLogSlot *s = &log->slots[i];
         flexRowBytes(&row, s->nonce, AEAD_NONCE_LOG_NONCE_LEN);
         flexRowUnsigned(&row, (uint64_t)s->key_id);
+        flexRowUnsigned(&row, s->generation);
         flexRowAppendExact(&f, &row);
     }
 
@@ -454,8 +469,9 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
         return nullptr;
     }
 
-    /* Records oldest first: [nonce (12 bytes), key_id (1..UINT32_MAX)],
-     * each inserted at the FIFO tail; a repeated tuple is refused */
+    /* Records oldest first: [nonce (12 bytes), key_id (1..UINT32_MAX),
+     * generation], each inserted at the FIFO tail; a repeated tuple is
+     * refused */
     for (size_t i = 0; i < records; i++) {
         databoxBig nonceBox;
         flexGetByTypeBig(fe, &nonceBox);
@@ -474,13 +490,21 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
         }
         fe = flexNext(f, fe);
 
-        const uint64_t h = aeadNonceLogHash((uint32_t)key_id, nonce);
+        uint64_t generation = 0;
+        if (!flexGetUnsigned(fe, &generation)) {
+            return nullptr;
+        }
+        fe = flexNext(f, fe);
+
+        const uint64_t h =
+            aeadNonceLogHash((uint32_t)key_id, generation, nonce);
         size_t empty = SIZE_MAX;
-        if (aeadNonceLogFind(log, h, (uint32_t)key_id, nonce, &empty) ||
+        if (aeadNonceLogFind(log, h, (uint32_t)key_id, generation, nonce,
+                             &empty) ||
             empty == SIZE_MAX) {
             return nullptr;
         }
-        aeadNonceLogPlace(log, empty, h, (uint32_t)key_id, nonce);
+        aeadNonceLogPlace(log, empty, h, (uint32_t)key_id, generation, nonce);
     }
 
     aeadNonceLog *out = log;
@@ -539,14 +563,15 @@ static bool anlPersistValidate(const void *structure) {
             continue;
         }
         live++;
-        if (s->hash != aeadNonceLogHash(s->key_id, s->nonce)) {
+        if (s->hash != aeadNonceLogHash(s->key_id, s->generation, s->nonce)) {
             return false;
         }
         for (size_t idx = (size_t)(s->hash & log->mask); idx != i;
              idx = (idx + 1u) & log->mask) {
             const aeadNonceLogSlot *o = &log->slots[idx];
             if (o->key_id == 0u ||
-                aeadNonceLogSlotMatches(o, s->hash, s->key_id, s->nonce)) {
+                aeadNonceLogSlotMatches(o, s->hash, s->key_id, s->generation,
+                                        s->nonce)) {
                 return false;
             }
         }
@@ -694,7 +719,7 @@ int aeadNonceLogTest(int, char *[]) {
             }
         }
 
-        /* Give the last entry (the second record's small key_id) the
+        /* Give the last entry (the second record's small generation) the
          * encoding byte of a full 64-bit integer: the total-bytes header
          * still matches the buffer, but the entry now claims payload bytes
          * past the end of it */
@@ -918,6 +943,30 @@ int aeadNonceLogTest(int, char *[]) {
         }
     }
 
+    TEST("a rotated key under the same id is a different tuple, through a "
+         "snapshot too") {
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
+        uint8_t nonce[12] = {};
+        nonceFromCounter(3u, nonce);
+        const bool first = aeadNonceLogObserveAt(log, 4u, 10, nonce);
+        const bool rotated = aeadNonceLogObserveAt(log, 4u, 11, nonce);
+        const bool again = aeadNonceLogObserveAt(log, 4u, 10, nonce);
+        const size_t need = aeadNonceLogToBytes(log, nullptr, 0);
+        cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(need ? need : 1);
+        (void)aeadNonceLogToBytes(log, snap, need);
+        cleaner(aeadNonceLogFree) aeadNonceLog *back =
+            aeadNonceLogFromBytes(snap, need);
+        const bool backOld = back && aeadNonceLogObserveAt(back, 4u, 11, nonce);
+        const bool backNew = back && aeadNonceLogObserveAt(back, 4u, 12, nonce);
+        aeadNonceLogClearKey(log, 4u);
+        if (!first || !rotated || again || !back || backOld || !backNew ||
+            aeadNonceLogSize(log) != 0) {
+            ERR("first %d, rotated %d, repeat %d, restored repeat %d, "
+                "restored new %d",
+                first, rotated, again, backOld, backNew);
+        }
+    }
+
     TEST("clearKey forgets all entries for one key only") {
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         uint8_t nonce[12] = {};
@@ -969,11 +1018,11 @@ int aeadNonceLogTest(int, char *[]) {
         uint8_t first[AEAD_NONCE_LOG_NONCE_LEN] = {};
         uint8_t second[AEAD_NONCE_LOG_NONCE_LEN] = {};
         nonceFromCounter(1u, first);
-        const uint64_t home = aeadNonceLogHash(1u, first) & 63u;
+        const uint64_t home = aeadNonceLogHash(1u, 0, first) & 63u;
         uint64_t v = 2u;
         do {
             nonceFromCounter(v++, second);
-        } while ((aeadNonceLogHash(2u, second) & 63u) != home);
+        } while ((aeadNonceLogHash(2u, 0, second) & 63u) != home);
 
         cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
         aeadNonceLogObserve(log, 1u, first);

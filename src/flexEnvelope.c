@@ -1345,8 +1345,8 @@ static bool sealObserveNonce(const flexEnvelopeSealParams *params,
                              const flexEnvelopeAlgoDesc *d) {
     if (params->nonceLog != nullptr &&
         d->nonce_len == AEAD_NONCE_LOG_NONCE_LEN && params->key_id != 0u) {
-        if (!aeadNonceLogObserve(params->nonceLog, params->key_id,
-                                 params->nonce)) {
+        if (!aeadNonceLogObserveAt(params->nonceLog, params->key_id,
+                                   params->key_generation, params->nonce)) {
             setVerifyErr(FLEX_ENV_VERIFY_FAILED_NONCE_REUSED);
             return false;
         }
@@ -1630,6 +1630,7 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
      * the caller supplied `params->key` directly (no keyring binding) or
      * when no keyring is bound — both paths fall back to ad-hoc init. */
     hmacKeyId resolved_key_id = HMAC_KEY_ID_INVALID;
+    uint64_t resolved_gen = 0; /* the keyring key's generation (0: none) */
     if (effective_key == nullptr && effective_key_len == 0 &&
         params->keyring != nullptr &&
         (f.on_wire_flags & FLEX_ENV_FLAG_KEYID_PRESENT)) {
@@ -1645,9 +1646,9 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
          * and free the bytes underneath the read. The copy is
          * independent of any subsequent keyring mutation. */
         size_t copied_len = 0;
-        if (hmacKeyringGetRawCopy((struct hmacKeyring *)params->keyring,
-                                  f.key_id, key_copy, sizeof(key_copy),
-                                  &copied_len, nullptr)) {
+        if (hmacKeyringGetRawCopyAt((struct hmacKeyring *)params->keyring,
+                                    f.key_id, key_copy, sizeof(key_copy),
+                                    &copied_len, nullptr, &resolved_gen)) {
             key_copy_populated = true;
             effective_key = key_copy;
             effective_key_len = copied_len;
@@ -1747,7 +1748,11 @@ bool flexEnvelopeOpen(const uint8_t *buf, size_t buf_len,
     if (params->nonceLog != nullptr &&
         f.algo_desc->nonce_len == AEAD_NONCE_LOG_NONCE_LEN &&
         (f.on_wire_flags & FLEX_ENV_FLAG_KEYID_PRESENT) && f.key_id != 0u) {
-        if (!aeadNonceLogObserve(params->nonceLog, f.key_id, nonce)) {
+        /* With the key from the keyring, its generation: frames of the
+         * key a rotation installed under this id are not reuses of the
+         * old key's nonces */
+        if (!aeadNonceLogObserveAt(params->nonceLog, f.key_id, resolved_gen,
+                                   nonce)) {
             /* Scrub plaintext to avoid leaking decrypted bytes to a
              * caller that ignored the return value. */
             dkSecureZero(plaintext_out, (size_t)f.payload_len);
