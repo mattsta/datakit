@@ -19,6 +19,8 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint64_t *, zfree, U64);
 defcleanerName(uint8_t *, zfree, U8);
+defcleaner(linearBloom *, linearBloomFree);
+defcleaner(linearBloomCount *, linearBloomCountFree);
 
 /* Helper to generate hash from integer */
 static void hashFromInt(uint64_t val, uint64_t hash[2]) {
@@ -32,12 +34,263 @@ static void hashFromString(const char *str, size_t len, uint64_t hash[2]) {
     hash[1] = XXH64(str, len, hash[0]);
 }
 
+/* ====================================================================
+ * The model tests: a plain bitmap for linearBloom and a plain array of
+ * counters for linearBloomCount, at the positions the probe formula
+ * names; every call against them, every read checked, each decay
+ * (the probabilistic ones through the same RNG) replayed exactly
+ * ==================================================================== */
+static uint64_t lbModelRng_;
+
+static void lbModelHash_(uint64_t hash[2]) {
+    hash[0] = dkSplitmix64Next(&lbModelRng_);
+    hash[1] = dkSplitmix64Next(&lbModelRng_);
+}
+
+/* @model: src/linearBloom.h */
+static int linearBloomTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, U8) uint8_t *bits =
+        zcalloc(LINEARBLOOM_EXTENT_BITS / 8, 1);
+    cleaner(linearBloomFree) linearBloom *bloom = linearBloomNew();
+    lbModelRng_ = seed;
+    uint64_t set = 0;
+    /* Hashes added, kept to check again (no false negatives) */
+    static uint64_t added[512][2];
+    uint32_t addedN = 0;
+    for (uint32_t step = 0; step < 4000 && !err; step++) {
+        uint64_t hash[2];
+        const uint64_t r = dkSplitmix64Next(&lbModelRng_);
+        if (r % 3 == 0 && addedN) {
+            memcpy(hash, added[(r >> 8) % addedN], sizeof(hash));
+        } else {
+            lbModelHash_(hash);
+        }
+        bool all = true;
+        for (uint32_t i = 0; i < LINEARBLOOM_HASHES; i++) {
+            const uint64_t p =
+                LINEARBLOOM_KIRSCHMITZENMACHER(i, hash[0], hash[1]) %
+                LINEARBLOOM_EXTENT_BITS;
+            all = all && (bits[p / 8] >> (p % 8)) & 1;
+        }
+        bool ok = linearBloomHashCheck(bloom, hash) == all &&
+                  linearBloomHashCheckEarlyExit(bloom, hash) == all;
+        if (r % 2) {
+            ok = ok && linearBloomHashSet(bloom, hash) == all;
+            for (uint32_t i = 0; i < LINEARBLOOM_HASHES; i++) {
+                const uint64_t p =
+                    LINEARBLOOM_KIRSCHMITZENMACHER(i, hash[0], hash[1]) %
+                    LINEARBLOOM_EXTENT_BITS;
+                set += !((bits[p / 8] >> (p % 8)) & 1);
+                bits[p / 8] |= (uint8_t)(1u << (p % 8));
+            }
+            if (addedN < countof(added)) {
+                memcpy(added[addedN++], hash, sizeof(hash));
+            }
+        }
+        ok = ok && linearBloomUtilization(bloom) ==
+                       (double)set / (double)LINEARBLOOM_EXTENT_BITS;
+        if (step == 2500) {
+            linearBloomReset(bloom);
+            memset(bits, 0, LINEARBLOOM_EXTENT_BITS / 8);
+            set = 0;
+            addedN = 0;
+        }
+        if (!ok) {
+            ERR("bloom model step %" PRIu32 ": a check or set disagreed", step);
+        }
+    }
+    return err;
+}
+
+/* The counter model's decays, as the filter defines them */
+static void lbcModelHalf_(uint8_t *c, uint32_t shift) {
+    for (uint64_t i = 0; i < LINEARBLOOMCOUNT_EXTENT_ENTRIES; i++) {
+        c[i] = (uint8_t)(c[i] >> shift);
+    }
+}
+
+static void lbcModelFactor_(uint8_t *c, double factor, uint64_t seed) {
+    if (factor <= 0.0) {
+        memset(c, 0, LINEARBLOOMCOUNT_EXTENT_ENTRIES);
+        return;
+    }
+    if (factor >= 1.0) {
+        return;
+    }
+    linearBloomCountRNG rng;
+    linearBloomCountRNGInit(&rng, seed);
+    for (uint64_t i = 0; i < LINEARBLOOMCOUNT_EXTENT_ENTRIES; i++) {
+        if (c[i]) {
+            c[i] = linearBloomCountProbRound((double)c[i] * factor, &rng);
+        }
+    }
+}
+
+static void lbcModelFloor_(uint8_t *c, double factor) {
+    if (factor <= 0.0) {
+        memset(c, 0, LINEARBLOOMCOUNT_EXTENT_ENTRIES);
+        return;
+    }
+    if (factor >= 1.0) {
+        return;
+    }
+    for (uint64_t i = 0; i < LINEARBLOOMCOUNT_EXTENT_ENTRIES; i++) {
+        const double scaled = c[i] * factor;
+        c[i] = scaled >= LINEARBLOOMCOUNT_COUNTER_MAX
+                   ? (uint8_t)LINEARBLOOMCOUNT_COUNTER_MAX
+                   : (uint8_t)scaled;
+    }
+}
+
+/* @model: src/linearBloomCount.h */
+static bool lbcModelSame_(const linearBloomCount *bloom, const uint8_t *c) {
+    for (uint64_t i = 0; i < LINEARBLOOMCOUNT_EXTENT_ENTRIES; i++) {
+        if (varintPacked3Get(bloom, i) != c[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* @model: src/linearBloomCount.h */
+static int linearBloomCountTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, U8) uint8_t *c =
+        zcalloc(LINEARBLOOMCOUNT_EXTENT_ENTRIES, 1);
+    cleaner(linearBloomCountFree) linearBloomCount *bloom =
+        linearBloomCountNew();
+    lbModelRng_ = seed;
+    for (uint32_t step = 0; step < 3000 && !err; step++) {
+        uint64_t hash[2];
+        lbModelHash_(hash);
+        if (step % 3) { /* the same hash again: its counters climb */
+            hash[0] = seed;
+            hash[1] = seed * 3;
+        }
+        uint64_t pos[LINEARBLOOMCOUNT_HASHES];
+        uint8_t low = UINT8_MAX;
+        for (uint32_t i = 0; i < LINEARBLOOMCOUNT_HASHES; i++) {
+            pos[i] = LINEARBLOOMCOUNT_KIRSCHMITZENMACHER(i, hash[0], hash[1]) %
+                     LINEARBLOOMCOUNT_EXTENT_ENTRIES;
+            low = c[pos[i]] < low ? c[pos[i]] : low;
+        }
+        bool ok = linearBloomCountHashCheck(bloom, hash) == low;
+        /* A set raises only the lowest counters, never past the maximum */
+        linearBloomCountHashSet(bloom, hash);
+        if (low < LINEARBLOOMCOUNT_COUNTER_MAX) {
+            for (uint32_t i = 0; i < LINEARBLOOMCOUNT_HASHES; i++) {
+                if (c[pos[i]] == low) {
+                    c[pos[i]]++;
+                }
+            }
+        }
+        if (step % 300 == 299) { /* a decay, every kind in turn */
+            const uint32_t kind = (step / 300) % 10;
+            const uint64_t dseed = step;
+            switch (kind) {
+            case 0:
+                linearBloomCountHalf(bloom);
+                lbcModelHalf_(c, 1);
+                break;
+            case 1:
+                linearBloomCountHalfScalar(bloom);
+#ifdef __ARM_NEON
+                linearBloomCountHalfNEON(bloom);
+                lbcModelHalf_(c, 1);
+#endif
+#if defined(__SSE2__)
+                linearBloomCountHalfSSE2(bloom);
+                lbcModelHalf_(c, 1);
+#endif
+#if defined(__AVX2__)
+                linearBloomCountHalfAVX2(bloom);
+                lbcModelHalf_(c, 1);
+#endif
+                lbcModelHalf_(c, 1);
+                break;
+            case 2:
+                if (dseed % 2) {
+                    linearBloomCountQuarter(bloom);
+                } else {
+                    linearBloomCountQuarterScalar(bloom);
+                }
+                lbcModelHalf_(c, 2);
+                break;
+            case 3:
+                linearBloomCountEighth(bloom);
+                lbcModelHalf_(c, 3);
+                break;
+            case 4:
+                linearBloomCountDecayByFactor(bloom, 0.6, dseed);
+                lbcModelFactor_(c, 0.6, dseed);
+                break;
+            case 5:
+                linearBloomCountDecayByFactorDeterministic(bloom, 0.7);
+                lbcModelFloor_(c, 0.7);
+                break;
+            case 6: {
+                uint8_t lut[8];
+                linearBloomCountBuildDecayLUT(lut, 0.8);
+                linearBloomCountDecayByLUT(bloom, lut);
+                lbcModelFloor_(c, 0.8);
+                break;
+            }
+            case 7: { /* by time: a half-life and the time since */
+                const double f = linearBloomCountComputeDecayFactor(300, 1000);
+                linearBloomCountDecay(bloom, 300, 1000, dseed);
+                lbcModelFactor_(c, f, dseed);
+                ok = ok && linearBloomCountComputeDecayFactor(5, 0) == 1.0;
+                break;
+            }
+            case 8: {
+                const double f = linearBloomCountComputeDecayFactor(700, 1000);
+                linearBloomCountDecayDeterministic(bloom, 700, 1000);
+                lbcModelFloor_(c, f);
+                break;
+            }
+            default: { /* the generator itself: Next, Double in [0, 1) */
+                linearBloomCountRNG a;
+                linearBloomCountRNG b;
+                linearBloomCountRNGInit(&a, dseed);
+                linearBloomCountRNGInit(&b, dseed);
+                const double d = linearBloomCountRNGDouble(&a);
+                (void)linearBloomCountRNGNext(&b);
+                ok = ok && d >= 0.0 && d < 1.0 &&
+                     linearBloomCountRNGNext(&a) == linearBloomCountRNGNext(&b);
+                if (step > 2000) {
+                    linearBloomCountReset(bloom);
+                    memset(c, 0, LINEARBLOOMCOUNT_EXTENT_ENTRIES);
+                }
+                break;
+            }
+            }
+            ok = ok && lbcModelSame_(bloom, c);
+        }
+        if (!ok) {
+            ERR("counting bloom model step %" PRIu32 " (seed %" PRIu64
+                "): a read or decay disagreed",
+                step, seed);
+        }
+    }
+    if (!lbcModelSame_(bloom, c)) {
+        ERR("%s", "the counting bloom model ended differing");
+    }
+    return err;
+}
+
 int linearBloomTest(int, char *[]) {
     int32_t err = 0;
 
     /* ================================================================
      * linearBloom tests
      * ================================================================ */
+
+    TEST("model: both filters against a bitmap and an array of counters") {
+        err += linearBloomTestModel_(11);
+        err += linearBloomCountTestModel_(12);
+        err += linearBloomCountTestModel_(13);
+    }
 
     TEST("linearBloom: basic set and check") {
         linearBloom *bloom = linearBloomNew();
