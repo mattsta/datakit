@@ -199,6 +199,13 @@ struct persist {
     /* Bad WAL entries (see persist.h, "Bad WAL entries") */
     persistBadEntryKind walBadKind; /* why the last read stopped (BAD) */
     bool keyProven; /* the current key verified a snapshot or WAL entry */
+    /* A fingerprint of the key the files were last written or read under
+     * (0: not yet).  A key other than that one: an entry under it after
+     * entries under the old could be read by neither, so appends wait
+     * (rekeyPending) for a compaction to rewrite the snapshot and a fresh
+     * WAL under it; going back to the files' key ends the wait */
+    uint64_t filesKey;
+    bool rekeyPending;
     /* A held entry (KEY, or CORRUPT with no quarantine) refuses appends
      * without re-walking the WAL until something could change the verdict:
      * a key change, a quarantine, a WAL store, a compaction.  READ is not
@@ -537,6 +544,39 @@ persistStore *persistWALStore(const persist *p) {
     return p ? p->walStore : nullptr;
 }
 
+/* The bound key's fingerprint: a keyring binding by its (keyring, id,
+ * generation), a direct key by its bytes, no key as 1 */
+static uint64_t persistKeyPrint_(const persist *p) {
+    if (p->attachedKeyring) {
+        const struct {
+            uintptr_t ring;
+            uint64_t generation;
+            uint32_t id;
+            uint32_t zero;
+        } binding = {(uintptr_t)p->attachedKeyring, p->attachedGeneration,
+                     p->attachedKeyId, 0};
+        return XXH3_64bits(&binding, sizeof(binding)) | 1;
+    }
+    if (p->integrityKey && p->integrityKeyLen) {
+        return XXH3_64bits(p->integrityKey, p->integrityKeyLen) | 2;
+    }
+    return 1;
+}
+
+/* The files were written or read under the bound key */
+static void persistKeyUsed_(persist *p) {
+    if (!p->rekeyPending) {
+        p->filesKey = persistKeyPrint_(p);
+    }
+}
+
+/* The bound key changed: appends wait unless it is the files' own */
+static void persistKeyChanged_(persist *p) {
+    if (p->filesKey) {
+        p->rekeyPending = persistKeyPrint_(p) != p->filesKey;
+    }
+}
+
 bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len) {
     if (!p) {
         return false;
@@ -556,10 +596,11 @@ bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len) {
     if (key == nullptr || key_len == 0) {
         p->integrityKey = nullptr;
         p->integrityKeyLen = 0;
-        return true;
+    } else {
+        p->integrityKey = key;
+        p->integrityKeyLen = key_len;
     }
-    p->integrityKey = key;
-    p->integrityKeyLen = key_len;
+    persistKeyChanged_(p);
     return true;
 }
 
@@ -668,6 +709,7 @@ static bool persistBindKeyringInternal(persist *p, hmacKeyring *ring,
     p->lastExpectedKeyId = 0u;
     p->keyProven = false;
     p->walHeld = false;
+    persistKeyChanged_(p);
     return true;
 }
 
@@ -1079,6 +1121,7 @@ bool persistSnapshot(persist *p, const void *structure) {
 
     p->stats.snapshotCount++;
     p->stats.snapshotBytes += sizeof(header) + envelopeLen;
+    persistKeyUsed_(p);
     p->stats.lastSnapshotTime = startTime;
     p->stats.lastSnapshotDuration = timeUtilMonotonicUs() - startMono;
 
@@ -1160,6 +1203,7 @@ void *persistRestore(persist *p) {
             return nullptr;
         }
         p->keyProven = true; /* the key reads what it wrote */
+        persistKeyUsed_(p);
         p->walHeld = false;
 
         /* The envelope's payload sits at an arbitrary offset inside the
@@ -1355,8 +1399,16 @@ bool persistWALReady(persist *p) {
     /* The open WAL's header names the key its entries were written under:
      * an entry under another key (a rotation since) could be read by no
      * binding, so appends wait for a compaction to rewrite the snapshot
-     * and the WAL under the current key */
-    return persistCheckHeaderKeyId(p, p->walKeyId);
+     * and the WAL under the current key.  The same holds for a key the
+     * header cannot name (new bytes under the same id, a direct key). */
+    if (!persistCheckHeaderKeyId(p, p->walKeyId)) {
+        return false;
+    }
+    if (p->rekeyPending) {
+        p->lastError = PERSIST_ERR_REKEY_NEEDS_COMPACT;
+        return false;
+    }
+    return true;
 }
 
 /* Write `len` bytes at the WAL's append offset */
@@ -1677,6 +1729,7 @@ persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
     }
 
     p->walSequence++;
+    persistKeyUsed_(p);
     p->stats.walEntries++;
 
     /* The sync the policy asks for now, if any: best effort, reported */
@@ -1781,6 +1834,7 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
         return PERSIST_WAL_BAD;
     }
     p->keyProven = true;
+    persistKeyUsed_(p);
     if (payloadLen < (uint64_t)PERSIST_WAL_ENTRY_PREAMBLE_LEN) {
         p->walBadKind = PERSIST_BAD_ENTRY_CORRUPT;
         return PERSIST_WAL_BAD;
@@ -2231,6 +2285,9 @@ bool persistCompact(persist *p, void *structure) {
 
     p->stats.compactionCount++;
     p->stats.lastCompactionTime = timeUtilUs();
+    /* Both files are now under the current key */
+    p->rekeyPending = false;
+    persistKeyUsed_(p);
     return true;
 }
 
@@ -2736,6 +2793,7 @@ const char *persistErrName(persistErr err) {
         PERSIST_NAME_CASE_(PERSIST_ERR_, CONTAINER_FORMAT);
         PERSIST_NAME_CASE_(PERSIST_ERR_, STRUCTURE_FORMAT);
         PERSIST_NAME_CASE_(PERSIST_ERR_, UNKEYED_ENVELOPE);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, REKEY_NEEDS_COMPACT);
     }
     return "UNKNOWN";
 }
@@ -7089,6 +7147,69 @@ int persistTest(int, char *[]) {
             }
         }
 
+        TEST("a key changed on written files: appends wait for a compaction, "
+             "then recovery reads every write") {
+            /* A direct key replaced, a keyring id reinstalled with new
+             * bytes, a keyring attached after a direct key */
+            uint8_t otherKey[32];
+            memset(otherKey, 0x5c, sizeof(otherKey));
+            for (int how = 0; how < 3; how++) {
+                persistConfig keyed = persistDefaultConfig();
+                keyed.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+                persist *p = persistCreate(&persistOpsFlex, &keyed);
+                persistAttachSnapshot(p, persistStoreMemory(0));
+                persistAttachWAL(p, persistStoreMemory(0));
+                hmacKeyring *ring = hmacKeyringCreate();
+                if (how == 1) {
+                    (void)hmacKeyringInstallUnsalted(ring, 5, &hmacAlgoSHA256,
+                                                     persistTestKey,
+                                                     sizeof(persistTestKey));
+                    (void)persistAttachKeyring(p, ring, 5);
+                } else {
+                    persistSetIntegrityKey(p, persistTestKey,
+                                           sizeof(persistTestKey));
+                }
+                cleaner(flexFree) flex *f = flexNew();
+                flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
+                (void)persistSnapshot(p, f);
+                const databox two = DATABOX_SIGNED(2);
+                (void)persistLogOp(p, PERSIST_OP_PUSH_TAIL, &two, 1);
+                flexPushSigned(&f, 2, FLEX_ENDPOINT_TAIL);
+
+                if (how == 0) {
+                    persistSetIntegrityKey(p, otherKey, sizeof(otherKey));
+                } else if (how == 1) {
+                    (void)hmacKeyringRetire(ring, 5);
+                    (void)hmacKeyringInstallUnsalted(
+                        ring, 5, &hmacAlgoSHA256, otherKey, sizeof(otherKey));
+                    (void)persistRebindKeyring(p, ring, 5);
+                } else {
+                    (void)hmacKeyringInstallUnsalted(
+                        ring, 6, &hmacAlgoSHA256, otherKey, sizeof(otherKey));
+                    (void)persistAttachKeyring(p, ring, 6);
+                }
+                const databox three = DATABOX_SIGNED(3);
+                if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &three, 1) ||
+                    persistLastError(p) != PERSIST_ERR_REKEY_NEEDS_COMPACT) {
+                    ERR("change %d: an append went on under the new key "
+                        "(error %d)",
+                        how, (int)persistLastError(p));
+                }
+                if (!persistCompact(p, f) ||
+                    !persistLogOp(p, PERSIST_OP_PUSH_TAIL, &three, 1)) {
+                    ERR("change %d: no append after the compaction", how);
+                }
+                flex *back = persistRecover(p);
+                if (!back || flexCount(back) != 3) {
+                    ERR("change %d: recovery read %zu values, wrote 3", how,
+                        back ? flexCount(back) : 0);
+                }
+                flexFree(back);
+                persistClose(p);
+                hmacKeyringFree(ring);
+            }
+        }
+
         TEST("a keyed configuration refuses envelopes no key made: a "
              "forged snapshot, a forged WAL entry (held, never cut)") {
             /* Unkeyed envelopes of the same contents, which anyone can
@@ -10823,10 +10944,11 @@ int persistTest(int, char *[]) {
                             "NO_ACTION", "HEALED", "HELD");
         PERSIST_TEST_NAMES_(persistQuarantineReadName, persistQuarantineRead,
                             "RECORD", "END", "DAMAGED");
-        PERSIST_TEST_NAMES_(
-            persistErrName, persistErr, "NONE", "KEY_GENERATION_MISMATCH",
-            "KEY_NOT_FOUND", "NO_KEY_ATTACHED", "KEY_ID_MISMATCH",
-            "CONTAINER_FORMAT", "STRUCTURE_FORMAT", "UNKEYED_ENVELOPE");
+        PERSIST_TEST_NAMES_(persistErrName, persistErr, "NONE",
+                            "KEY_GENERATION_MISMATCH", "KEY_NOT_FOUND",
+                            "NO_KEY_ATTACHED", "KEY_ID_MISMATCH",
+                            "CONTAINER_FORMAT", "STRUCTURE_FORMAT",
+                            "UNKEYED_ENVELOPE", "REKEY_NEEDS_COMPACT");
 #undef PERSIST_TEST_NAMES_
     }
 

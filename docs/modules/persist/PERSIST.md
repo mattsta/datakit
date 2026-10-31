@@ -276,7 +276,11 @@ different key id fails verification with `PERSIST_ERR_KEY_ID_MISMATCH`, and
 Rotating to a new key id: the snapshot and the open WAL name the old id,
 so after `persistRebindKeyring` to the new one appends are refused
 (`PERSIST_ERR_KEY_ID_MISMATCH`) until `persistCompact` rewrites both under
-the new key. Rotate as rebind, compact, continue. `persistSetIntegrityKey`
+the new key. Rotate as rebind, compact, continue. The same holds for any
+key change on written files (new bytes under the same id, a direct key set
+again, a keyring after a direct key): appends wait with
+`PERSIST_ERR_REKEY_NEEDS_COMPACT` until `persistCompact`; going back to the
+files' own key ends the wait. `persistSetIntegrityKey`
 replaces every earlier key source (a keyring binding and a prepared key
 included); set a prepared form of the new key after it.
 
@@ -419,6 +423,7 @@ A false return from the core API may leave a typed code in
 | `PERSIST_ERR_KEY_ID_MISMATCH`         | the file was written under another key id                                                                                      |
 | `PERSIST_ERR_CONTAINER_FORMAT`        | the file framing's stamp is not readable here                                                                                  |
 | `PERSIST_ERR_STRUCTURE_FORMAT`        | the structure format's stamp is not readable here                                                                              |
+| `PERSIST_ERR_REKEY_NEEDS_COMPACT`     | the key changed after the files were written under another; appends wait for `persistCompact`                                  |
 | `PERSIST_ERR_UNKEYED_ENVELOPE`        | a keyed checksum read an envelope no key made (forged, or older than the keyed checksum); a WAL holding one is held, never cut |
 
 Other failures (I/O, a malformed file) return false and may leave

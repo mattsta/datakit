@@ -743,11 +743,12 @@ void persistGetConfig(const persist *p, persistConfig *config);
  * Passing NULL/0 clears any previously set key. Either way it replaces
  * every earlier key source: an attached keyring and a prepared key are
  * dropped (set a prepared form of the new key after this call). Returns
- * false if the persist handle is NULL. Safe to call before any
- * snapshot/log so that
- * the very first write is keyed. Re-keying is supported between writes
- * but does NOT re-key already-written data on disk; readers will see the
- * new key applied to subsequent reads. */
+ * false if the persist handle is NULL. Call it before the first snapshot
+ * or log so the very first write is keyed.  A different key after the
+ * files were written or read under another refuses appends
+ * (PERSIST_ERR_REKEY_NEEDS_COMPACT) until persistCompact rewrites both
+ * files under it: entries under two keys in one WAL could be read by
+ * neither.  Setting the files' own key again ends the wait. */
 bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len);
 
 /* Borrowed prepared-key handle for HMAC-class algos. When set, every
@@ -820,17 +821,22 @@ typedef enum [[nodiscard]] persistErr {
                                                          currently-attached keyring's
                                                          key_id (operator pointed the
                                                          reader at the wrong key) */
-    PERSIST_ERR_CONTAINER_FORMAT = 5, /* the snapshot/WAL file framing is a
-                                         version or feature set this build
-                                         does not read (persistLastFormat) */
-    PERSIST_ERR_STRUCTURE_FORMAT = 6, /* the structure's format stamp in the
-                                         file is one this build does not
-                                         read (persistLastFormat) */
-    PERSIST_ERR_UNKEYED_ENVELOPE = 7, /* a keyed checksum configuration read
-                                         an envelope no key made (forged,
-                                         or written before the checksum
-                                         became keyed): refused, and a WAL
-                                         holding one is held, never cut */
+    PERSIST_ERR_CONTAINER_FORMAT = 5,    /* the snapshot/WAL file framing is a
+                                            version or feature set this build
+                                            does not read (persistLastFormat) */
+    PERSIST_ERR_STRUCTURE_FORMAT = 6,    /* the structure's format stamp in the
+                                            file is one this build does not
+                                            read (persistLastFormat) */
+    PERSIST_ERR_UNKEYED_ENVELOPE = 7,    /* a keyed checksum configuration read
+                                            an envelope no key made (forged,
+                                            or written before the checksum
+                                            became keyed): refused, and a WAL
+                                            holding one is held, never cut */
+    PERSIST_ERR_REKEY_NEEDS_COMPACT = 8, /* the key changed after the files
+                                            were written or read under
+                                            another: appends wait for
+                                            persistCompact to rewrite both
+                                            under the new key */
 } persistErr;
 
 /* Read the typed error code from the most recent failed operation on
