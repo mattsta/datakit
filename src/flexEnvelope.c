@@ -282,7 +282,7 @@ static bool envFrameSize_(size_t header, size_t trailers, uint64_t payload,
 }
 
 size_t flexEnvelopeWrappedSize(uint64_t payload_len, flexEnvelopeAlgo algo,
-                               uint32_t on_wire_flags) {
+                               flexEnvelopeFlags on_wire_flags) {
     const flexEnvelopeAlgoDesc *d = findAlgo(algo);
     if (!d) {
         return 0;
@@ -327,8 +327,8 @@ typedef struct flexEnvelopeFraming {
     size_t payload_offset; /* == header_size + nonce_len */
     size_t digest_offset;  /* == payload_offset + payload_len */
     size_t total_size;     /* == digest_offset + digest_len */
-    uint32_t on_wire_flags;
-    uint32_t key_id; /* valid iff flags & FLEX_ENV_FLAG_KEYID_PRESENT */
+    flexEnvelopeFlags on_wire_flags;
+    hmacKeyId key_id; /* valid iff flags & FLEX_ENV_FLAG_KEYID_PRESENT */
     uint8_t version;
 } flexEnvelopeFraming;
 
@@ -394,7 +394,7 @@ static bool parseFramingEx(const uint8_t *buf, size_t buf_len,
     /* Optional key_id varint, present iff the corresponding flag bit
      * is set. Reserve 0 as the "absent" sentinel even on the wire — a
      * frame claiming KEYID_PRESENT with key_id == 0 is malformed. */
-    uint32_t key_id = 0;
+    hmacKeyId key_id = HMAC_KEY_ID_INVALID;
     if ((uint32_t)flags_raw & FLEX_ENV_FLAG_KEYID_PRESENT) {
         uint64_t kid_raw = 0;
         if (!varintDecode(buf + pos, buf_len - pos, &kid_raw, &width)) {
@@ -854,7 +854,7 @@ bool flexEnvelopeVerify(const uint8_t *buf, size_t buf_len,
     flexEnvelopeVerifyParams empty;
     memset(&empty, 0, sizeof(empty));
     const flexEnvelopeVerifyParams *p = params ? params : &empty;
-    const uint32_t opts = p->opts;
+    const flexEnvelopeVerifyOpts opts = p->opts;
 
     /* Stack buffer for keyring auto-resolution. Stays unused when the
      * caller supplied a key directly or when no keyring is bound; the
@@ -2158,7 +2158,7 @@ bool flexEnvelopeVerifyStreamInit(flexEnvelopeVerifyStream *ctx,
         return false;
     }
 
-    const uint32_t opts = p->opts;
+    const flexEnvelopeVerifyOpts opts = p->opts;
 
     /* Mirror secure-default invariants from one-shot Verify, ignoring
      * the no-trailing-bytes check (we don't know full buffer length). */

@@ -699,6 +699,8 @@ typedef struct clusterNodeHealth {
     bool reachable;
     uint32_t latencyMs;
     float errorRate; /* 0.0 - 1.0 */
+    /* When the caller checked, on its own clock and unit: the ring keeps
+     * it as given and reads nothing from it */
     uint64_t lastCheckTime;
 } clusterNodeHealth;
 

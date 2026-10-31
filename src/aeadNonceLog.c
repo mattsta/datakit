@@ -47,8 +47,8 @@
 #define AEAD_NONCE_LOG_NIL ((size_t)SIZE_MAX)
 
 typedef struct aeadNonceLogSlot {
-    uint64_t hash;   /* aeadNonceLogHash(key_id, nonce) */
-    uint32_t key_id; /* HMAC_KEY_ID_INVALID (0) marks an empty slot */
+    uint64_t hash;    /* aeadNonceLogHash(key_id, nonce) */
+    hmacKeyId key_id; /* HMAC_KEY_ID_INVALID (0) marks an empty slot */
     uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
 } aeadNonceLogSlot;
 
@@ -100,7 +100,7 @@ static size_t aeadNonceLogLoadLimit(size_t cap) {
 
 /* Hash the (key_id || nonce) tuple with splitmix64's finalizer:
  * non-cryptographic, but it spreads the bits over the buckets. */
-static uint64_t aeadNonceLogHash(uint32_t key_id, const uint8_t *nonce) {
+static uint64_t aeadNonceLogHash(hmacKeyId key_id, const uint8_t *nonce) {
     uint64_t lo, hi;
     memcpy(&lo, nonce, 8);
     uint32_t hi32 = 0;
@@ -111,7 +111,7 @@ static uint64_t aeadNonceLogHash(uint32_t key_id, const uint8_t *nonce) {
 
 /* The occupied slot `s` holds (key_id, nonce), whose hash is `h` */
 static bool aeadNonceLogSlotMatches(const aeadNonceLogSlot *s, uint64_t h,
-                                    uint32_t key_id, const uint8_t *nonce) {
+                                    hmacKeyId key_id, const uint8_t *nonce) {
     return s->hash == h && s->key_id == key_id &&
            dkCtMemEq(s->nonce, nonce, AEAD_NONCE_LOG_NONCE_LEN);
 }
@@ -269,7 +269,7 @@ static size_t aeadNonceLogRemoveSlot(aeadNonceLog *log, size_t idx) {
  * run (SIZE_MAX only if the table has no empty slot, which the load
  * limit rules out). */
 static bool aeadNonceLogFind(const aeadNonceLog *log, uint64_t h,
-                             uint32_t key_id, const uint8_t *nonce,
+                             hmacKeyId key_id, const uint8_t *nonce,
                              size_t *empty) {
     size_t idx = (size_t)(h & log->mask);
     for (size_t step = 0; step < log->cap; step++) {
@@ -289,7 +289,7 @@ static bool aeadNonceLogFind(const aeadNonceLog *log, uint64_t h,
 
 /* Fill the empty slot `idx` and append it to the FIFO tail */
 static void aeadNonceLogPlace(aeadNonceLog *log, size_t idx, uint64_t h,
-                              uint32_t key_id, const uint8_t *nonce) {
+                              hmacKeyId key_id, const uint8_t *nonce) {
     aeadNonceLogSlot *s = &log->slots[idx];
     s->hash = h;
     s->key_id = key_id;
@@ -298,7 +298,7 @@ static void aeadNonceLogPlace(aeadNonceLog *log, size_t idx, uint64_t h,
     log->count++;
 }
 
-bool aeadNonceLogObserve(aeadNonceLog *log, uint32_t key_id,
+bool aeadNonceLogObserve(aeadNonceLog *log, hmacKeyId key_id,
                          const uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN]) {
     if (log == nullptr || nonce == nullptr || key_id == 0u) {
         return false;
@@ -334,7 +334,7 @@ bool aeadNonceLogObserve(aeadNonceLog *log, uint32_t key_id,
     return placed;
 }
 
-void aeadNonceLogClearKey(aeadNonceLog *log, uint32_t key_id) {
+void aeadNonceLogClearKey(aeadNonceLog *log, hmacKeyId key_id) {
     if (log == nullptr || key_id == 0u) {
         return;
     }
@@ -641,7 +641,7 @@ static void nonceFromCounter(uint64_t v,
 typedef struct aeadNonceLogConcCtx {
     aeadNonceLog *log;
     uint64_t base;
-    uint32_t key_id;
+    hmacKeyId key_id;
     uint32_t iters;
     uint32_t inserted;
 } aeadNonceLogConcCtx;

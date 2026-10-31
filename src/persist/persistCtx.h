@@ -59,7 +59,7 @@ typedef struct persistCtxConfig {
     /* Snapshot body compression (persistConfig.compression and
      * compressionLevel; off by default) */
     persistCompression compression;
-    int compressionLevel;
+    cflexLevel compressionLevel;
 } persistCtxConfig;
 
 /* Default configuration */

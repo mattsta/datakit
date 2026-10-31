@@ -178,14 +178,6 @@ extern "C" {
  * holds the only consumer pointer at this time. */
 struct aesGcmKey;
 
-/* Caller-chosen 32-bit identifier for a key. Zero is reserved as
- * "invalid / no key" so callers can use it as a sentinel. Otherwise
- * any non-zero value is acceptable — typical schemes use a small
- * monotonically-increasing generation counter (1, 2, 3, ...) or an
- * opaque hash of the key material itself. */
-typedef uint32_t hmacKeyId;
-#define HMAC_KEY_ID_INVALID ((hmacKeyId)0)
-
 /* Width of the per-key AEAD nonce salt. 4 bytes is the suffix appended
  * to the 8-byte counter to form the 12-byte ChaCha20-Poly1305 nonce. */
 #define HMAC_KEYRING_AEAD_SALT_BYTES ((size_t)4)

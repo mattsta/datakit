@@ -116,19 +116,22 @@ typedef struct clusterReplicatorConfig {
  * Uses the default clusterReplicatorConfig (a poison frame is dropped
  * after CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES rejections);
  * clusterReplicatorCreateEx takes another. */
-clusterReplicator *clusterReplicatorCreate(
-    hmacKeyring *ring, flexEnvelopeAlgo envelope_algo, uint32_t mailbox_flags,
-    const persistOps *const *type_table, size_t type_table_len,
-    clusterReplicatorApplyFn on_restored, void *apply_ctx);
+clusterReplicator *clusterReplicatorCreate(hmacKeyring *ring,
+                                           flexEnvelopeAlgo envelope_algo,
+                                           clusterMailboxFlags mailbox_flags,
+                                           const persistOps *const *type_table,
+                                           size_t type_table_len,
+                                           clusterReplicatorApplyFn on_restored,
+                                           void *apply_ctx);
 
 /* Extended constructor with explicit config. Same semantics +
  * contracts as clusterReplicatorCreate plus the policy in `cfg`
  * (NULL, like a zeroed config: the defaults). */
 clusterReplicator *clusterReplicatorCreateEx(
-    hmacKeyring *ring, flexEnvelopeAlgo envelope_algo, uint32_t mailbox_flags,
-    const persistOps *const *type_table, size_t type_table_len,
-    clusterReplicatorApplyFn on_restored, void *apply_ctx,
-    const clusterReplicatorConfig *cfg);
+    hmacKeyring *ring, flexEnvelopeAlgo envelope_algo,
+    clusterMailboxFlags mailbox_flags, const persistOps *const *type_table,
+    size_t type_table_len, clusterReplicatorApplyFn on_restored,
+    void *apply_ctx, const clusterReplicatorConfig *cfg);
 
 void clusterReplicatorFree(clusterReplicator *rep);
 

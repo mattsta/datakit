@@ -132,7 +132,7 @@ bool ulidGenInit(ulidGen *g, ulidClockSource clock) {
     }
 
     *g = (ulidGen){};
-    g->clockSource = (uint32_t)clock;
+    g->clockSource = clock;
     if (clock == ULID_CLOCK_MONOTONIC_OFFSET) {
         g->clockOffsetNs = timeUtilNs() - timeUtilMonotonicNs();
     }

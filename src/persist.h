@@ -113,6 +113,8 @@
 
 #include "databox.h"
 #include "dkFormat.h"
+#include "flex.h" /* cflexLevel */
+#include "hmac.h" /* hmacKeyId */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -633,8 +635,9 @@ typedef enum persistSyncMode {
 struct persistConfig {
     /* Compression settings */
     persistCompression compression;
-    int compressionLevel; /* 0: LZ4 (fastest); 1-12: LZ4HC at that level
-                             (smaller, slower to write; reads the same) */
+    cflexLevel compressionLevel; /* 0: LZ4 (fastest); 1 .. CFLEX_LEVEL_MAX:
+                                    LZ4HC at that level (smaller, slower
+                                    to write; reads the same) */
 
     /* Checksum settings */
     persistChecksum checksumType;
@@ -661,8 +664,8 @@ struct persistStats {
     /* Snapshot stats */
     uint64_t snapshotCount;        /* Number of snapshots taken */
     uint64_t snapshotBytes;        /* Total bytes written in snapshots */
-    uint64_t lastSnapshotTime;     /* Timestamp of last snapshot */
-    uint64_t lastSnapshotDuration; /* Duration in microseconds */
+    uint64_t lastSnapshotTime;     /* when the last began: Unix-epoch us */
+    uint64_t lastSnapshotDuration; /* how long it took: monotonic us */
 
     /* WAL stats */
     uint64_t walEntries;  /* Total WAL entries written */
@@ -676,8 +679,8 @@ struct persistStats {
                               once a later sync succeeds */
 
     /* Compaction stats */
-    uint64_t compactionCount; /* Number of compactions */
-    uint64_t lastCompactionTime;
+    uint64_t compactionCount;    /* Number of compactions */
+    uint64_t lastCompactionTime; /* when the last finished: Unix-epoch us */
 
     /* Recovery stats */
     uint64_t recoveryCount;    /* Number of recoveries */
@@ -781,7 +784,7 @@ bool persistSetIntegrityPreparedKey(persist *p, const struct hmacKey *prep);
  * persistClose. */
 struct hmacKeyring;
 bool persistAttachKeyring(persist *p, struct hmacKeyring *ring,
-                          uint32_t key_id);
+                          hmacKeyId key_id);
 
 /* Re-bind a persist instance to a (keyring, key_id) pair AFTER an
  * intentional key rotation. Refreshes the cached generation so
@@ -800,7 +803,7 @@ bool persistAttachKeyring(persist *p, struct hmacKeyring *ring,
  * the new key; an entry written in between could be read by no binding.
  * Rotate as: rebind, compact, then carry on. */
 bool persistRebindKeyring(persist *p, struct hmacKeyring *ring,
-                          uint32_t key_id);
+                          hmacKeyId key_id);
 
 /* Typed error codes returned via persistLastError after an operation
  * fails. Not all failure paths set a code yet (legacy code paths
@@ -852,7 +855,7 @@ persistErr persistLastError(const persist *p);
  * (unsigned)expected);
  * }
  */
-uint32_t persistLastExpectedKeyId(const persist *p);
+hmacKeyId persistLastExpectedKeyId(const persist *p);
 
 /* After a failure that set PERSIST_ERR_CONTAINER_FORMAT or
  * PERSIST_ERR_STRUCTURE_FORMAT: why the stamp was refused, with the stamp
@@ -874,11 +877,11 @@ typedef struct persistFileInfo {
     uint32_t headerLen;      /* header bytes, as stored */
     dkFormatStamp container; /* the file framing's stamp */
     dkFormatStamp format;    /* the structure format's stamp */
-    uint32_t keyId;          /* key_id of the writer's keyring (0: none) */
-    uint64_t count;          /* snapshot: element count; WAL: 0 */
-    uint64_t envelopeLen;    /* snapshot: body bytes; WAL: 0 */
-    uint64_t sequence;       /* snapshot: WAL sequence included;
-                                WAL: sequence of its first entry */
+    hmacKeyId keyId; /* the writer's keyring key (HMAC_KEY_ID_INVALID: none) */
+    uint64_t count;  /* snapshot: element count; WAL: 0 */
+    uint64_t envelopeLen; /* snapshot: body bytes; WAL: 0 */
+    uint64_t sequence;    /* snapshot: WAL sequence included;
+                             WAL: sequence of its first entry */
 } persistFileInfo;
 
 /* Read the header at the start of `store` (a snapshot or a WAL; the magic

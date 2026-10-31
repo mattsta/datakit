@@ -36,6 +36,8 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
+#include "hmac.h" /* hmacKeyId */
+
 /* @handle: fixed: its address holds from creation to free */
 typedef struct aeadNonceLog aeadNonceLog;
 
@@ -61,13 +63,13 @@ void aeadNonceLogFree(aeadNonceLog *log);
  * - Returns false if the tuple is a duplicate of one already in the
  * window — caller MUST NOT proceed with Seal.
  *
- * `key_id` must be non-zero; passing zero returns false (reserved). */
-bool aeadNonceLogObserve(aeadNonceLog *log, uint32_t key_id,
+ * `key_id` must not be HMAC_KEY_ID_INVALID (which returns false). */
+bool aeadNonceLogObserve(aeadNonceLog *log, hmacKeyId key_id,
                          const uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN]);
 
 /* Remove every entry whose key_id matches. Call on key retire so the
  * window doesn't keep memory of a retired key. */
-void aeadNonceLogClearKey(aeadNonceLog *log, uint32_t key_id);
+void aeadNonceLogClearKey(aeadNonceLog *log, hmacKeyId key_id);
 
 /* Current number of distinct entries tracked. */
 size_t aeadNonceLogSize(const aeadNonceLog *log);

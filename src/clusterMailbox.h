@@ -140,6 +140,8 @@ typedef enum clusterMailboxFlag {
      * 512 bytes whether the flag is on or off. */
     CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW = (1u << 0)
 } clusterMailboxFlag;
+/* An OR of clusterMailboxFlag values */
+typedef uint32_t clusterMailboxFlags;
 
 /* Extended constructor — same semantics as clusterMailboxCreate plus a
  * `flags` argument for opt-in features (see clusterMailboxFlag).
@@ -148,7 +150,7 @@ typedef enum clusterMailboxFlag {
 clusterMailbox *clusterMailboxCreateEx(hmacKeyring *ring,
                                        flexEnvelopeAlgo envelope_algo,
                                        clusterApplyFn on_apply, void *apply_ctx,
-                                       uint32_t flags);
+                                       clusterMailboxFlags flags);
 
 /* Default capacity for a mailbox-owned aeadNonceLog when the caller
  * does not specify one in clusterMailboxCreateOptions. Sized for the
@@ -169,7 +171,7 @@ typedef struct clusterMailboxCreateOptions {
     /* OPTIONAL: opaque context passed to on_apply. */
     void *apply_ctx;
     /* Bitmask of clusterMailboxFlag values. */
-    uint32_t flags;
+    clusterMailboxFlags flags;
     /* When true (default false), the constructor REFUSES to create a
      * nonceLog and the mailbox runs without (key_id, nonce) reuse
      * detection. Use only in tests or single-process scenarios that

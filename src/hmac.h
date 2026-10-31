@@ -10,6 +10,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* A keyring key's caller-chosen 32-bit identifier (hmacKeyring.h),
+ * as envelopes, nonce logs and persisted files carry it. Zero is reserved as
+ * "invalid / no key" so callers can use it as a sentinel. Otherwise
+ * any non-zero value is acceptable — typical schemes use a small
+ * monotonically-increasing generation counter (1, 2, 3, ...) or an
+ * opaque hash of the key material itself. */
+typedef uint32_t hmacKeyId;
+#define HMAC_KEY_ID_INVALID ((hmacKeyId)0)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

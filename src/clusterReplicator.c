@@ -159,10 +159,10 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
 }
 
 clusterReplicator *clusterReplicatorCreateEx(
-    hmacKeyring *ring, flexEnvelopeAlgo envelope_algo, uint32_t mailbox_flags,
-    const persistOps *const *type_table, size_t type_table_len,
-    clusterReplicatorApplyFn on_restored, void *apply_ctx,
-    const clusterReplicatorConfig *cfg) {
+    hmacKeyring *ring, flexEnvelopeAlgo envelope_algo,
+    clusterMailboxFlags mailbox_flags, const persistOps *const *type_table,
+    size_t type_table_len, clusterReplicatorApplyFn on_restored,
+    void *apply_ctx, const clusterReplicatorConfig *cfg) {
     if (ring == nullptr || type_table == nullptr || type_table_len == 0 ||
         on_restored == nullptr) {
         return nullptr;
@@ -216,10 +216,13 @@ clusterReplicator *clusterReplicatorCreateEx(
     return out;
 }
 
-clusterReplicator *clusterReplicatorCreate(
-    hmacKeyring *ring, flexEnvelopeAlgo envelope_algo, uint32_t mailbox_flags,
-    const persistOps *const *type_table, size_t type_table_len,
-    clusterReplicatorApplyFn on_restored, void *apply_ctx) {
+clusterReplicator *clusterReplicatorCreate(hmacKeyring *ring,
+                                           flexEnvelopeAlgo envelope_algo,
+                                           clusterMailboxFlags mailbox_flags,
+                                           const persistOps *const *type_table,
+                                           size_t type_table_len,
+                                           clusterReplicatorApplyFn on_restored,
+                                           void *apply_ctx) {
     return clusterReplicatorCreateEx(ring, envelope_algo, mailbox_flags,
                                      type_table, type_table_len, on_restored,
                                      apply_ctx, nullptr);

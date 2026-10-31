@@ -68,7 +68,7 @@ typedef struct ulid32 {
  *   offset captured at init: immune to wall-clock steps and cheaper on
  *   platforms where the monotonic read is faster, but drifts with the
  *   monotonic clock's rate error over long uptimes. */
-typedef enum ulidClockSource {
+typedef enum ulidClockSource : uint32_t {
     ULID_CLOCK_REALTIME = 0,
     ULID_CLOCK_MONOTONIC_OFFSET = 1,
 } ulidClockSource;
@@ -79,10 +79,10 @@ typedef enum ulidClockSource {
  * clock source (required for MONOTONIC_OFFSET, which must capture its
  * offset at init). */
 typedef struct ulidGen {
-    uint64_t rng[2];          /* xoroshiro128+ state; {0,0} = unseeded */
-    uint64_t lastEmittedNs;   /* emission watermark: next id > this */
-    uint64_t clockOffsetNs;   /* realtime - monotonic, captured at init */
-    uint32_t clockSource;     /* ulidClockSource */
+    uint64_t rng[2];        /* xoroshiro128+ state; {0,0} = unseeded */
+    uint64_t lastEmittedNs; /* emission watermark: next id > this */
+    uint64_t clockOffsetNs; /* realtime - monotonic, captured at init */
+    ulidClockSource clockSource;
     uint64_t snowflakeLastMs; /* SNOWFLAKE per-ms sequence state */
     uint16_t snowflakeSeq;
     /* The last 64- and 32-bit variant ids and their types (+1; 0: none),

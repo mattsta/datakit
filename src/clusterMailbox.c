@@ -190,7 +190,7 @@ struct clusterMailbox {
      * the caller passed an explicit borrowed log via the options struct. */
     aeadNonceLog *nonceLog;
     flexEnvelopeAlgo envelope_algo;
-    uint32_t flags;
+    clusterMailboxFlags flags;
     /* `origin_count` is `_Atomic` so a metrics scraper calling
      * clusterMailboxOriginCount observes a coherent value while the
      * I/O thread races through cmInsertOrigin's increment. See the
@@ -547,7 +547,7 @@ clusterMailboxCreateOpts(const clusterMailboxCreateOptions *opts) {
 clusterMailbox *clusterMailboxCreateEx(hmacKeyring *ring,
                                        flexEnvelopeAlgo envelope_algo,
                                        clusterApplyFn on_apply, void *apply_ctx,
-                                       uint32_t flags) {
+                                       clusterMailboxFlags flags) {
     /* Default-create a nonceLog so existing callers automatically get
      * the (key_id, nonce) reuse defense without code changes. Callers
      * that need to opt out or share a log must use the Opts constructor. */

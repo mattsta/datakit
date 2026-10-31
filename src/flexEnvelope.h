@@ -119,11 +119,14 @@ typedef enum flexEnvelopeFlag {
      * any id their keyring holds. */
     FLEX_ENV_FLAG_KEYID_PRESENT = 1u << 1,
 } flexEnvelopeFlag;
+/* An OR of flexEnvelopeFlag values */
+typedef uint32_t flexEnvelopeFlags;
 
 /* Mask of all flag bits valid in the current envelope version. Any bit
  * set in the wire flags but NOT in this mask causes verify to reject. */
 #define FLEX_ENV_FLAGS_VALID_V1                                                \
-    ((uint32_t)(FLEX_ENV_FLAG_PAYLOAD_FLEX | FLEX_ENV_FLAG_KEYID_PRESENT))
+    ((flexEnvelopeFlags)(FLEX_ENV_FLAG_PAYLOAD_FLEX |                          \
+                         FLEX_ENV_FLAG_KEYID_PRESENT))
 
 /* === Verify policy (caller-supplied, OR-able) =======================
  *
@@ -161,6 +164,8 @@ typedef enum flexEnvelopeVerifyOpt {
      * supplying a keyring-only verify path elsewhere). */
     FLEX_ENV_VERIFY_ACCEPT_WIRE_KEYID = 1u << 9,
 } flexEnvelopeVerifyOpt;
+/* An OR of flexEnvelopeVerifyOpt values */
+typedef uint32_t flexEnvelopeVerifyOpts;
 
 /* Typed error codes returned via flexEnvelopeLastVerifyError after a
  * flexEnvelopeVerify or flexEnvelopeOpen call that returned false. The
@@ -210,8 +215,8 @@ typedef struct flexEnvelopeHeader {
     uint64_t payload_len;
     uint64_t digest_len;
     uint64_t header_size;
-    uint32_t flags;
-    uint32_t key_id; /* valid iff (flags & FLEX_ENV_FLAG_KEYID_PRESENT) */
+    flexEnvelopeFlags flags;
+    hmacKeyId key_id; /* valid iff (flags & FLEX_ENV_FLAG_KEYID_PRESENT) */
     flexEnvelopeAlgo algo;
     uint8_t version;
     /* GUARANTEED zero — populated to {0,0,0} on every successful Peek /
@@ -228,14 +233,14 @@ typedef struct flexEnvelopeWrapParams {
     const uint8_t *key;
     size_t key_len;
     flexEnvelopeAlgo algo;
-    uint32_t on_wire_flags;
+    flexEnvelopeFlags on_wire_flags;
     /* OPTIONAL: when non-zero AND the algorithm is keyed-class, the
      * envelope wire format carries this 32-bit id (FLEX_ENV_FLAG_KEYID_
      * PRESENT is set automatically). Receivers with a bound keyring
      * use the id to auto-resolve the verify key. Zero means "no key
      * id on the wire" — the legacy form, equivalent to omitting the
      * field. */
-    uint32_t key_id;
+    hmacKeyId key_id;
     uint8_t version;
     /* MUST be zero — reserved for future use. flexEnvelopeWrap asserts
      * every byte is 0x00 at entry and refuses the call otherwise.
@@ -299,7 +304,7 @@ typedef struct flexEnvelopeVerifyParams {
      * — the two sides are independent; binding both gives end-to-end
      * coverage even across process boundaries. */
     struct aeadNonceLog *nonceLog;
-    uint32_t opts;
+    flexEnvelopeVerifyOpts opts;
     uint32_t _pad;
 } flexEnvelopeVerifyParams;
 
@@ -315,7 +320,7 @@ bool flexEnvelopeAlgoIsDeprecated(flexEnvelopeAlgo algo);
 /* Exact bytes a wrap of `payload_len` under `algo` with `on_wire_flags`
  * will consume. Returns 0 if algo is unknown or payload_len overflows. */
 size_t flexEnvelopeWrappedSize(uint64_t payload_len, flexEnvelopeAlgo algo,
-                               uint32_t on_wire_flags);
+                               flexEnvelopeFlags on_wire_flags);
 
 /* === Wrap ============================================================
  *
@@ -444,7 +449,7 @@ typedef struct flexEnvelopeSealParams {
     size_t key_len;
     size_t nonce_len;
     flexEnvelopeAlgo algo;
-    uint32_t on_wire_flags;
+    flexEnvelopeFlags on_wire_flags;
     /* OPTIONAL : when non-NULL, Seal calls
      * aeadNonceLogObserve(log, key_id, nonce) BEFORE running the cipher.
      * If Observe returns false (duplicate / chain saturated), Seal aborts
@@ -464,7 +469,7 @@ typedef struct flexEnvelopeSealParams {
      * not carrying KEYID_PRESENT. Ignored when nonceLog is NULL or
      * KEYID_PRESENT is set (then the wire key_id is used). Zero means
      * "no key id available" — nonceLog observation is then skipped. */
-    uint32_t key_id;
+    hmacKeyId key_id;
     uint8_t version;
     /* MUST be zero — reserved for future use. flexEnvelopeSeal asserts
      * every byte is 0x00 at entry and refuses the call otherwise.
@@ -690,7 +695,7 @@ typedef struct flexEnvelopeVerifyStream {
     size_t raw_key_len;
     uint64_t payload_len_declared;
     uint64_t payload_bytes_seen;
-    uint32_t opts;
+    flexEnvelopeVerifyOpts opts;
     flexEnvelopeAlgo algo;
     uint8_t digest_len;
     flexEnvelopeStreamPhase phase;

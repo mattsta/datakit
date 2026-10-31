@@ -430,7 +430,7 @@ static bool persistConfigUsable_(const persistConfig *c) {
     return persistChecksumWritable_(c->checksumType) &&
            (c->compression == PERSIST_COMPRESS_NONE ||
             c->compression == PERSIST_COMPRESS_LZ4) &&
-           c->compressionLevel >= 0 && c->compressionLevel <= LZ4HC_CLEVEL_MAX;
+           c->compressionLevel <= CFLEX_LEVEL_MAX;
 }
 
 persist *persistCreate(const persistOps *ops, const persistConfig *config) {
@@ -672,7 +672,7 @@ persistErr persistLastError(const persist *p) {
     return p->lastError;
 }
 
-uint32_t persistLastExpectedKeyId(const persist *p) {
+hmacKeyId persistLastExpectedKeyId(const persist *p) {
     if (p == nullptr) {
         return 0u;
     }
@@ -799,7 +799,7 @@ typedef struct persistSnapHeader {
     uint32_t formatId;         /* the structure's format (its persistType) */
     uint64_t containerFeatures;
     uint32_t formatVersion; /* the structure format's stamp */
-    uint32_t keyId;         /* attached keyring key_id; 0 = none */
+    hmacKeyId keyId; /* the attached keyring key (HMAC_KEY_ID_INVALID: none) */
     uint64_t formatFeatures;
     uint64_t count;       /* element count reported by p->ops->count */
     uint64_t envelopeLen; /* byte length of the body envelope */
@@ -927,7 +927,10 @@ bool persistSnapshot(persist *p, const void *structure) {
         return false;
     }
 
+    /* When it began (wall clock) and how long it took (monotonic: a
+     * wall-clock step must not stretch or wrap the duration) */
     const uint64_t startTime = timeUtilUs();
+    const uint64_t startMono = timeUtilMonotonicUs();
 
     size_t payloadLen = 0;
     uint8_t *payload = p->ops->snapshot(structure, &payloadLen);
@@ -1052,7 +1055,7 @@ bool persistSnapshot(persist *p, const void *structure) {
     p->stats.snapshotCount++;
     p->stats.snapshotBytes += sizeof(header) + envelopeLen;
     p->stats.lastSnapshotTime = startTime;
-    p->stats.lastSnapshotDuration = timeUtilUs() - startTime;
+    p->stats.lastSnapshotDuration = timeUtilMonotonicUs() - startMono;
 
     return true;
 }
@@ -1184,7 +1187,7 @@ typedef struct persistWALHeader {
     uint32_t formatId;         /* the structure's format (its persistType) */
     uint64_t containerFeatures;
     uint32_t formatVersion; /* the structure format's stamp */
-    uint32_t keyId;         /* attached keyring key_id; 0 = none */
+    hmacKeyId keyId; /* the attached keyring key (HMAC_KEY_ID_INVALID: none) */
     uint64_t formatFeatures;
     uint64_t startSequence; /* sequence of the first entry in this file */
     uint64_t digest;        /* persistHeaderDigest over the bytes before it */
@@ -6846,19 +6849,51 @@ int persistTest(int, char *[]) {
         persistClose(p);
     }
 
+    TEST("a snapshot's stats: when it began on the wall clock, how long it "
+         "took on the monotonic one") {
+        cleaner(flexFree) flex *f = flexNew();
+        for (int i = 0; i < 200; i++) {
+            flexPushBytes(&f, "a row", 5, FLEX_ENDPOINT_TAIL);
+        }
+        persist *p = persistCreate(&persistOpsFlex, nullptr);
+        persistStore *store = persistStoreMemory(0);
+        persistAttachSnapshot(p, store);
+        const uint64_t wallBefore = timeUtilUs();
+        const uint64_t monoBefore = timeUtilMonotonicUs();
+        const bool made = persistSnapshot(p, f);
+        const uint64_t monoTook = timeUtilMonotonicUs() - monoBefore;
+        const uint64_t wallAfter = timeUtilUs();
+        persistStats st;
+        persistGetStats(p, &st);
+        if (!made || st.lastSnapshotTime < wallBefore ||
+            st.lastSnapshotTime > wallAfter ||
+            st.lastSnapshotDuration > monoTook) {
+            ERR("began %" PRIu64 " (wall %" PRIu64 "..%" PRIu64
+                "), took %" PRIu64 " us of %" PRIu64,
+                st.lastSnapshotTime, wallBefore, wallAfter,
+                st.lastSnapshotDuration, monoTook);
+        }
+        persistClose(p);
+    }
+
     TEST("compression: an unknown mode or a level LZ4 does not take is "
          "refused; LZ4 at 0 and 1-12 configures") {
         static const struct {
             int compression;
             int level;
             bool usable;
-        } cases[] = {{0, 0, true},  {1, 0, true},   {1, 1, true},
-                     {1, 12, true}, {1, 13, false}, {1, -1, false},
-                     {2, 0, false}, {3, 0, false}};
+        } cases[] = {{0, 0, true},
+                     {1, 0, true},
+                     {1, 1, true},
+                     {1, CFLEX_LEVEL_MAX, true},
+                     {1, CFLEX_LEVEL_MAX + 1, false},
+                     {1, UINT8_MAX, false},
+                     {2, 0, false},
+                     {3, 0, false}};
         for (size_t i = 0; i < countof(cases); i++) {
             persistConfig config = persistDefaultConfig();
             config.compression = (persistCompression)cases[i].compression;
-            config.compressionLevel = cases[i].level;
+            config.compressionLevel = (cflexLevel)cases[i].level;
             persist *p = persistCreate(&persistOpsFlex, &config);
             if ((p != nullptr) != cases[i].usable) {
                 ERR("compression %d level %d: created %d", cases[i].compression,
