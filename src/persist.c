@@ -514,6 +514,7 @@ bool persistAttachSnapshot(persist *p, persistStore *store) {
      * known to be folded into one */
     p->snapshotStore = store;
     p->snapshotWalSequence = 0;
+    p->keyProven = false; /* the key has read nothing of this store */
     return true;
 }
 
@@ -534,6 +535,7 @@ bool persistAttachWAL(persist *p, persistStore *store) {
     p->walCursorMoved = false;
     p->walAppendOffset = 0;
     p->walHeld = false;
+    p->keyProven = false; /* the key has read nothing of this store */
     return true;
 }
 
@@ -2170,6 +2172,15 @@ bool persistReplayWAL(persist *p, void *structure) {
     if (!persistCheckHeaderKeyId(p, walHdr.keyId)) {
         return false;
     }
+    /* The WAL's first entry is at or past its start: one that starts past
+     * the restored snapshot's watermark follows ops in neither, and its
+     * entries applied to the snapshot would skip them (no snapshot
+     * restored, 0: the caller's structure takes every entry) */
+    if (p->snapshotWalSequence != 0 &&
+        walHdr.startSequence > p->snapshotWalSequence) {
+        p->lastError = PERSIST_ERR_WAL_GAP;
+        return false;
+    }
 
     persistReplayCtx r = {.structure = structure};
     int64_t goodEnd = 0;
@@ -2815,6 +2826,7 @@ const char *persistErrName(persistErr err) {
         PERSIST_NAME_CASE_(PERSIST_ERR_, STRUCTURE_FORMAT);
         PERSIST_NAME_CASE_(PERSIST_ERR_, UNKEYED_ENVELOPE);
         PERSIST_NAME_CASE_(PERSIST_ERR_, REKEY_NEEDS_COMPACT);
+        PERSIST_NAME_CASE_(PERSIST_ERR_, WAL_GAP);
     }
     return "UNKNOWN";
 }
@@ -10793,6 +10805,51 @@ int persistTest(int, char *[]) {
         persistClose(p);
     }
 
+    TEST("an older snapshot with a WAL a later compaction started is a gap") {
+        /* Snapshot A at the start, 3 entries, a compaction into snapshot B
+         * (the WAL starts over after them), 2 entries.  Recovering from A
+         * with that WAL would put entries 4 and 5 on a set missing 1..3:
+         * refused as a gap.  From B, all five recover. */
+        persistConfig config = persistDefaultConfig();
+        config.strictRecovery = true;
+        persist *p = persistCreate(&persistOpsIntset, &config);
+        persistStore *snapA = persistStoreMemory(0);
+        persistStore *snapB = persistStoreMemory(0);
+        persistAttachSnapshot(p, snapA);
+        persistAttachWAL(p, persistStoreMemory(0));
+        cleaner(intsetFree) intset *live = intsetNew();
+        persistSnapshot(p, live);
+        for (int64_t v = 1; v <= 5; v++) {
+            if (v == 4) {
+                persistAttachSnapshot(p, snapB);
+                (void)persistCompact(p, live);
+            }
+            bool added = false;
+            intsetAdd(&live, v, &added);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
+        }
+        persistSync(p);
+        persistAttachSnapshot(p, snapA);
+        intset *fromA = persistRecover(p);
+        const bool gap =
+            fromA == nullptr && persistLastError(p) == PERSIST_ERR_WAL_GAP;
+        if (fromA) {
+            intsetFree(fromA);
+        }
+        persistAttachSnapshot(p, snapB);
+        intset *fromB = persistRecover(p);
+        const size_t members = fromB ? (size_t)intsetCount(fromB) : 0;
+        if (fromB) {
+            intsetFree(fromB);
+        }
+        if (!gap || members != 5) {
+            ERR("from the older snapshot: %s; from the newer: %zu of 5",
+                gap ? "a gap" : "not refused as a gap", members);
+        }
+        persistClose(p);
+        persistStoreClose(snapA); /* detached: not the persist's to close */
+    }
+
     TEST("a WAL opened under another key is refused before it is read") {
         /* Bound to key 1: a snapshot and 3 entries.  Opened again (as a
          * restart does) bound to key 2: the WAL's header names key 1, so
@@ -11136,11 +11193,11 @@ int persistTest(int, char *[]) {
                             "NO_ACTION", "HEALED", "HELD");
         PERSIST_TEST_NAMES_(persistQuarantineReadName, persistQuarantineRead,
                             "RECORD", "END", "DAMAGED");
-        PERSIST_TEST_NAMES_(persistErrName, persistErr, "NONE",
-                            "KEY_GENERATION_MISMATCH", "KEY_NOT_FOUND",
-                            "NO_KEY_ATTACHED", "KEY_ID_MISMATCH",
-                            "CONTAINER_FORMAT", "STRUCTURE_FORMAT",
-                            "UNKEYED_ENVELOPE", "REKEY_NEEDS_COMPACT");
+        PERSIST_TEST_NAMES_(
+            persistErrName, persistErr, "NONE", "KEY_GENERATION_MISMATCH",
+            "KEY_NOT_FOUND", "NO_KEY_ATTACHED", "KEY_ID_MISMATCH",
+            "CONTAINER_FORMAT", "STRUCTURE_FORMAT", "UNKEYED_ENVELOPE",
+            "REKEY_NEEDS_COMPACT", "WAL_GAP");
 #undef PERSIST_TEST_NAMES_
     }
 

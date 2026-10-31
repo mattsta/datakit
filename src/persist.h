@@ -837,6 +837,10 @@ typedef enum [[nodiscard]] persistErr {
                                             another: appends wait for
                                             persistCompact to rewrite both
                                             under the new key */
+    PERSIST_ERR_WAL_GAP = 9, /* the WAL starts after ops the restored
+                                snapshot does not hold (an older snapshot,
+                                or a WAL from another store): its entries
+                                are not applied */
 } persistErr;
 
 /* Read the typed error code from the most recent failed operation on

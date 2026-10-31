@@ -415,16 +415,17 @@ closes and frees any store no persist owns).
 A false return from the core API may leave a typed code in
 `persistLastError(p)`:
 
-| Code                                  | Meaning                                                                                                                        |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `PERSIST_ERR_KEY_GENERATION_MISMATCH` | the bound key was rotated since it was attached                                                                                |
-| `PERSIST_ERR_KEY_NOT_FOUND`           | the bound key id is no longer in the keyring                                                                                   |
-| `PERSIST_ERR_NO_KEY_ATTACHED`         | a keyed algorithm with no key                                                                                                  |
-| `PERSIST_ERR_KEY_ID_MISMATCH`         | the file was written under another key id                                                                                      |
-| `PERSIST_ERR_CONTAINER_FORMAT`        | the file framing's stamp is not readable here                                                                                  |
-| `PERSIST_ERR_STRUCTURE_FORMAT`        | the structure format's stamp is not readable here                                                                              |
-| `PERSIST_ERR_REKEY_NEEDS_COMPACT`     | the key changed after the files were written under another; appends wait for `persistCompact`                                  |
-| `PERSIST_ERR_UNKEYED_ENVELOPE`        | a keyed checksum read an envelope no key made (forged, or older than the keyed checksum); a WAL holding one is held, never cut |
+| Code                                  | Meaning                                                                                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `PERSIST_ERR_KEY_GENERATION_MISMATCH` | the bound key was rotated since it was attached                                                                                       |
+| `PERSIST_ERR_KEY_NOT_FOUND`           | the bound key id is no longer in the keyring                                                                                          |
+| `PERSIST_ERR_NO_KEY_ATTACHED`         | a keyed algorithm with no key                                                                                                         |
+| `PERSIST_ERR_KEY_ID_MISMATCH`         | the file was written under another key id                                                                                             |
+| `PERSIST_ERR_CONTAINER_FORMAT`        | the file framing's stamp is not readable here                                                                                         |
+| `PERSIST_ERR_STRUCTURE_FORMAT`        | the structure format's stamp is not readable here                                                                                     |
+| `PERSIST_ERR_REKEY_NEEDS_COMPACT`     | the key changed after the files were written under another; appends wait for `persistCompact`                                         |
+| `PERSIST_ERR_UNKEYED_ENVELOPE`        | a keyed checksum read an envelope no key made (forged, or older than the keyed checksum); a WAL holding one is held, never cut        |
+| `PERSIST_ERR_WAL_GAP`                 | the WAL starts after ops the restored snapshot does not hold (an older snapshot, or another store's WAL); its entries are not applied |
 
 Other failures (I/O, a malformed file) return false and may leave
 `PERSIST_ERR_NONE`: not every failure path sets a code.
