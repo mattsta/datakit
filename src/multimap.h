@@ -81,6 +81,9 @@ bool multimapInsertIfAbsent(multimap **m, const databox *elements[]);
  * the key) for a change in place: find-or-insert in one search. */
 bool multimapInsertIfAbsentEntry(multimap **m, const databox *elements[],
                                  multimapEntry *me);
+/* A map's sorted bag: every element orders the row, and an identical row
+ * is added again.  A set holds each row once, so on a set this is
+ * multimapInsert (the row added only when absent). */
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
 
 /* multimapInsert for rows arriving in ascending key order: a row at or past

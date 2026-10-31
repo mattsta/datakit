@@ -266,11 +266,11 @@ printf("Flex payload: %zu bytes\n", multimapBytes(original));
 There are three distinct insert behaviors. Choosing the wrong one is the most
 common multimap mistake.
 
-| Call                        | Compares     | Duplicate rows | Existing match      |
-| --------------------------- | ------------ | -------------- | ------------------- |
-| `multimapInsert` (map mode) | element 0    | no             | replaces values     |
-| `multimapInsert` (set mode) | all elements | no             | no-op               |
-| `multimapInsertFullWidth`   | all elements | **yes**        | inserts another row |
+| Call                        | Compares     | Duplicate rows | Existing match                                     |
+| --------------------------- | ------------ | -------------- | -------------------------------------------------- |
+| `multimapInsert` (map mode) | element 0    | no             | replaces values                                    |
+| `multimapInsert` (set mode) | all elements | no             | no-op                                              |
+| `multimapInsertFullWidth`   | all elements | **yes** (map)  | inserts another row; a set's is its insert (no-op) |
 
 ```c
 /* Insert or replace by key; returns true when an existing row matched */
@@ -344,7 +344,9 @@ guarantees that no two rows are identical across all elements.
 ### Full-Width Insert
 
 `multimapInsertFullWidth()` is the duplicates-allowed sorted bag: all elements
-participate in the sort order and identical rows may repeat.
+participate in the sort order and identical rows may repeat. A set holds each
+row once, so on a set it is `multimapInsert()`: an identical row is not added
+again.
 
 ```c
 multimap *timeseries = multimapNew(2);

@@ -1902,8 +1902,12 @@ bool multimapFullInsert(multimapFull *m, const databox *elements[]) {
 
 bool multimapFullInsertReplacing(multimapFull *m, const databox *elements[],
                                  databox *replacedOut) {
-    /* Step 1: find matching map for range. */
-    const multimapFullIdx mapIdx = multimapFullBinarySearch(m, elements[0]);
+    /* Step 1: find matching map for range.  A set's row goes by the whole
+     * row: one key's rows can span maps, and only the map the whole row
+     * orders into can hold its copy (the per-map dedupe sees no other) */
+    const multimapFullIdx mapIdx =
+        m->mapIsSet ? multimapFullBinarySearchFullWidth(m, elements)
+                    : multimapFullBinarySearch(m, elements[0]);
     return multimapFullInsert_(m, elements, mapIdx, replacedOut);
 }
 
@@ -1984,7 +1988,10 @@ void multimapFullAppend(multimapFull *m, const databox *elements[]) {
     databoxWide wide;
     flexGetByTypeInto(flexIndex(highest, -(int32_t)m->elementsPerEntry), &last,
                       &wide);
-    if (databoxCompare(elements[0], &last) < 0) {
+    /* A set's row at the last key may repeat one in an earlier map (the
+     * key's rows can span maps): it goes where an insert puts it */
+    const int vsLast = databoxCompare(elements[0], &last);
+    if (vsLast < 0 || (m->mapIsSet && vsLast == 0)) {
         multimapFullInsert(m, elements);
         return;
     }
@@ -2024,7 +2031,9 @@ bool multimapFullGetUnderlyingEntryFullWidth(multimapFull *m,
 static bool multimapFullGetUnderlyingEntryGetEntry(multimapFull *m,
                                                    const databox *key,
                                                    multimapEntry *me) {
-    me->mapIdx = multimapFullBinarySearch(m, key);
+    /* A set's key whose rows begin in an earlier map starts there */
+    me->mapIdx = m->mapIsSet ? multimapFullKeyMap_(m, key, false, nullptr)
+                             : multimapFullBinarySearch(m, key);
     me->map = getMapPtr(m, me->mapIdx);
     me->fe = flexFindByTypeSortedWithMiddleGetEntry(
         *me->map, m->elementsPerEntry, key,

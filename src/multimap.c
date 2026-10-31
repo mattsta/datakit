@@ -781,6 +781,13 @@ bool multimapInsertIfAbsent(multimap **m, const databox *elements[]) {
 }
 
 void multimapInsertFullWidth(multimap **m, const databox *elements[]) {
+    /* A set holds each row once: its full-width insert is its insert,
+     * which adds the row only when absent */
+    if (multimapIsSet(*m)) {
+        (void)multimapInsert(m, elements);
+        return;
+    }
+
     /* Insert new elements */
     MULTIMAP_UPDATE_(, *m, InsertFullWidth, elements);
 
@@ -4589,6 +4596,1061 @@ static int32_t multimapDeleteEntrySweep_(void) {
 /* A report slot's value before a call, so a test tells a slot the call
  * left alone from one it wrote */
 static constexpr int64_t MM_TEST_NOT_WRITTEN = INT64_MIN;
+
+/* ====================================================================
+ * The model test: random sequences of every public call against a plain
+ * sorted array, every read checked, through every tier, in both modes.
+ * A map's row is [key, payload bytes, counter]; a set's is [key, second].
+ * ==================================================================== */
+static constexpr uint32_t MM_MODEL_CAP = 1600;
+
+typedef struct mmModelRow_ {
+    int64_t k;
+    int64_t a;     /* a set's second element; a map's counter */
+    uint32_t seed; /* a map's payload bytes, from seed and len */
+    uint8_t len;
+    bool known; /* the payload's bytes are known (false after a grow) */
+} mmModelRow_;
+
+typedef struct mmModel_ {
+    bool set;
+    uint32_t n;
+    uint32_t events[6]; /* configuration events made, by kind */
+    mmModelRow_ r[MM_MODEL_CAP];
+} mmModel_;
+
+defcleanerName(mmModel_ *, zfree, MmModel);
+
+/* What the last disagreeing step saw, for its report */
+static char mmModelWhy_[160];
+
+/* The model's own random stream, so a seed replays a run */
+static uint64_t mmModelRng_;
+static uint32_t mmModelRand_(void) {
+    return (uint32_t)dkSplitmix64Next(&mmModelRng_);
+}
+
+static void mmModelPayload_(uint32_t seed, uint8_t len, uint8_t *out) {
+    for (uint8_t i = 0; i < len; i++) {
+        out[i] = (uint8_t)('a' + (seed + i * 7u) % 26);
+    }
+}
+
+/* An integer box's value; false for anything else */
+static bool mmModelInt_(const databox *b, int64_t *v) {
+    if (b->type == DATABOX_SIGNED_64) {
+        *v = b->data.i64;
+        return true;
+    }
+    if (b->type == DATABOX_UNSIGNED_64 && b->data.u64 <= (uint64_t)INT64_MAX) {
+        *v = (int64_t)b->data.u64;
+        return true;
+    }
+    return false;
+}
+
+/* Rows sort by key, then (a set) by the second element */
+static int mmModelCmp_(const mmModel_ *M, int64_t k, int64_t a, uint32_t i) {
+    const mmModelRow_ *r = &M->r[i];
+    if (k != r->k) {
+        return k < r->k ? -1 : 1;
+    }
+    if (!M->set || a == r->a) {
+        return 0;
+    }
+    return a < r->a ? -1 : 1;
+}
+
+/* The first row at or past (k, a); a map orders by the key alone */
+static uint32_t mmModelLower_(const mmModel_ *M, int64_t k, int64_t a) {
+    uint32_t lo = 0;
+    uint32_t hi = M->n;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (mmModelCmp_(M, k, a, mid) > 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/* The first row with key k, or -1 */
+static int32_t mmModelKey_(const mmModel_ *M, int64_t k) {
+    const uint32_t at = mmModelLower_(M, k, INT64_MIN);
+    return at < M->n && M->r[at].k == k ? (int32_t)at : -1;
+}
+
+static void mmModelInsertAt_(mmModel_ *M, uint32_t at, mmModelRow_ row) {
+    memmove(&M->r[at + 1], &M->r[at], (M->n - at) * sizeof(M->r[0]));
+    M->r[at] = row;
+    M->n++;
+}
+
+static void mmModelRemoveAt_(mmModel_ *M, uint32_t at) {
+    memmove(&M->r[at], &M->r[at + 1], (M->n - at - 1) * sizeof(M->r[0]));
+    M->n--;
+}
+
+/* The boxes of 'row' (a map's payload bytes in 'buf') */
+static void mmModelBoxes_(const mmModel_ *M, const mmModelRow_ *row,
+                          databox boxes[3], uint8_t buf[64]) {
+    boxes[0] = DATABOX_SIGNED(row->k);
+    if (M->set) {
+        boxes[1] = DATABOX_SIGNED(row->a);
+        return;
+    }
+    mmModelPayload_(row->seed, row->len, buf);
+    boxes[1] = databoxNewBytes(buf, row->len);
+    boxes[2] = DATABOX_SIGNED(row->a);
+}
+
+/* A payload box holds row's bytes (only their length once unknown) */
+static bool mmModelPayloadIs_(const mmModelRow_ *row, const databox *b) {
+    if (!DATABOX_IS_BYTES(b) || b->len != row->len) {
+        return false;
+    }
+    if (!row->known) {
+        return true;
+    }
+    uint8_t want[64];
+    mmModelPayload_(row->seed, row->len, want);
+    return row->len == 0 || memcmp(databoxCBytes(b), want, row->len) == 0;
+}
+
+/* Full-width boxes 'got' hold 'row' */
+static bool mmModelRowIs_(const mmModel_ *M, const mmModelRow_ *row,
+                          databox *const got[]) {
+    int64_t k = 0;
+    int64_t a = 0;
+    if (!mmModelInt_(got[0], &k) || k != row->k) {
+        return false;
+    }
+    if (M->set) {
+        return mmModelInt_(got[1], &a) && a == row->a;
+    }
+    return mmModelPayloadIs_(row, got[1]) && mmModelInt_(got[2], &a) &&
+           a == row->a;
+}
+
+/* A fresh row for key k */
+static mmModelRow_ mmModelNewRow_(const mmModel_ *M, int64_t k) {
+    mmModelRow_ row = {.k = k, .known = true};
+    row.a = M->set ? (int64_t)(mmModelRand_() % 4)
+                   : (int64_t)(mmModelRand_() % 1000);
+    row.seed = mmModelRand_();
+    row.len = (uint8_t)(mmModelRand_() % 40);
+    return row;
+}
+
+/* Apply a whole-row insert of 'row' to the model: a map replaces the
+ * key's row, a set adds the row when absent.  True when one was there. */
+static bool mmModelPut_(mmModel_ *M, mmModelRow_ row) {
+    const uint32_t at = mmModelLower_(M, row.k, row.a);
+    const bool there = at < M->n && mmModelCmp_(M, row.k, row.a, at) == 0;
+    if (there) {
+        M->r[at] = row;
+    } else {
+        mmModelInsertAt_(M, at, row);
+    }
+    return there;
+}
+
+/* @model: src/multimap.h */
+/* The multimap holds exactly the model's rows, in order */
+static int mmModelVerify_(const multimap *m, const mmModel_ *M, uint32_t step) {
+    int err = 0;
+    const uint32_t epe = M->set ? 2 : 3;
+    multimapIterator it;
+    multimapIteratorInit(m, &it, true);
+    databox out[3] = {};
+    databox *got[3] = {&out[0], &out[1], &out[2]};
+    uint32_t i = 0;
+    bool same = true;
+    while (multimapIteratorNext(&it, got)) {
+        if (i >= M->n || !mmModelRowIs_(M, &M->r[i], got)) {
+            same = false;
+        }
+        i++;
+    }
+    if (!same || i != M->n || multimapCount(m) != M->n ||
+        multimapElementsPerEntry(m) != epe || multimapIsSet(m) != M->set) {
+        ERR("step %" PRIu32 ": the multimap holds %" PRIu32 " rows (%s), the "
+            "model %" PRIu32,
+            step, i, same ? "in order" : "not the model's", M->n);
+    }
+    return err;
+}
+
+/* ProcessUntil's walker: each row is the next model row; stops after
+ * 'limit' */
+typedef struct mmModelWalk_ {
+    const mmModel_ *M;
+    uint32_t at;
+    int32_t dir;
+    uint32_t seen;
+    uint32_t limit;
+    bool bad;
+} mmModelWalk_;
+
+static bool mmModelWalker_(void *ctx, const databox *elements[]) {
+    mmModelWalk_ *w = ctx;
+    const mmModelRow_ *row = &w->M->r[w->at];
+    if (!mmModelRowIs_(w->M, row, (databox *const *)elements)) {
+        w->bad = true;
+    }
+    w->seen++;
+    w->at = (uint32_t)((int32_t)w->at + w->dir);
+    return w->seen < w->limit;
+}
+
+/* FieldIncrByIf's question: yes every other time */
+static bool mmModelProceed_(void *ctx) {
+    uint32_t *asked = ctx;
+    return (*asked)++ % 2 == 0;
+}
+
+/* @model: src/multimap.h */
+/* One random call on key k against the model; true when it agreed */
+static bool mmModelStep_(multimap **m, mmModel_ *M, uint32_t op, int64_t k) {
+    const int32_t at = mmModelKey_(M, k);
+    const uint32_t epe = M->set ? 2 : 3;
+    mmModelRow_ row = mmModelNewRow_(M, k);
+    databox in[3];
+    uint8_t buf[64];
+    mmModelBoxes_(M, &row, in, buf);
+    const databox *ins[3] = {&in[0], &in[1], &in[2]};
+    databox out[3] = {};
+    databox *got[3] = {&out[0], &out[1], &out[2]};
+    const databox key = DATABOX_SIGNED(k);
+    /* The exact row k names in a set (its first) or a map */
+    const uint32_t rowAt = mmModelLower_(M, k, M->set ? row.a : INT64_MIN);
+    const bool rowThere = rowAt < M->n && mmModelCmp_(M, k, row.a, rowAt) == 0;
+    bool ok = true;
+    switch (op) {
+    case 0: /* insert: a map replaces, a set adds the row when absent */
+        ok = multimapInsert(m, ins) == mmModelPut_(M, row);
+        break;
+    case 1: { /* a replace reports the counter it overwrote */
+        databox replaced[2] = {};
+        const bool was = multimapInsertReplacing(m, ins, replaced);
+        int64_t old = 0;
+        if (!M->set && at >= 0) {
+            ok = was && DATABOX_IS_BYTES(&replaced[0]) &&
+                 replaced[0].len == M->r[at].len &&
+                 mmModelInt_(&replaced[1], &old) && old == M->r[at].a;
+        }
+        ok = ok && was == mmModelPut_(M, row);
+        break;
+    }
+    case 2:
+        ok = multimapInsertIfAbsent(m, ins) == (at < 0);
+        if (at < 0) {
+            mmModelPut_(M, row);
+        }
+        break;
+    case 3: { /* find-or-insert, then (a map) count up the found row */
+        multimapEntry me;
+        const bool inserted = multimapInsertIfAbsentEntry(m, ins, &me);
+        ok = inserted == (at < 0);
+        if (at < 0) {
+            mmModelPut_(M, row);
+        } else if (!M->set) {
+            int64_t now = 0;
+            ok = ok && multimapFieldIncrEntry(m, &me, 2, 3, &now) &&
+                 now == M->r[at].a + 3;
+            M->r[at].a += 3;
+        }
+        break;
+    }
+    case 4: { /* an ascending append (or, at random, any key) */
+        if (M->n && mmModelRand_() % 2) {
+            row.k = M->r[M->n - 1].k + 1 + (int64_t)(mmModelRand_() % 3);
+            mmModelBoxes_(M, &row, in, buf);
+        }
+        multimapAppend(m, ins);
+        mmModelPut_(M, row);
+        break;
+    }
+    case 5: /* a set's full-width insert adds the row when absent */
+        if (M->set) {
+            multimapInsertFullWidth(m, ins);
+            mmModelPut_(M, row);
+        } else {
+            ok = multimapExists(*m, &key) == (at >= 0);
+        }
+        break;
+    case 6: {
+        /* the exact row, as present or absent */
+        const bool same = M->set ? rowThere
+                                 : at >= 0 && M->r[at].len == row.len &&
+                                       M->r[at].a == row.a &&
+                                       M->r[at].seed == row.seed;
+        ok = multimapExistsFullWidth(*m, ins) == same &&
+             multimapExists(*m, &key) == (at >= 0);
+        break;
+    }
+    case 7: { /* the first row's values */
+        databox vals[2] = {};
+        databox *valp[2] = {&vals[0], &vals[1]};
+        const bool found = mmModelRand_() % 2
+                               ? multimapLookupInto(*m, &key, vals, epe - 1)
+                               : multimapLookup(*m, &key, valp);
+        ok = found == (at >= 0);
+        if (found) {
+            got[0] = (databox *)&key;
+            got[1] = &vals[0];
+            got[2] = &vals[1];
+            ok = mmModelRowIs_(M, &M->r[at], got);
+        }
+        break;
+    }
+    case 8: { /* a position from either end */
+        const int64_t pos =
+            M->n ? (int64_t)(mmModelRand_() % (2 * M->n)) - (int64_t)M->n : 0;
+        const bool found = multimapLookupByPosition(*m, pos, got);
+        const int64_t idx = pos < 0 ? (int64_t)M->n + pos : pos;
+        ok = found == (idx >= 0 && idx < (int64_t)M->n) &&
+             (!found || mmModelRowIs_(M, &M->r[idx], got));
+        break;
+    }
+    case 9: { /* first and last */
+        databox first[3] = {};
+        databox last[3] = {};
+        const bool f = multimapFirstInto(*m, first, epe);
+        const bool l = multimapLastInto(*m, last, epe);
+        databox *fp[3] = {&first[0], &first[1], &first[2]};
+        databox *lp[3] = {&last[0], &last[1], &last[2]};
+        ok = f == (M->n > 0) && l == (M->n > 0) &&
+             (!f || (mmModelRowIs_(M, &M->r[0], fp) &&
+                     mmModelRowIs_(M, &M->r[M->n - 1], lp))) &&
+             multimapFirst(*m, got) == f && multimapLast(*m, got) == l;
+        break;
+    }
+    case 10: { /* a random row is one of the model's */
+        multimapEntry me;
+        const bool picked =
+            multimapRandomValue(*m, mmModelRand_() % 2, got, &me);
+        ok = picked == (M->n > 0);
+        if (picked) {
+            int64_t rk = 0;
+            const int32_t rat =
+                mmModelInt_(got[0], &rk) ? mmModelKey_(M, rk) : -1;
+            ok = rat >= 0;
+        }
+        break;
+    }
+    case 11:
+        ok = multimapDelete(m, &key) == (at >= 0);
+        if (at >= 0) {
+            mmModelRemoveAt_(M, (uint32_t)at);
+        }
+        break;
+    case 12: { /* the deleted row's values, reported or taken */
+        databox vals[2] = {};
+        const bool taking = mmModelRand_() % 2;
+        const bool gone = taking ? multimapDeleteTaking(m, &key, vals)
+                                 : multimapDeleteReporting(m, &key, vals);
+        ok = gone == (at >= 0);
+        if (gone) {
+            int64_t a = 0;
+            const mmModelRow_ *r = &M->r[at];
+            if (M->set) {
+                ok = mmModelInt_(&vals[0], &a) && a == r->a;
+            } else {
+                ok = DATABOX_IS_BYTES(&vals[0]) && vals[0].len == r->len &&
+                     (!taking || mmModelPayloadIs_(r, &vals[0])) &&
+                     mmModelInt_(&vals[1], &a) && a == r->a;
+            }
+            snprintf(mmModelWhy_, sizeof(mmModelWhy_),
+                     "%s: value types %d/%d lens %zu/%zu (want len %u, "
+                     "counter %" PRId64 " got %" PRId64 ")",
+                     taking ? "taking" : "reporting", (int)vals[0].type,
+                     (int)vals[1].type, (size_t)vals[0].len,
+                     (size_t)vals[1].len, (unsigned)r->len, r->a, a);
+            if (taking) {
+                databoxFreeData(&vals[0]);
+                databoxFreeData(&vals[1]);
+            }
+            mmModelRemoveAt_(M, (uint32_t)at);
+        }
+        break;
+    }
+    case 13: { /* a full-width delete takes only the exact row */
+        const bool exact = M->set ? rowThere
+                                  : at >= 0 && M->r[at].len == row.len &&
+                                        M->r[at].a == row.a &&
+                                        M->r[at].seed == row.seed;
+        ok = multimapDeleteFullWidth(m, ins) == exact;
+        if (exact) {
+            mmModelRemoveAt_(M, M->set ? rowAt : (uint32_t)at);
+        }
+        break;
+    }
+    case 14: { /* the deleted key as stored */
+        databox found = {};
+        const bool gone = multimapDeleteWithFound(m, &key, &found);
+        int64_t fk = 0;
+        ok = gone == (at >= 0) &&
+             (!gone || (mmModelInt_(&found, &fk) && fk == k));
+        if (gone) {
+            mmModelRemoveAt_(M, (uint32_t)at);
+        }
+        break;
+    }
+    case 15: { /* a row by position */
+        const int64_t pos =
+            M->n ? (int64_t)(mmModelRand_() % (2 * M->n)) - (int64_t)M->n : 0;
+        const int64_t idx = pos < 0 ? (int64_t)M->n + pos : pos;
+        const bool inRange = idx >= 0 && idx < (int64_t)M->n;
+        ok = multimapDeleteByPosition(m, pos) == inRange;
+        if (inRange) {
+            mmModelRemoveAt_(M, (uint32_t)idx);
+        }
+        break;
+    }
+    case 16: { /* a random row taken out, from the tail at random */
+        const bool picked =
+            multimapDeleteRandomValue(m, mmModelRand_() % 2, got);
+        ok = picked == (M->n > 0);
+        if (picked) {
+            int64_t rk = 0;
+            int64_t ra = 0;
+            uint32_t ri = UINT32_MAX;
+            if (mmModelInt_(got[0], &rk)) {
+                if (M->set) {
+                    if (mmModelInt_(got[1], &ra)) {
+                        ri = mmModelLower_(M, rk, ra);
+                    }
+                } else if (mmModelKey_(M, rk) >= 0) {
+                    ri = (uint32_t)mmModelKey_(M, rk);
+                }
+            }
+            ok = ri < M->n && mmModelRowIs_(M, &M->r[ri], got);
+            for (uint32_t e = 0; e < epe; e++) {
+                databoxFreeData(got[e]);
+            }
+            if (ri < M->n) {
+                mmModelRemoveAt_(M, ri);
+            }
+        }
+        break;
+    }
+    case 17: { /* a small key range */
+        const int64_t hi = k + (int64_t)(mmModelRand_() % 4);
+        const databox lo = DATABOX_SIGNED(k);
+        const databox hib = DATABOX_SIGNED(hi);
+        uint32_t want = 0;
+        while (true) {
+            const uint32_t from = mmModelLower_(M, k, INT64_MIN);
+            if (from >= M->n || M->r[from].k > hi) {
+                break;
+            }
+            mmModelRemoveAt_(M, from);
+            want++;
+        }
+        ok = multimapDeleteRange(m, &lo, &hib) == want;
+        break;
+    }
+    case 18: { /* a predicate near an end, or an equal key */
+        static const multimapCondition conds[] = {
+            MULTIMAP_CONDITION_LESS_THAN, MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+            MULTIMAP_CONDITION_EQUAL, MULTIMAP_CONDITION_GREATER_THAN,
+            MULTIMAP_CONDITION_GREATER_THAN_EQUAL};
+        const multimapCondition c = conds[mmModelRand_() % countof(conds)];
+        int64_t bound = k;
+        if (M->n && c != MULTIMAP_CONDITION_EQUAL) {
+            const bool low = c == MULTIMAP_CONDITION_LESS_THAN ||
+                             c == MULTIMAP_CONDITION_LESS_THAN_EQUAL;
+            bound = low ? M->r[0].k + 2 : M->r[M->n - 1].k - 2;
+        }
+        const multimapPredicate p = {.condition = c,
+                                     .compareAgainst = DATABOX_SIGNED(bound)};
+        bool any = false;
+        for (uint32_t i = M->n; i-- > 0;) {
+            const databox rk = DATABOX_SIGNED(M->r[i].k);
+            if (multimapProcessPredicate(&p, &rk)) {
+                mmModelRemoveAt_(M, i);
+                any = true;
+            }
+        }
+        ok = multimapDeleteByPredicate(m, &p) == any;
+        break;
+    }
+    case 19: { /* counters: a map's third field; a set refuses */
+        int64_t now = 0;
+        const int64_t inc = (int64_t)(mmModelRand_() % 7) - 3;
+        const bool counted = multimapFieldIncrBy(m, &key, 2, inc, &now);
+        const bool can = !M->set && at >= 0;
+        ok = counted == can && (!can || now == M->r[at].a + inc) &&
+             !multimapFieldIncrBy(m, &key, 0, 1, nullptr) &&
+             (M->set || !multimapFieldIncrBy(m, &key, 1, 1, nullptr));
+        if (can) {
+            M->r[at].a += inc;
+            ok = ok && multimapFieldIncr(m, &key, 2, 1) == M->r[at].a + 1;
+            M->r[at].a += 1;
+        }
+        break;
+    }
+    case 20: { /* a counter that asks first */
+        uint32_t asked = mmModelRand_() % 2;
+        const bool yes = asked % 2 == 0;
+        int64_t now = 0;
+        const bool counted =
+            multimapFieldIncrByIf(m, &key, 2, 5, &now, mmModelProceed_, &asked);
+        const bool can = !M->set && at >= 0;
+        ok = counted == (can && yes) &&
+             (!can || now == M->r[at].a + (yes ? 5 : 0));
+        if (can && yes) {
+            M->r[at].a += 5;
+        }
+        break;
+    }
+    case 21: { /* the row in place: its counter replaced, or deleted */
+        multimapEntry me;
+        const bool found = multimapGetUnderlyingEntry(*m, &key, &me);
+        ok = found == (at >= 0);
+        if (!found) {
+            break;
+        }
+        if (mmModelRand_() % 2) {
+            multimapDeleteEntry(m, &me);
+            mmModelRemoveAt_(M, (uint32_t)at);
+            break;
+        }
+        me.fe = flexNext(*me.map, me.fe);
+        if (!M->set) {
+            me.fe = flexNext(*me.map, me.fe);
+        }
+        const databox now = DATABOX_SIGNED(row.a);
+        /* A set's every element orders it: refused */
+        ok = multimapReplaceEntry(m, &me, &now) == !M->set;
+        if (!M->set) {
+            M->r[at].a = row.a;
+        }
+        break;
+    }
+    case 22: { /* the exact row found whole, then deleted in place */
+        multimapEntry me;
+        const bool exact = M->set ? rowThere
+                                  : at >= 0 && M->r[at].len == row.len &&
+                                        M->r[at].a == row.a &&
+                                        M->r[at].seed == row.seed;
+        const bool found = multimapGetUnderlyingEntryFullWidth(*m, ins, &me);
+        ok = found == exact;
+        if (found) {
+            multimapDeleteEntry(m, &me);
+            mmModelRemoveAt_(M, M->set ? rowAt : (uint32_t)at);
+        }
+        break;
+    }
+    case 23: /* a map's values rewritten whole (a set refuses) */
+        if (!M->set && at >= 0) {
+            multimapEntryReplace(m, &key, &ins[1]);
+            row.k = k;
+            M->r[at] = row;
+        }
+        break;
+    case 24: { /* a map's payload resized: its length known, its grown
+                * bytes not */
+        if (M->set || at < 0) {
+            break;
+        }
+        const uint8_t len = (uint8_t)(mmModelRand_() % 40);
+        if (mmModelRand_() % 2) {
+            multimapEntryResize(m, &key, len);
+        } else {
+            multimapEntry me;
+            ok = multimapGetUnderlyingEntry(*m, &key, &me);
+            me.fe = flexNext(*me.map, me.fe);
+            ok = ok && multimapResizeEntry(m, &me, len);
+        }
+        mmModelRow_ *r = &M->r[at];
+        r->known = r->known && len <= r->len;
+        r->len = len;
+        break;
+    }
+    case 25: { /* iterate from a key, forward, a few rows */
+        multimapIterator it;
+        const uint32_t from = mmModelLower_(M, k, INT64_MIN);
+        const bool started = multimapIteratorInitAt(*m, &it, true, &key);
+        ok = started == (from < M->n);
+        databoxWide slots[3];
+        for (uint32_t i = from; ok && started && i < M->n && i < from + 5;
+             i++) {
+            const bool next =
+                i % 2 ? multimapIteratorNextWithSlots(&it, got, slots)
+                      : multimapIteratorNextInto(&it, out, epe);
+            ok = next && mmModelRowIs_(M, &M->r[i], got);
+        }
+        break;
+    }
+    case 26: { /* walk from either end while the keys meet a predicate */
+        const bool forward = mmModelRand_() % 2;
+        const multimapPredicate p = {
+            .condition = forward ? MULTIMAP_CONDITION_LESS_THAN_EQUAL
+                                 : MULTIMAP_CONDITION_GREATER_THAN_EQUAL,
+            .compareAgainst = DATABOX_SIGNED(k)};
+        mmModelWalk_ w = {.M = M,
+                          .at = forward ? 0 : M->n - 1,
+                          .dir = forward ? 1 : -1,
+                          .limit = 1 + mmModelRand_() % 20};
+        uint32_t want = 0;
+        for (uint32_t i = 0; i < M->n && want < w.limit; i++) {
+            const uint32_t idx = forward ? i : M->n - 1 - i;
+            if (forward ? M->r[idx].k > k : M->r[idx].k < k) {
+                break;
+            }
+            want++;
+        }
+        ok =
+            multimapProcessUntil(*m, &p, forward, mmModelWalker_, &w) == want &&
+            !w.bad;
+        break;
+    }
+    default: { /* what it reports of itself */
+        dkTierStats st = {};
+        multimapStats(*m, &st);
+        ok = multimapCount(*m) == M->n && (M->n == 0 || multimapBytes(*m)) &&
+             st.count == M->n && multimapGetType(*m) == st.tier;
+        break;
+    }
+    }
+    return ok;
+}
+
+/* @model: src/multimap.h */
+/* Key set operations against the model: 'b' holds every third model key
+ * and a few others */
+static int mmModelKeySets_(const multimap *m, const mmModel_ *M,
+                           uint32_t step) {
+    int err = 0;
+    const uint32_t epe = M->set ? 2 : 3;
+    cleaner(multimapFree) multimap *b = multimapNew(epe);
+    cleanerName(zfree, MmModel) mmModel_ *B = zcalloc(1, sizeof(*B));
+    B->set = M->set;
+    for (uint32_t i = 0; i < M->n; i += 3) {
+        mmModelRow_ row = mmModelNewRow_(B, M->r[i].k);
+        databox in[3];
+        uint8_t buf[64];
+        mmModelBoxes_(B, &row, in, buf);
+        const databox *ins[3] = {&in[0], &in[1], &in[2]};
+        multimapInsert(&b, ins);
+        mmModelPut_(B, row);
+    }
+    /* The keys alone (1-element maps): copied, then intersected and
+     * differenced as the key set operations take them */
+    cleaner(multimapFree) multimap *keysA = multimapNew(1);
+    cleaner(multimapFree) multimap *keysB = multimapNew(1);
+    multimapCopyKeys(&keysA, m);
+    multimapCopyKeys(&keysB, b);
+    uint32_t onlyA = 0;
+    uint32_t both = 0;
+    uint32_t distinctA = 0;
+    for (uint32_t i = 0; i < M->n; i++) {
+        if (i && M->r[i].k == M->r[i - 1].k) {
+            continue; /* a set's further rows of one key */
+        }
+        distinctA++;
+        if (mmModelKey_(B, M->r[i].k) >= 0) {
+            both++;
+        } else {
+            onlyA++;
+        }
+    }
+    uint32_t distinctB = 0;
+    for (uint32_t i = 0; i < B->n; i++) {
+        distinctB += !i || B->r[i].k != B->r[i - 1].k;
+    }
+    const uint32_t onlyB = distinctB - both;
+    for (int kind = 0; kind < 3; kind++) {
+        cleaner(multimapFree) multimap *dst = multimapNew(1);
+        multimapIterator ia;
+        multimapIterator ib;
+        if (kind == 0) { /* from the full rows: any widths */
+            multimapIteratorInit(m, &ia, true);
+            multimapIteratorInit(b, &ib, true);
+            multimapIntersectKeys(&dst, &ia, &ib);
+        } else {
+            multimapIteratorInit(keysA, &ia, true);
+            multimapIteratorInit(keysB, &ib, true);
+            multimapDifferenceKeys(&dst, &ia, &ib, kind == 2);
+        }
+        const uint32_t want = kind == 0   ? both
+                              : kind == 1 ? onlyA
+                                          : onlyA + onlyB;
+        if (multimapCount(dst) != want) {
+            ERR("step %" PRIu32 ": key set operation %d holds %zu keys, "
+                "want %" PRIu32,
+                step, kind, multimapCount(dst), want);
+        }
+    }
+    if (multimapCount(keysA) != distinctA) {
+        ERR("step %" PRIu32 ": the copied keys are %zu, want %" PRIu32, step,
+            multimapCount(keysA), distinctA);
+    }
+    return err;
+}
+
+/* @model: src/multimap.h */
+static int multimapTestModel_(bool set, flexCapSizeLimit limit, uint32_t seed) {
+    int err = 0;
+    cleanerName(zfree, MmModel) mmModel_ *M = zcalloc(1, sizeof(*M));
+    M->set = set;
+    const uint32_t epe = set ? 2 : 3;
+    multimap *m = seed % 2 ? multimapNewConfigure(epe, set, limit)
+                  : set    ? multimapSetNew(epe)
+                           : multimapNewLimit(epe, limit);
+    mmModelRng_ = seed;
+    uint32_t tiers = 0;
+    const uint32_t steps = 6000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        /* Grow, then drain to Small again */
+        const bool draining = step >= steps * 2 / 3;
+        const int64_t k = (int64_t)(mmModelRand_() % (set ? 300u : 700u));
+        uint32_t op = mmModelRand_() % 28;
+        if (draining && op <= 5 && mmModelRand_() % 3) {
+            op = 11 + mmModelRand_() % 6; /* a delete instead */
+        } else if (!draining && op >= 11 && op <= 18 && mmModelRand_() % 4) {
+            op = mmModelRand_() % 6; /* an insert instead, to grow */
+        }
+        if (M->n >= MM_MODEL_CAP - 8 && op <= 5) {
+            op = 11;
+        }
+        if (!mmModelStep_(&m, M, op, k)) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " on key %" PRId64
+                " (%s, %" PRIu32 " rows, tier %d, seed %" PRIu32 "): %s",
+                step, op, k, set ? "set" : "map", M->n, (int)multimapGetType(m),
+                seed, mmModelWhy_);
+            break;
+        }
+        tiers |= 1u << multimapGetType(m);
+        if (step % 25 == 24 && mmModelVerify_(m, M, step)) {
+            ERR("model step %" PRIu32 ": after op %" PRIu32 " on key %" PRId64
+                " (%s, seed %" PRIu32 ", tier %d)",
+                step, op, k, set ? "set" : "map", seed,
+                (int)multimapGetType(m));
+            break;
+        }
+        if (step % 500 == 499) {
+            multimapVerify(m);
+        }
+        if (step % 97 != 96) {
+            continue;
+        }
+        /* A configuration event, with the multimap as the steps left it */
+        const uint32_t event = mmModelRand_() % countof(M->events);
+        M->events[event]++;
+        switch (event) {
+        case 0: {
+            cleaner(multimapFree) multimap *copy = multimapCopy(m);
+            err += mmModelVerify_(copy, M, step);
+            break;
+        }
+        case 1: { /* a dump rebuilt, and taken in its place */
+            multimap *back = multimapNewFromDump(epe, set, multimapLimit(m),
+                                                 multimapDump(m));
+            err += back ? mmModelVerify_(back, M, step) : 1;
+            if (back) {
+                multimapFree(m);
+                m = back;
+            }
+            break;
+        }
+        case 2:
+            multimapCompact(&m);
+            break;
+        case 3:
+            err += mmModelKeySets_(m, M, step);
+            break;
+        case 4: /* emptied, now and then */
+            if (mmModelRand_() % 4 == 0) {
+                multimapReset(&m);
+                M->n = 0;
+            }
+            break;
+        default:
+            if (multimapLimit(m) != limit &&
+                (seed % 2 || !set)) { /* SetNew takes the default limit */
+                ERR("step %" PRIu32 ": the limit is %d, made with %d", step,
+                    (int)multimapLimit(m), (int)limit);
+            }
+            break;
+        }
+        err += mmModelVerify_(m, M, step);
+    }
+    err += mmModelVerify_(m, M, steps);
+    multimapFree(m);
+    /* A SetNew set has the default limit: Medium, then, is as far as the
+     * model's rows reach */
+    const multimapType top =
+        seed % 2 || !set ? MULTIMAP_TYPE_FULL : MULTIMAP_TYPE_MEDIUM;
+    if (!(tiers & (1u << top)) || !(tiers & (1u << MULTIMAP_TYPE_SMALL))) {
+        ERR("the %s model did not run through every tier (seen %#x)",
+            set ? "set" : "map", tiers);
+    }
+    for (size_t e = 0; e < countof(M->events); e++) {
+        if (!M->events[e]) {
+            ERR("configuration event %zu never ran", e);
+        }
+    }
+    return err;
+}
+
+/* The model of a map of atom references: rows [key reference, payload],
+ * ordered by the key each reference resolves to ("rk-%05u", so by u) */
+static constexpr uint32_t MM_REF_KEYS = 400;
+
+typedef struct mmRefModel_ {
+    uint32_t n;
+    uint32_t u[MM_REF_KEYS]; /* the rows' keys, ascending */
+    uint32_t seed[MM_REF_KEYS];
+    uint8_t len[MM_REF_KEYS];
+    bool known[MM_REF_KEYS];
+    uint32_t events[2];
+} mmRefModel_;
+
+defcleanerName(mmRefModel_ *, zfree, MmRefModel);
+
+static void mmRefKey_(uint32_t u, char out[16]) {
+    snprintf(out, 16, "rk-%05" PRIu32, u);
+}
+
+/* The row of key u, or -1; '*at' is where it is or would go */
+static int32_t mmRefFind_(const mmRefModel_ *R, uint32_t u, uint32_t *at) {
+    uint32_t lo = 0;
+    uint32_t hi = R->n;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (R->u[mid] < u) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    *at = lo;
+    return lo < R->n && R->u[lo] == u ? (int32_t)lo : -1;
+}
+
+static void mmRefSet_(mmRefModel_ *R, uint32_t u, uint32_t seed, uint8_t len) {
+    uint32_t at;
+    if (mmRefFind_(R, u, &at) < 0) {
+        const size_t tail = R->n - at;
+        memmove(&R->u[at + 1], &R->u[at], tail * sizeof(R->u[0]));
+        memmove(&R->seed[at + 1], &R->seed[at], tail * sizeof(R->seed[0]));
+        memmove(&R->len[at + 1], &R->len[at], tail * sizeof(R->len[0]));
+        memmove(&R->known[at + 1], &R->known[at], tail * sizeof(R->known[0]));
+        R->n++;
+    }
+    R->u[at] = u;
+    R->seed[at] = seed;
+    R->len[at] = len;
+    R->known[at] = true;
+}
+
+static void mmRefRemoveAt_(mmRefModel_ *R, uint32_t at) {
+    const size_t tail = R->n - at - 1;
+    memmove(&R->u[at], &R->u[at + 1], tail * sizeof(R->u[0]));
+    memmove(&R->seed[at], &R->seed[at + 1], tail * sizeof(R->seed[0]));
+    memmove(&R->len[at], &R->len[at + 1], tail * sizeof(R->len[0]));
+    memmove(&R->known[at], &R->known[at + 1], tail * sizeof(R->known[0]));
+    R->n--;
+}
+
+/* A payload box holds row 'at''s bytes (only their length once unknown) */
+static bool mmRefPayloadIs_(const mmRefModel_ *R, uint32_t at,
+                            const databox *b) {
+    mmModelRow_ row = {
+        .seed = R->seed[at], .len = R->len[at], .known = R->known[at]};
+    return mmModelPayloadIs_(&row, b);
+}
+
+/* @model: src/multimap.h */
+/* Every model key reads its payload, in key order, and nothing else is
+ * there */
+static int mmRefVerify_(const multimap *m, const mmRefModel_ *R,
+                        const multimapAtom *atoms, uint32_t step) {
+    int err = 0;
+    uint32_t wrong = 0;
+    for (uint32_t i = 0; i < R->n; i++) {
+        char ks[16];
+        mmRefKey_(R->u[i], ks);
+        const databox key = databoxNewBytesString(ks);
+        databox val = {};
+        databox *vals[1] = {&val};
+        if (!multimapLookupWithReference(m, &key, vals, atoms) ||
+            !mmRefPayloadIs_(R, i, &val)) {
+            wrong++;
+        }
+    }
+    /* In order: the references resolve to ascending keys */
+    multimapIterator it;
+    multimapIteratorInit(m, &it, true);
+    databox row[2] = {};
+    databox *got[2] = {&row[0], &row[1]};
+    uint32_t i = 0;
+    while (multimapIteratorNext(&it, got)) {
+        databox resolved = {};
+        char ks[16];
+        if (i < R->n) {
+            mmRefKey_(R->u[i], ks);
+        }
+        if (i >= R->n || !multimapAtomLookup(atoms, &row[0], &resolved) ||
+            resolved.len != strlen(ks) ||
+            memcmp(databoxCBytes(&resolved), ks, resolved.len) != 0) {
+            wrong++;
+        }
+        i++;
+    }
+    if (wrong || i != R->n || multimapCount(m) != R->n) {
+        ERR("reference step %" PRIu32 ": %" PRIu32 " rows of %" PRIu32
+            " iterated, %" PRIu32 " wrong",
+            step, i, R->n, wrong);
+    }
+    return err;
+}
+
+/* @model: src/multimap.h */
+static int multimapTestModelRef_(uint32_t seed) {
+    int err = 0;
+    cleanerName(zfree, MmRefModel) mmRefModel_ *R = zcalloc(1, sizeof(*R));
+    cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+    multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+    mmModelRng_ = seed;
+    uint32_t tiers = 0;
+    const uint32_t steps = 4000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        const bool draining = step >= steps * 2 / 3;
+        const uint32_t u = mmModelRand_() % MM_REF_KEYS;
+        char ks[16];
+        mmRefKey_(u, ks);
+        const databox key = databoxNewBytesString(ks);
+        databox ref = key;
+        (void)multimapAtomInsertIfNewConvert(atoms, &ref);
+        uint32_t at;
+        const int32_t here = mmRefFind_(R, u, &at);
+        const uint32_t pseed = mmModelRand_();
+        const uint8_t plen = (uint8_t)(mmModelRand_() % 30);
+        uint8_t buf[64];
+        mmModelPayload_(pseed, plen, buf);
+        const databox pay = databoxNewBytes(buf, plen);
+        const databox *row[2] = {&key, &pay};
+        uint32_t op = mmModelRand_() % 9;
+        if (draining && op < 2 && mmModelRand_() % 2) {
+            op = 4;
+        }
+        bool ok = true;
+        switch (op) {
+        case 0:
+            multimapInsertWithSurrogateKey(&m, row, &ref, atoms);
+            mmRefSet_(R, u, pseed, plen);
+            break;
+        case 1: {
+            databox foundKey = {};
+            const bool added = multimapInsertWithSurrogateKeyIfAbsent(
+                &m, row, &ref, atoms, &foundKey, nullptr, nullptr);
+            ok =
+                added == (here < 0) && (added || databoxEqual(&foundKey, &ref));
+            if (added) {
+                mmRefSet_(R, u, pseed, plen);
+            }
+            break;
+        }
+        case 2: {
+            databox val = {};
+            databox *vals[1] = {&val};
+            const bool found =
+                multimapLookupWithReference(m, &key, vals, atoms);
+            ok = found == (here >= 0) &&
+                 (!found || mmRefPayloadIs_(R, (uint32_t)here, &val));
+            break;
+        }
+        case 3: {
+            databox foundRef = {};
+            const bool there =
+                multimapExistsWithReference(m, &key, &foundRef, atoms);
+            ok = there == (here >= 0) &&
+                 (!there || databoxEqual(&foundRef, &ref));
+            break;
+        }
+        case 4: {
+            databox foundRef = {};
+            const bool gone =
+                multimapDeleteWithReference(&m, &key, atoms, &foundRef);
+            ok = gone == (here >= 0);
+            if (gone) {
+                mmRefRemoveAt_(R, (uint32_t)here);
+            }
+            break;
+        }
+        default: { /* the row in place: replaced, resized or deleted */
+            multimapEntry me;
+            const bool found =
+                multimapGetUnderlyingEntryWithReference(m, &key, &me, atoms);
+            ok = found == (here >= 0);
+            if (!found) {
+                break;
+            }
+            if (op == 5) {
+                multimapDeleteEntryWithReference(&m, &me, atoms);
+                mmRefRemoveAt_(R, (uint32_t)here);
+                break;
+            }
+            me.fe = flexNext(*me.map, me.fe);
+            if (op == 6) {
+                ok = multimapResizeEntryWithReference(&m, &me, plen, atoms);
+                R->known[here] = R->known[here] && plen <= R->len[here];
+                R->len[here] = plen;
+            } else {
+                ok = multimapReplaceEntryWithReference(&m, &me, &pay, atoms);
+                R->seed[here] = pseed;
+                R->len[here] = plen;
+                R->known[here] = true;
+            }
+            break;
+        }
+        }
+        if (!ok) {
+            ERR("reference step %" PRIu32 ": op %" PRIu32 " on %s (tier %d)",
+                step, op, ks, (int)multimapGetType(m));
+        }
+        tiers |= 1u << multimapGetType(m);
+        if (step % 50 == 49) {
+            err += mmRefVerify_(m, R, atoms, step);
+        }
+        if (step % 97 != 96) {
+            continue;
+        }
+        const uint32_t event = mmModelRand_() % countof(R->events);
+        R->events[event]++;
+        if (event == 0) {
+            multimapCompactWithReference(&m, atoms);
+        } else { /* the dump rebuilt, and taken in its place */
+            multimap *back = multimapNewFromDumpWithReference(
+                2, multimapLimit(m), multimapDump(m), atoms);
+            if (!back) {
+                ERR("reference step %" PRIu32 ": the dump did not rebuild",
+                    step);
+                break;
+            }
+            multimapFree(m);
+            m = back;
+        }
+        err += mmRefVerify_(m, R, atoms, step);
+    }
+    err += mmRefVerify_(m, R, atoms, steps);
+    multimapFree(m);
+    if (!(tiers & (1u << MULTIMAP_TYPE_FULL))) {
+        ERR("the reference model never reached Full (seen %#x)", tiers);
+    }
+    for (size_t e = 0; e < countof(R->events); e++) {
+        if (!R->events[e]) {
+            ERR("reference event %zu never ran", e);
+        }
+    }
+    return err;
+}
 
 int multimapTest(int, char *[]) {
     int err = 0;
@@ -9560,6 +10622,134 @@ int multimapTest(int, char *[]) {
                     b ? (unsigned)mmf(b)->maxSize : 0, (unsigned)want,
                     (int)multimapLimit(m), b ? (int)multimapLimit(b) : -1);
             }
+        }
+    }
+
+    TEST("iteration from a set's key starts at its first row, every tier") {
+        /* Six rows per key: from every key, forward iteration meets the
+         * key's row with the lowest second element first */
+        static const int64_t keys[] = {2, 25, 200};
+        for (size_t t = 0; t < countof(keys); t++) {
+            cleaner(multimapFree) multimap *m =
+                multimapNewConfigure(2, true, FLEX_CAP_LEVEL_512);
+            for (int64_t k = 0; k < keys[t]; k++) {
+                for (int64_t v = 5; v >= 0; v--) {
+                    const databox key = DATABOX_SIGNED(k);
+                    const databox val = DATABOX_SIGNED(v);
+                    const databox *row[2] = {&key, &val};
+                    multimapInsert(&m, row);
+                }
+            }
+            size_t wrong = 0;
+            for (int64_t k = 0; k < keys[t]; k++) {
+                const databox key = DATABOX_SIGNED(k);
+                multimapIterator it;
+                databox out[2] = {};
+                if (!multimapIteratorInitAt(m, &it, true, &key) ||
+                    !multimapIteratorNextInto(&it, out, 2) ||
+                    out[0].data.i64 != k || out[1].data.i64 != 0) {
+                    wrong++;
+                }
+            }
+            if (wrong) {
+                ERR("tier %d: %zu of %" PRId64 " keys start past their first "
+                    "row",
+                    (int)multimapGetType(m), wrong, keys[t]);
+            }
+        }
+    }
+
+    TEST("a set's full-width insert adds a row only when absent, every tier") {
+        static const int64_t sizes[] = {5, 150, 900};
+        for (size_t t = 0; t < countof(sizes); t++) {
+            cleaner(multimapFree) multimap *m =
+                multimapNewConfigure(2, true, FLEX_CAP_LEVEL_512);
+            /* Six rows per key, so one key's rows can span inner maps;
+             * the second round inserts every row again, either way */
+            for (int round = 0; round < 2; round++) {
+                for (int64_t k = 0; k < sizes[t]; k++) {
+                    for (int64_t v = 0; v < 6; v++) {
+                        const databox key = DATABOX_SIGNED(k);
+                        const databox val = DATABOX_SIGNED((v * 5 + k) % 6);
+                        const databox *row[2] = {&key, &val};
+                        if (round && v % 2) {
+                            multimapInsert(&m, row);
+                        } else {
+                            multimapInsertFullWidth(&m, row);
+                        }
+                    }
+                }
+            }
+            multimapVerify(m);
+            if (multimapCount(m) != (size_t)sizes[t] * 6) {
+                ERR("tier %d: %zu rows after inserting %" PRId64 " rows twice",
+                    (int)multimapGetType(m), multimapCount(m), sizes[t] * 6);
+            }
+        }
+    }
+
+    TEST("a resized value, empty or not, keeps its row and the map's order") {
+        /* Every tier: payloads from empty to 39 bytes resized to every
+         * length in 0..39; the map verifies and every row reads back with
+         * the new length */
+        static const int64_t sizes[] = {3, 120, 400};
+        for (size_t t = 0; t < countof(sizes); t++) {
+            cleaner(multimapFree) multimap *m =
+                multimapNewLimit(3, FLEX_CAP_LEVEL_512);
+            uint8_t buf[64];
+            memset(buf, 'p', sizeof(buf));
+            for (int64_t k = 0; k < sizes[t]; k++) {
+                const databox key = DATABOX_SIGNED(k);
+                const databox pay = databoxNewBytes(buf, (size_t)(k % 40));
+                const databox cnt = DATABOX_SIGNED(k);
+                const databox *row[3] = {&key, &pay, &cnt};
+                multimapInsert(&m, row);
+            }
+            size_t bad = 0;
+            for (int64_t k = 0; k < sizes[t] && !bad; k++) {
+                const databox key = DATABOX_SIGNED(k);
+                const size_t len = (size_t)((k * 7 + 3) % 40);
+                multimapEntryResize(&m, &key, len);
+                for (int64_t j = 0; j < sizes[t]; j++) {
+                    const databox kj = DATABOX_SIGNED(j);
+                    if (!multimapExists(m, &kj)) {
+                        ERR("tier %d: after resizing key %" PRId64
+                            " from %" PRId64 " to %zu bytes, key %" PRId64
+                            " is gone",
+                            (int)multimapGetType(m), k, k % 40, len, j);
+                        bad++;
+                        break;
+                    }
+                }
+                if (bad) {
+                    break;
+                }
+                multimapVerify(m);
+                databox vals[2] = {};
+                if (!multimapLookupInto(m, &key, vals, 2) ||
+                    !DATABOX_IS_BYTES(&vals[0]) || vals[0].len != len ||
+                    vals[1].data.i64 != k) {
+                    bad++;
+                }
+            }
+            if (bad) {
+                ERR("tier %d: %zu of %" PRId64 " resized rows read back wrong",
+                    (int)multimapGetType(m), bad, sizes[t]);
+            }
+        }
+    }
+
+    TEST("model: every public call against a sorted array, maps and sets, "
+         "every tier") {
+        for (uint32_t seed = 1; seed <= 4; seed++) {
+            err += multimapTestModel_(false, FLEX_CAP_LEVEL_512, seed);
+            /* A set's rows are small: a smaller limit reaches Full */
+            err += multimapTestModel_(true, FLEX_CAP_LEVEL_256, seed + 10);
+        }
+        err += multimapTestModel_(false, FLEX_CAP_LEVEL_2048, 21);
+        /* A map of atom references, through its WithReference calls */
+        for (uint32_t seed = 31; seed <= 33; seed++) {
+            err += multimapTestModelRef_(seed);
         }
     }
 

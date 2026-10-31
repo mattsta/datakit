@@ -391,6 +391,17 @@ static bool multimapMediumGetUnderlyingEntryGetEntry(multimapMedium *m,
      * entry lookup, this returns the insertion point for any key, so
      * "start at or after K" works for keys that don't exist. */
     me->mapIdx = multimapMediumBinarySearch_(m, key, false, nullptr);
+    if (m->mapIsSet && me->mapIdx == 1 && flexCount(m->map[0])) {
+        /* A set's key whose rows begin in map 0 starts there */
+        databox last;
+        databoxWide lastWide;
+        multimapGetByTypeInto_(
+            flexIndex(m->map[0], -(int32_t)m->elementsPerEntry), &last,
+            &lastWide, nullptr);
+        if (databoxCompare(&last, key) == 0) {
+            me->mapIdx = 0;
+        }
+    }
     me->fe = flexFindByTypeSortedWithMiddleGetEntry(m->map[me->mapIdx],
                                                     m->elementsPerEntry, key,
                                                     GET_MIDDLE(m, me->mapIdx));
