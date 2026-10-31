@@ -2348,8 +2348,10 @@ flexResizeEntry____(flex **const ff, flexEntry *const fe, size_t newLenForEntry,
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
 
+    /* Bytes at the new length: an empty entry is its own type, as every
+     * other bytes write stores it */
     flexInsertContents content = {
-        .encoding = 0, /* encoding == 0 means string/blob type */
+        .encoding = FLEX_STRING_ENCODING(newLenForEntry),
         .data = FLEX_ENTRY_DATA(&entry), /* copy existing data to new size */
         .len = newLenForEntry}; /* use new len instead of current len */
     flexInsertContents *contents[1] = {&content};
@@ -12704,6 +12706,45 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(!memcmp(box.data.bytes.start, thing, 24));
 
         flexFree(f);
+    }
+
+    TEST("a resize to any length, zero included, keeps the entries around "
+         "it") {
+        /* [1, bytes, 5] three times: the middle row's bytes resized to
+         * every length in 0..40 leave six other entries as they were and
+         * the bytes at the new length */
+        for (size_t to = 0; to <= 40; to++) {
+            f = flexNew();
+            uint8_t thing[16];
+            memset(thing, 'q', sizeof(thing));
+            for (int64_t r = 0; r < 3; r++) {
+                const databox k = DATABOX_SIGNED(r + 1);
+                const databox b = databoxNewBytes(thing, (size_t)(5 + r));
+                const databox v = DATABOX_SIGNED(r + 10);
+                flexPushByType(&f, &k, FLEX_ENDPOINT_TAIL);
+                flexPushByType(&f, &b, FLEX_ENDPOINT_TAIL);
+                flexPushByType(&f, &v, FLEX_ENDPOINT_TAIL);
+            }
+            flexResizeEntry(&f, flexIndex(f, 4), to);
+            bool same = flexCount(f) == 9;
+            for (int64_t r = 0; same && r < 3; r++) {
+                databox k = {};
+                databox b = {};
+                databox v = {};
+                flexGetByType(flexIndex(f, (int32_t)(3 * r)), &k);
+                flexGetByType(flexIndex(f, (int32_t)(3 * r + 1)), &b);
+                flexGetByType(flexIndex(f, (int32_t)(3 * r + 2)), &v);
+                const size_t want = r == 1 ? to : (size_t)(5 + r);
+                same = k.data.i64 == r + 1 && v.data.i64 == r + 10 &&
+                       DATABOX_IS_BYTES(&b) && b.len == want;
+            }
+            if (!same) {
+                ERR("a resize to %zu bytes: %zu entries, not the rows around "
+                    "it",
+                    to, flexCount(f));
+            }
+            flexFree(f);
+        }
     }
 
     TEST("a long list keeps its indices") {
