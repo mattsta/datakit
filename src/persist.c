@@ -6967,12 +6967,269 @@ static ssize_t persistTestFailingWrite(void *ctx, const void *data,
     }
     return persistMemWrite(ctx, data, len);
 }
+/* ====================================================================
+ * The model test: a multimap kept through persist under random logged
+ * inserts and deletes, snapshots, compactions and syncs, against a
+ * model of the state at the last compaction plus every op since.  The
+ * stores recover to the model's state; a WAL torn at any byte recovers
+ * to the state after the larger of its complete ops and the snapshot's;
+ * a reopen on copies of the stores carries on from what they recover.
+ * ==================================================================== */
+#include "dkRandom.h"
+
+static constexpr uint32_t PM_KEYS = 200;
+static constexpr uint32_t PM_OPS = 4096;
+
+typedef struct pmOp_ {
+    bool del;
+    int64_t key;
+    int64_t val;
+} pmOp_;
+
+typedef struct pmModel_ {
+    bool basePresent[PM_KEYS];
+    int64_t baseVal[PM_KEYS];
+    pmOp_ ops[PM_OPS];       /* since the last compaction */
+    uint64_t walEnd[PM_OPS]; /* the WAL's entry bytes after each */
+    uint32_t n;
+    uint32_t snapAt; /* the ops the snapshot holds */
+    persistConfig config;
+    bool keyed;
+    const char *why;
+} pmModel_;
+
+defcleanerName(pmModel_ *, zfree, PmModel);
+
+static const uint8_t pmKey_[32] = {9, 8, 7, 6, 5, 4, 3, 2, 1};
+
+/* The state after the first 'upTo' ops since the last compaction */
+static void pmState_(const pmModel_ *M, uint32_t upTo, bool present[PM_KEYS],
+                     int64_t val[PM_KEYS]) {
+    memcpy(present, M->basePresent, sizeof(M->basePresent));
+    memcpy(val, M->baseVal, sizeof(M->baseVal));
+    for (uint32_t i = 0; i < upTo; i++) {
+        const pmOp_ *op = &M->ops[i];
+        present[op->key] = !op->del;
+        val[op->key] = op->val;
+    }
+}
+
+/* 'm' holds the state after 'upTo' ops */
+static bool pmSame_(const pmModel_ *M, const multimap *m, uint32_t upTo) {
+    bool present[PM_KEYS];
+    int64_t val[PM_KEYS];
+    pmState_(M, upTo, present, val);
+    size_t want = 0;
+    for (uint32_t k = 0; k < PM_KEYS; k++) {
+        want += present[k];
+        if (!present[k]) {
+            continue;
+        }
+        const databox key = databoxNewSigned(k);
+        databox got = {};
+        databox *gotp[1] = {&got};
+        if (!multimapLookup(m, &key, gotp) || got.data.i64 != val[k]) {
+            return false;
+        }
+    }
+    return multimapCount(m) == want;
+}
+
+/* A persist on 'snap' and 'wal' with the model's settings */
+static persist *pmOpen_(const pmModel_ *M, persistStore *snap,
+                        persistStore *wal) {
+    persist *p = persistCreate(&persistOpsMultimap, &M->config);
+    if (!p) {
+        return nullptr;
+    }
+    if ((M->keyed && !persistSetIntegrityKey(p, pmKey_, sizeof(pmKey_))) ||
+        !persistAttachSnapshot(p, snap) || !persistAttachWAL(p, wal)) {
+        persistClose(p);
+        return nullptr;
+    }
+    return p;
+}
+
+/* A memory store holding 'len' bytes of 'from' */
+static persistStore *pmCopy_(const uint8_t *from, size_t len) {
+    persistStore *s = persistStoreMemory(len ? len : 1);
+    if (len && s->write(s->ctx, from, len) != (ssize_t)len) {
+        persistStoreClose(s);
+        return nullptr;
+    }
+    (void)s->seek(s->ctx, 0, SEEK_SET);
+    return s;
+}
+
+/* The stores copied, the WAL cut at 'cut' entry bytes (or whole), and
+ * recovered by a new persist: the state after the larger of the ops the
+ * cut keeps whole and the snapshot's */
+static multimap *pmRecoverCopy_(pmModel_ *M, persist *p, uint64_t cut,
+                                uint32_t *upTo, persist **opened) {
+    if (!persistSync(p)) {
+        M->why = "a sync";
+        return nullptr;
+    }
+    size_t snapLen = 0;
+    size_t walLen = 0;
+    const uint8_t *snap =
+        persistStoreMemoryBuffer(persistSnapshotStore(p), &snapLen);
+    const uint8_t *wal = persistStoreMemoryBuffer(persistWALStore(p), &walLen);
+    const uint64_t entries = persistWALBytes(p);
+    const size_t header = walLen - (size_t)entries;
+    cut = cut > entries ? entries : cut;
+    uint32_t whole = 0;
+    while (whole < M->n && M->walEnd[whole] <= cut) {
+        whole++;
+    }
+    *upTo = whole > M->snapAt ? whole : M->snapAt;
+    persist *q =
+        pmOpen_(M, pmCopy_(snap, snapLen), pmCopy_(wal, header + (size_t)cut));
+    if (!q) {
+        M->why = "a persist on the copies";
+        return nullptr;
+    }
+    multimap *got = persistRecover(q);
+    if (!got) {
+        static char why[96];
+        snprintf(why, sizeof(why), "a recovery from the copies: %s",
+                 persistErrName(persistLastError(q)));
+        M->why = why;
+        persistClose(q);
+        return nullptr;
+    }
+    persistRecoverSummary sum = {};
+    (void)persistRecoverSummarize(q, &sum);
+    if (opened) {
+        *opened = q;
+    } else {
+        persistClose(q);
+    }
+    return got;
+}
+
+static int persistTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, PmModel) pmModel_ *M = zcalloc(1, sizeof(*M));
+    M->config = persistDefaultConfig();
+    M->config.syncMode = seed % 3 == 0   ? PERSIST_SYNC_ALWAYS
+                         : seed % 3 == 1 ? PERSIST_SYNC_NONE
+                                         : PERSIST_SYNC_EVERYSEC;
+    M->config.compression =
+        seed % 2 ? PERSIST_COMPRESS_LZ4 : PERSIST_COMPRESS_NONE;
+    M->keyed = seed % 4 >= 2;
+    persist *p = pmOpen_(M, persistStoreMemory(0), persistStoreMemory(0));
+    multimap *m = multimapNew(2);
+    /* A recovery starts from a snapshot: the empty map's comes first */
+    if (!p || !m || !persistSnapshot(p, m)) {
+        ERR("%s", "the persist, map or first snapshot");
+        persistClose(p);
+        multimapFree(m);
+        return err;
+    }
+    uint64_t rng = seed * 31 + 3;
+    for (uint32_t step = 0; step < 2500 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const uint32_t op = (uint32_t)(r % 20);
+        bool ok = true;
+        M->why = "the call's result";
+        if (op < 14 && M->n < PM_OPS) { /* an op, applied once it is logged */
+            const int64_t k = (int64_t)((r >> 8) % PM_KEYS);
+            const bool del = (r >> 20) % 4 == 0;
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned((int64_t)(r >> 24));
+            const databox *row[2] = {&key, &val};
+            const persistLogResult logged =
+                persistLogOp(p, del ? PERSIST_OP_DELETE : PERSIST_OP_INSERT,
+                             row, del ? 1 : 2);
+            ok = logged != PERSIST_LOG_REFUSED;
+            if (ok) {
+                if (del) {
+                    multimapDelete(&m, &key);
+                } else {
+                    multimapInsert(&m, row);
+                }
+                M->ops[M->n] =
+                    (pmOp_){.del = del, .key = k, .val = val.data.i64};
+                M->walEnd[M->n] = persistWALBytes(p);
+                M->n++;
+            }
+        } else if (op == 14) {
+            ok = persistSnapshot(p, m);
+            M->snapAt = M->n;
+        } else if (op == 15 || M->n >= PM_OPS) { /* compacted: a new base */
+            ok = persistCompact(p, m) && persistWALBytes(p) == 0;
+            pmState_(M, M->n, M->basePresent, M->baseVal);
+            M->n = 0;
+            M->snapAt = 0;
+        } else if (op == 16) { /* recovered in place */
+            multimap *got = persistRecover(p);
+            ok = got && pmSame_(M, got, M->n);
+            multimapFree(got);
+            if (!got) {
+                M->why = "a recovery in place";
+            }
+        } else if (op == 17 || op == 18) { /* the WAL torn at a random byte */
+            uint32_t upTo = 0;
+            const uint64_t cut = (r >> 8) % (persistWALBytes(p) + 1);
+            multimap *got = pmRecoverCopy_(M, p, cut, &upTo, nullptr);
+            ok = got && pmSame_(M, got, upTo);
+            if (got && !ok) {
+                static char why[96];
+                snprintf(why, sizeof(why),
+                         "a WAL torn at %" PRIu64 " of %" PRIu64
+                         " (state after %" PRIu32 " of %" PRIu32 " ops)",
+                         cut, persistWALBytes(p), upTo, M->n);
+                M->why = why;
+            }
+            multimapFree(got);
+        } else { /* reopened on copies: what they recover carries on */
+            uint32_t upTo = 0;
+            persist *q = nullptr;
+            multimap *got = pmRecoverCopy_(M, p, UINT64_MAX, &upTo, &q);
+            ok = got && q && pmSame_(M, got, M->n) && upTo == M->n;
+            if (ok) {
+                /* the reopened WAL's offsets carry on from the copy's */
+                persistClose(p);
+                p = q;
+                multimapFree(m);
+                m = got;
+            } else {
+                multimapFree(got);
+                persistClose(q);
+                M->why = M->why ? M->why : "a reopen";
+            }
+        }
+        if (ok && (step % 50 == 49) && !pmSame_(M, m, M->n)) {
+            ok = false;
+            M->why = "the live map";
+        }
+        if (!ok) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 ": %s (%" PRIu32
+                " ops, snapshot at %" PRIu32 ", seed %" PRIu64 ", err %s)",
+                step, op, M->why, M->n, M->snapAt, seed,
+                persistErrName(persistLastError(p)));
+        }
+    }
+    persistStats st = {};
+    persistGetStats(p, &st);
+    multimapFree(m);
+    persistClose(p);
+    return err;
+}
+
 int persistTest(int, char *[]) {
     int err = 0;
 
     /* ================================================================
      * Core Framework Tests
      * ================================================================ */
+
+    TEST("model: logged ops, snapshots, compactions, torn WALs and reopens") {
+        for (uint64_t seed = 0; seed < 8; seed++) {
+            err += persistTestModel_(seed);
+        }
+    }
 
     TEST("create and destroy persist context") {
         persist *p = persistCreate(&persistOpsFlex, nullptr);
