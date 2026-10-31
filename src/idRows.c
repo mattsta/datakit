@@ -1163,11 +1163,13 @@ static bool idRowsTestSame_(const databox *a, const databox *b) {
     return a->type == b->type && databoxCompare(a, b) == 0;
 }
 
+/* @model: src/idRows.h */
 /* Compare every row of 'r' with the oracle {id, a, b} rows, in order */
 static int idRowsTestAgree_(const idRows *r, multimap *oracle,
                             const char *when) {
     int err = 0;
-    if (idRowsCount(r) != multimapCount(oracle)) {
+    if (idRowsCount(r) != multimapCount(oracle) ||
+        idRowsElementsPerRow(r) != 2) {
         ERR("%s: %zu rows, oracle %zu", when, idRowsCount(r),
             multimapCount(oracle));
         return err;
@@ -1250,6 +1252,7 @@ static uint64_t idRowsTestId_(uint64_t *rng, const idRowsTestIds ids) {
     return page * IDROWS_PAGE + dkSplitmix64Bounded(rng, 4);
 }
 
+/* @model: src/idRows.h */
 /* 20000 random sets, field replaces, increments and deletes against a
  * multimap {id, a, b} oracle: every op checks presence and results, and
  * every 2000 ops the whole order, first and last are compared.  Emptied,
@@ -1265,6 +1268,7 @@ static int idRowsTestDifferential_(const idRowsTestIds ids, uint64_t rng) {
         ID_ROWS_TEST_REPLACE_FIELD,
         ID_ROWS_TEST_INCR,
         ID_ROWS_TEST_DELETE,
+        ID_ROWS_TEST_GET,
         ID_ROWS_TEST_OP_COUNT
     } idRowsTestOp;
     bool sawDense = false;
@@ -1327,8 +1331,37 @@ static int idRowsTestDifferential_(const idRowsTestIds ids, uint64_t rng) {
             }
             multimapDelete(&oracle, &idBox);
             break;
+        case ID_ROWS_TEST_GET: { /* the row read back, whole or narrow */
+            databox ga = {};
+            databox gb = {};
+            databox *grow[2] = {&ga, &gb};
+            databoxWide gslots[2];
+            const bool whole = v % 2;
+            const bool got = whole ? idRowsGetWithSlots(r, id, grow, gslots)
+                                   : idRowsGet(r, id, grow);
+            /* The oracle's lookup (and a narrow read) reports a 96/128-bit
+             * element type-only: those compare by type */
+            bool same = got == present;
+            if (same && present) {
+                same = (databoxIsWideDeferred(&o[0])
+                            ? ga.type == o[0].type
+                            : idRowsTestSame_(&ga, &o[0])) &&
+                       idRowsTestSame_(&gb, &o[1]);
+            }
+            if (!same) {
+                ERR("op %d: get (%s) found %d, oracle %d", op,
+                    whole ? "whole" : "narrow", got, present);
+            }
+            break;
+        }
         case ID_ROWS_TEST_OP_COUNT:
             break;
+        }
+
+        /* Now and then every row goes at once */
+        if (op % 7001 == 7000) {
+            idRowsClear(r);
+            multimapReset(&oracle);
         }
 
         if (r->span) {
