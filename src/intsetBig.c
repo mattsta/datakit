@@ -741,6 +741,19 @@ static bool intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
 
 size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
                           intsetBig *result) {
+    /* A set with itself is itself; in place on 'b' is in place on 'a'
+     * with the inputs swapped (the intersection is symmetric), so the
+     * walk below only ever changes 'a' */
+    if (a == b) {
+        if (result != a) {
+            intsetBigMergeInto(result, a);
+        }
+        return intsetBigCountElements(a);
+    }
+    if (b == result) {
+        return intsetBigIntersect(b, a, result);
+    }
+
     size_t intersectCount = 0;
 
     /* First, get common buckets between 'a' and 'b' */
@@ -2406,6 +2419,32 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
         databoxBig m2 = DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 7);
         assert(intsetBigExists(inplace, &m1));
         assert(intsetBigExists(inplace, &m2));
+    }
+
+    TEST("intsetBigIntersect - aliased inputs: a with itself, in place on b") {
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+        for (uint64_t v = 0; v < 6; v++) {
+            intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(v * BUCKET_SIZE + v));
+            if (v % 2 == 0) {
+                intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(v * BUCKET_SIZE + v));
+            }
+        }
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(9 * BUCKET_SIZE));
+
+        cleaner(intsetBigFree) intsetBig *self = intsetBigCopy(a);
+        const size_t selfCount = intsetBigIntersect(self, self, self);
+        cleaner(intsetBigFree) intsetBig *fresh = intsetBigNew();
+        const size_t freshSelf = intsetBigIntersect(a, a, fresh);
+        cleaner(intsetBigFree) intsetBig *onB = intsetBigCopy(b);
+        const size_t onBCount = intsetBigIntersect(a, onB, onB);
+        if (selfCount != 6 || intsetBigCountElements(self) != 6 ||
+            freshSelf != 6 || !intsetBigSubset(a, fresh) ||
+            !intsetBigSubset(fresh, a) || onBCount != 3 ||
+            intsetBigCountElements(onB) != 3 || !intsetBigSubset(onB, a)) {
+            ERR("aliased intersects: self %zu, fresh %zu, on b %zu", selfCount,
+                freshSelf, onBCount);
+        }
     }
 
     TEST("intsetBigIntersect - completely disjoint buckets") {

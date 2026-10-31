@@ -45,8 +45,9 @@ bool intsetBigExists(const intsetBig *isb, const databoxBig *val);
 bool intsetBigRandom(const intsetBig *isb, databoxBig *val);
 bool intsetBigRandomDelete(intsetBig *isb, databoxBig *deleted);
 
-/* 'result' gets a's and b's common members: 'result' is 'a' (in place)
- * or a set holding no buckets; 'b' is only read */
+/* 'result' gets a's and b's common members: 'result' is 'a' or 'b' (in
+ * place) or a set holding no buckets; the other input is only read, and
+ * 'a' may be 'b' */
 size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
                           intsetBig *result);
 void intsetBigMergeInto(intsetBig *into, const intsetBig *from);
