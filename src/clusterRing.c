@@ -1464,14 +1464,15 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
     /* Rebuild the state that lists healthy nodes */
     clusterRingRefreshHealthy(ring);
 
-    /* Invoke callback */
+    /* The new version first, as AddNode and RemoveNode do: the callback
+     * sees the ring as it now is */
+    ring->version++;
+    ring->lastModified = timeUtilMonotonicMs();
+
     if (ring->stateCallback) {
         ring->stateCallback(ring, nodeId, oldState, state,
                             ring->stateCallbackData);
     }
-
-    ring->version++;
-    ring->lastModified = timeUtilMonotonicMs();
 
     return CLUSTER_OK;
 }
@@ -3335,18 +3336,35 @@ clusterResult clusterRingPollHealth(clusterRing *ring) {
         return CLUSTER_ERR;
     }
 
-    /* By id: a health update may change the node's state */
+    /* By id, over the nodes polling began with: a health update may change
+     * a node's state, and a state callback may then remove or add nodes
+     * (an id gone by its turn is skipped) */
+    const uint32_t count = ring->nodeCount;
+    cleanerName(zfree, U64) uint64_t *ids =
+        zmalloc((count ? count : 1) * sizeof(*ids));
+    for (uint32_t i = 0; i < count; i++) {
+        ids[i] = ring->nodeArray[i]->id;
+    }
     const clusterHealthProvider *p = &ring->healthProvider;
-    for (uint32_t i = 0; i < ring->nodeCount; i++) {
-        const uint64_t id = ring->nodeArray[i]->id;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint64_t id = ids[i];
         if (p->checkHealth) {
             const clusterNodeHealth health =
                 p->checkHealth(p->providerData, id);
-            CLUSTER_MUST(clusterRingUpdateNodeHealth(ring, id, &health));
+            const clusterResult rc =
+                clusterRingUpdateNodeHealth(ring, id, &health);
+            if (rc == CLUSTER_ERR_NOT_FOUND) {
+                continue;
+            }
+            CLUSTER_MUST(rc);
         }
         if (p->getLoad) {
             const clusterNodeLoad load = p->getLoad(p->providerData, id);
-            CLUSTER_MUST(clusterRingUpdateNodeLoad(ring, id, &load));
+            const clusterResult rc = clusterRingUpdateNodeLoad(ring, id, &load);
+            if (rc == CLUSTER_ERR_NOT_FOUND) {
+                continue;
+            }
+            CLUSTER_MUST(rc);
         }
     }
     return CLUSTER_OK;
@@ -7297,6 +7315,29 @@ static clusterNodeLoad clusterRingTestGetLoad(void *data, uint64_t id) {
     return (clusterNodeLoad){.cpuUsage = h->cpu[id]};
 }
 
+/* A state callback that notes the ring's version it sees */
+static void clusterRingTestSeeVersion(clusterRing *ring, uint64_t nodeId,
+                                      clusterNodeState oldState,
+                                      clusterNodeState newState,
+                                      void *userData) {
+    (void)nodeId;
+    (void)oldState;
+    (void)newState;
+    *(uint64_t *)userData = clusterRingGetVersion(ring);
+}
+
+/* A state callback that removes a node the moment it turns SUSPECT */
+static void clusterRingTestEvictSuspect(clusterRing *ring, uint64_t nodeId,
+                                        clusterNodeState oldState,
+                                        clusterNodeState newState,
+                                        void *userData) {
+    (void)oldState;
+    if (newState == CLUSTER_NODE_SUSPECT) {
+        (*(uint32_t *)userData)++;
+        (void)clusterRingRemoveNode(ring, nodeId);
+    }
+}
+
 static void clusterRingTestFreeHealth(void *data) {
     clusterRingTestHealth *h = data;
     h->frees++;
@@ -8273,6 +8314,65 @@ int clusterRingTest(int, char *[]) {
             stats.p99LocateNs == 0 || stats.p99LocateNs > stats.maxLocateNs) {
             ERR("latency avg %" PRIu64 " p99 %" PRIu64 " max %" PRIu64,
                 stats.avgLocateNs, stats.p99LocateNs, stats.maxLocateNs);
+        }
+    }
+
+    TEST("the state callback sees the version the change made") {
+        const clusterRingConfig rc = {.strategyType = CLUSTER_STRATEGY_KETAMA,
+                                      .defaultQuorum = {.replicaCount = 1}};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+        const clusterNodeConfig nc = {.id = 1};
+        CR_OK(clusterRingAddNode(ring, &nc));
+        uint64_t seen = 0;
+        clusterRingSetNodeStateCallback(ring, clusterRingTestSeeVersion, &seen);
+        const uint64_t before = clusterRingGetVersion(ring);
+        CR_OK(clusterRingSetNodeState(ring, 1, CLUSTER_NODE_SUSPECT));
+        if (seen != clusterRingGetVersion(ring) || seen == before) {
+            ERR("the callback saw version %" PRIu64 "; before %" PRIu64
+                ", after %" PRIu64,
+                seen, before, clusterRingGetVersion(ring));
+        }
+    }
+
+    TEST("polling health while the state callback removes the polled node") {
+        /* Node 3 stops answering; the callback evicts it as it turns
+         * SUSPECT.  Polling goes on without it, and every other node is
+         * still polled (its load updated) */
+        clusterRingTestHealth h = {};
+        for (uint64_t id = 1; id <= 8; id++) {
+            h.reachable[id] = id != 3;
+            h.cpu[id] = 0.05f * (float)id;
+        }
+        const clusterRingConfig rc = {.strategyType = CLUSTER_STRATEGY_KETAMA,
+                                      .defaultQuorum = {.replicaCount = 3}};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+        for (uint64_t id = 1; id <= 8; id++) {
+            const clusterNodeConfig nc = {.id = id};
+            CR_OK(clusterRingAddNode(ring, &nc));
+        }
+        uint32_t evicted = 0;
+        clusterRingSetNodeStateCallback(ring, clusterRingTestEvictSuspect,
+                                        &evicted);
+        const clusterHealthProvider hp = {.checkHealth =
+                                              clusterRingTestCheckHealth,
+                                          .getLoad = clusterRingTestGetLoad,
+                                          .providerData = &h};
+        clusterRingSetHealthProvider(ring, &hp);
+        for (int poll = 0; poll < 5; poll++) {
+            CR_OK(clusterRingPollHealth(ring));
+        }
+        bool loadsSeen = true;
+        for (uint64_t id = 1; id <= 8; id++) {
+            const clusterNode *n = clusterRingGetNode(ring, id);
+            if (id != 3 &&
+                (!n || clusterNodeGetLoad(n)->cpuUsage != h.cpu[id])) {
+                loadsSeen = false;
+            }
+        }
+        if (evicted != 1 || clusterRingGetNode(ring, 3) || !loadsSeen) {
+            ERR("%u evicted, node 3 %s, every other load %s", evicted,
+                clusterRingGetNode(ring, 3) ? "still there" : "gone",
+                loadsSeen ? "seen" : "missed");
         }
     }
 

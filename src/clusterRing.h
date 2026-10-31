@@ -844,7 +844,9 @@ size_t clusterRingSerializeSize(const clusterRing *ring);
 [[nodiscard]] clusterRing *clusterRingDeserialize(const void *buf,
                                                   size_t bufLen);
 
-/* Get current ring version (monotonically increasing on each modification). */
+/* The ring's version: it rises with every modification of this ring object.
+ * It is not persisted (clusterRingDeserialize and copies count afresh), so
+ * compare versions of one ring object only, never across a restore. */
 uint64_t clusterRingGetVersion(const clusterRing *ring);
 
 /* persistOps descriptor — routes clusterRingSerialize/Deserialize
