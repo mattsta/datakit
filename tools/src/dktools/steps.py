@@ -40,6 +40,7 @@ OUTPUTAUDIT_TIMEOUT = 10 * 60
 SPELL_TIMEOUT = 10 * 60
 #: The idiom gate is lexical, one pass over the sources.
 IDIOMS_TIMEOUT = 10 * 60
+MAGIC_TIMEOUT = 10 * 60
 #: The header gate compiles each header alone, syntax only, in parallel.
 HEADERS_TIMEOUT = 10 * 60
 #: The test-check gate is lexical too: one pass, plus every header's
@@ -599,6 +600,12 @@ def idioms_command(uv: str, tree: Path) -> list[str]:
     """The idiom gate (hand-written forms of shared helpers, with the
     tree's allow list)."""
     return tree_dktools(uv, tree, "idioms")
+
+
+def magic_command(uv: str, tree: Path) -> list[str]:
+    """The named-numbers gate (a limit written twice, a format read by
+    position, with the tree's allow list)."""
+    return tree_dktools(uv, tree, "magic")
 
 
 def testchecks_command(uv: str, tree: Path) -> list[str]:

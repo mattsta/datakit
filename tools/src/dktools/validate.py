@@ -33,7 +33,7 @@ why, and how to run it.
 After the matrix it scans the test logs for UBSan ("runtime error:"),
 ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors``,
 ``atomicaudit check``, ``outputaudit check``, ``spell``, ``idioms``,
-``headers`` (against the first configuration's compile database) and
+``magic``, ``headers`` (against the first configuration's compile database) and
 ``testchecks`` on the exported tree, checks
 that every file of the tree is formatted (``dktools.formatting``; it rewrites
 nothing: ``dktools format write`` does), and runs the leakage gate
@@ -278,6 +278,7 @@ def render(
     output: Step,
     spelling: Step,
     idiom: Step,
+    named: Step,
     header: Step,
     testcheck: Step,
     leak: tuple[str, list[leakcheck.Hit]] | None,
@@ -388,6 +389,9 @@ def render(
     md += ["", "## Idioms", ""]
     md.append(f"{_step_cell(idiom)}: {steps.last_line(idiom.log)}")
 
+    md += ["", "## Named numbers", ""]
+    md.append(f"{_step_cell(named)}: {steps.last_line(named.log)}")
+
     md += ["", "## Headers", ""]
     md.append(f"{_step_cell(header)}: {steps.last_line(header.log)}")
 
@@ -437,6 +441,7 @@ def render(
     md.append(f"- {output.log}")
     md.append(f"- {spelling.log}")
     md.append(f"- {idiom.log}")
+    md.append(f"- {named.log}")
     md.append(f"- {header.log}")
     md.append(f"- {testcheck.log}")
     md.append(f"- {fmt[1]}")
@@ -516,6 +521,9 @@ def run(repo: Path, opts: ValidateOptions) -> int:
     idiom = steps.run_tree_gate(
         "idioms", steps.idioms_command, work / "idioms.log", src, steps.IDIOMS_TIMEOUT
     )
+    named = steps.run_tree_gate(
+        "magic", steps.magic_command, work / "magic.log", src, steps.MAGIC_TIMEOUT
+    )
     # Against the first configuration's compile database
     header = steps.run_tree_gate(
         "headers",
@@ -560,6 +568,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         and output.ok
         and spelling.ok
         and idiom.ok
+        and named.ok
         and header.ok
         and testcheck.ok
         and leak_ok
@@ -576,6 +585,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         output,
         spelling,
         idiom,
+        named,
         header,
         testcheck,
         leak,

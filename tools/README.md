@@ -373,9 +373,9 @@ gate before a milestone.
   list that leaves it out) is reported on a `missing` line, apart from
   real failures, with a `hint` naming the targets to add.
 - `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check`, `spell`, `idioms` and `testchecks` then run on
-  the exported tree with the tree's own dktools (the `alloc`, `atomic`,
-  `output`, `spell`, `idioms` and `checks` lines).
+  `outputaudit check`, `spell`, `idioms`, `magic` and `testchecks` then
+  run on the exported tree with the tree's own dktools (the `alloc`,
+  `atomic`, `output`, `spell`, `idioms`, `magic` and `checks` lines).
 - Prints a result block (tree hash, build with its warning-line and
   linker-note counts, ctest, sanitizer reports from the test output,
   allocaudit, failing test names, log paths), also kept in
@@ -448,8 +448,8 @@ uv run --project tools dktools validate [--rev REV] \
   set per configuration.
 - Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
   output, `allocaudit check --constructors`, `atomicaudit check`,
-  `outputaudit check`, `spell`, `idioms` and `testchecks` on the
-  exported tree, and the leakage
+  `outputaudit check`, `spell`, `idioms`, `magic` and `testchecks` on
+  the exported tree, and the leakage
   gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
 - `--python` also builds the Python package's wheel from the exported
@@ -800,7 +800,8 @@ uv run --project tools dktools magic [FILE ...]
   (KEY: the number, `function:array`, or `*` for every hit of the rule in
   that file); a line without a reason or naming no rule is an input
   error (exit 2), and a line that no longer matches fails, so the list
-  stays true. Exits 0 clean, 1 for hits or stale allow lines.
+  stays true. Runs in `verify` and `validate` (the `magic` line). Exits
+  0 clean, 1 for hits or stale allow lines.
 
 ## headers — every header compiles on its own
 

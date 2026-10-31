@@ -1,0 +1,26 @@
+# dktools magic exceptions: PATH RULE KEY REASON (KEY * = every hit of the
+# rule in that file).  Each number here is a fact written as its source
+# writes it, or two unrelated rules that happen to share a number.
+
+# Unicode and UTF-8 facts: the well-formed byte ranges of Unicode Table 3-7,
+# code point bounds, surrogates and Hangul syllables, as the standard gives
+# them
+src/str.h repeated-limit * UTF-8 well-formed byte ranges (Unicode Table 3-7)
+src/str/strUTF8Valid.c repeated-limit * UTF-8 byte ranges and code point bounds from the Unicode standard
+src/str/strUnicodeData.c repeated-limit * Unicode code point ranges (Hangul syllables, surrogates, planes)
+src/str/strUTF8.c repeated-limit * the 16-byte vector width of its SIMD scan
+src/str/strUTF8Cursor.c repeated-limit * the 16-byte vector width of its SIMD scan
+
+# Decimal facts: the powers of ten a digit count compares against
+src/str/strCountDigits.c repeated-limit * powers of ten: the digit counts they bound
+
+# Ported code, kept as upstream writes it
+src/str/strSqliteStr.c repeated-limit * SQLite's decimal conversion, as SQLite writes it
+src/str/strSqliteLog.c repeated-limit * SQLite's log estimate, as SQLite writes it
+src/str/strLuajitStr.c repeated-limit * LuaJIT's number scanner, as LuaJIT writes it
+src/rapidhash.c repeated-limit * rapidhash's input size steps, as upstream writes them
+
+# Unrelated rules that share a number with another file
+src/clusterRing.c repeated-limit 100 a percentage's whole (bounded load above 100%)
+src/util.c repeated-limit 1024 the step between byte units (KiB, MiB, ...)
+src/datakit-test.c repeated-limit 16 a truncation test's smallest usable snapshot
