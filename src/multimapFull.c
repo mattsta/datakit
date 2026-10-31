@@ -491,6 +491,17 @@ DK_INLINE_ALWAYS void
 multimapFullCompact_(multimapFull *m, const bool useReference,
                      const multimapAtom *referenceContainer) {
     const multimapElements elements = m->elementsPerEntry;
+    /* Map 'idx' took rows, or lost its first ones: its range box borrows
+     * its head's bytes, and an append can move the map */
+#define COMPACT_REFRESH_(idx, map_)                                            \
+    do {                                                                       \
+        if (useReference) {                                                    \
+            updateRangeBoxForIdxWithReference(m, idx, map_,                    \
+                                              referenceContainer);             \
+        } else {                                                               \
+            updateRangeBoxForIdx(m, idx, map_);                                \
+        }                                                                      \
+    } while (0)
     multimapFullIdx i = 0;
     while (i + 1 < m->count) {
         flex **map = getMapPtr(m, i);
@@ -501,6 +512,7 @@ multimapFullCompact_(multimapFull *m, const bool useReference,
             flexFree(*next);
             SET_MIDDLE_FORCE(m, i, *map);
             reallocDecrCount(m, i + 1);
+            COMPACT_REFRESH_(i, *getMapPtr(m, i));
             continue;
         }
 
@@ -532,16 +544,13 @@ multimapFullCompact_(multimapFull *m, const bool useReference,
             flexFree(moved);
             SET_MIDDLE_FORCE(m, i, *map);
             SET_MIDDLE_FORCE(m, i + 1, *next);
-            if (useReference) {
-                updateRangeBoxForIdxWithReference(m, i + 1, *next,
-                                                  referenceContainer);
-            } else {
-                updateRangeBoxForIdx(m, i + 1, *next);
-            }
+            COMPACT_REFRESH_(i, *map);
+            COMPACT_REFRESH_(i + 1, *next);
         }
 
         i++;
     }
+#undef COMPACT_REFRESH_
 }
 
 void multimapFullCompact(multimapFull *m) {

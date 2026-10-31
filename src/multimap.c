@@ -6551,6 +6551,53 @@ int multimapTest(int, char *[]) {
         }
     }
 
+    TEST("Compact with string keys: every map's range box follows its head "
+         "when the map takes rows") {
+        /* Keys past 8 bytes: a plain range box borrows its head's bytes
+         * from the map, so a map that grows (and may move) as it takes
+         * its neighbour's rows needs its box refreshed */
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        const int64_t rows = 3000;
+        char key[32];
+        for (int64_t i = 0; i < rows; i++) {
+            const int n = snprintf(key, sizeof(key), "row-key-%012" PRId64, i);
+            const databox kb = databoxNewBytes(key, (size_t)n);
+            const databox vb = databoxNewSigned(i * 3);
+            const databox *row[2] = {&kb, &vb};
+            multimapInsert(&m, row);
+        }
+        /* Each step divides the next: the rows left are the multiples of
+         * the last step */
+        const int64_t keepEvery[] = {1, 2, 4, 8, 40};
+        for (size_t p = 0; p < countof(keepEvery); p++) {
+            for (int64_t i = 0; i < rows; i++) {
+                if (i % keepEvery[p]) {
+                    const int n =
+                        snprintf(key, sizeof(key), "row-key-%012" PRId64, i);
+                    const databox kb = databoxNewBytes(key, (size_t)n);
+                    multimapDelete(&m, &kb);
+                }
+            }
+            multimapCompact(&m);
+            multimapVerify(m);
+            size_t missing = 0;
+            for (int64_t i = 0; i < rows; i += keepEvery[p]) {
+                const int n =
+                    snprintf(key, sizeof(key), "row-key-%012" PRId64, i);
+                const databox kb = databoxNewBytes(key, (size_t)n);
+                databox vb = {};
+                databox *vals[1] = {&vb};
+                missing += !multimapLookup(m, &kb, vals) || vb.data.i != i * 3;
+            }
+            if (missing) {
+                ERR("keep every %" PRId64 ": %zu rows not found after a "
+                    "compaction",
+                    keepEvery[p], missing);
+            }
+        }
+    }
+
     TEST("Compact on a map of references keeps every lookup") {
         cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
         cleaner(multimapFree) multimap *m =
