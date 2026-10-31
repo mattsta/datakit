@@ -67,8 +67,8 @@ multiTimerSystemMonotonicUs multiTimerGetUs(void);
 /* Timer processing */
 void multiTimerProcessTimerEvents(multiTimer *t);
 
-/* Lowest entry in scheduled timer map.
- * Returns 0 when no timers are scheduled. */
+/* The time of the earliest timer that will fire (a stopped timer still
+ * stored is skipped).  Returns 0 when none will. */
 multiTimerSystemMonotonicUs multiTimerNextTimerEventStartUs(multiTimer *t);
 
 /* Microseconds until the next timer event (negative if overdue).

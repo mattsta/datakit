@@ -545,14 +545,49 @@ void multiTimerProcessTimerEvents(multiTimer *t) {
     }
 }
 
+/* Whether timer `id` is stopped, consuming nothing (checkTimerExceptions
+ * is the consuming form) */
+static bool multiTimerStopped_(const multiTimer *t, multiTimerId id) {
+    if (t->stopPending == 0) {
+        return false;
+    }
+
+    if (id <= t->stoppedUpTo) {
+        return true;
+    }
+
+    if (multimapCount(t->stopEvents) == 0 || id < t->stopLowest ||
+        id > t->stopHighest) {
+        return false;
+    }
+
+    const databox stop = databoxNewUnsigned(id);
+    return multimapExists(t->stopEvents, &stop);
+}
+
 multiTimerSystemMonotonicUs multiTimerNextTimerEventStartUs(multiTimer *t) {
     if (multimapCount(t->scheduled) == 0) {
         return 0;
     }
 
-    databox first[ELEMENTS_PER_EVENT];
-    multimapFirstInto(t->scheduled, first, ELEMENTS_PER_EVENT);
-    return adjustedToNative(t, first[0].data.u64);
+    databox e[ELEMENTS_PER_EVENT];
+    if (t->stopPending == 0) {
+        multimapFirstInto(t->scheduled, e, ELEMENTS_PER_EVENT);
+        return adjustedToNative(t, e[0].data.u64);
+    }
+
+    /* The first entry that is not stopped: a stopped one stays stored
+     * until processing reaches it, and fires nothing.  The walk skips at
+     * most the stopped entries ahead of it. */
+    multimapIterator iter;
+    multimapIteratorInit(t->scheduled, &iter, true);
+    while (multimapIteratorNextInto(&iter, e, ELEMENTS_PER_EVENT)) {
+        if (!multiTimerStopped_(t, e[3].data.u64)) {
+            return adjustedToNative(t, e[0].data.u64);
+        }
+    }
+
+    return 0;
 }
 
 multiTimerUs multiTimerNextTimerEventOffsetFromNowUs(multiTimer *t) {

@@ -129,12 +129,392 @@ static void sleepUs(uint64_t us) {
     usleep((useconds_t)us);
 }
 
+/* ====================================================================
+ * The model test: every public call against a table of timers on the
+ * same clock (the real monotonic clock plus every advance, made by
+ * moving the timer's start back as a simulation does), timers acting
+ * from their own callbacks.  A timer fires once its delay has passed,
+ * never earlier, in expiry order within a pass, and never after it is
+ * stopped; a repeat counts from its run (or, inclusive of runtime, from
+ * its expiry).
+ * ==================================================================== */
+#include "dkRandom.h"
+
+typedef enum mtAct_ {
+    MT_ACT_NONE = 0,
+    MT_ACT_CANCEL_OTHER,
+    MT_ACT_CANCEL_SELF,
+    MT_ACT_REGISTER,
+    MT_ACT_STOP_ALL,
+    MT_ACT_REENTER,
+    MT_ACT_COUNT_,
+} mtAct_;
+
+typedef struct mtTimer_ {
+    multiTimerId id;
+    int64_t dueLo; /* the model clock's span for the next expiry */
+    int64_t dueHi;
+    uint64_t interval; /* 0: one-shot */
+    uint32_t fires;
+    uint32_t maxFires;
+    uint32_t firedInPass; /* the pass of the last fire */
+    bool live;
+    bool cancelled;
+    mtAct_ act;
+} mtTimer_;
+
+static constexpr uint32_t MT_CAP = 2048;
+
+typedef struct mtModel_ {
+    multiTimer *mt;
+    int64_t realStart;
+    int64_t advanced;
+    uint32_t n;
+    uint32_t pass;
+    int64_t passLastDueLo; /* order within a pass */
+    bool failed;
+    const char *why;
+    uint64_t rng;
+    uint32_t acted[MT_ACT_COUNT_];
+    mtTimer_ t[MT_CAP];
+} mtModel_;
+
+defcleanerName(mtModel_ *, zfree, MtModel);
+
+static mtModel_ *mtModelLive_;
+
+static int64_t mtClock_(const mtModel_ *M) {
+    return (int64_t)timeUtilMonotonicUs() - M->realStart + M->advanced;
+}
+
+static void mtFail_(mtModel_ *M, const char *why) {
+    if (!M->failed) {
+        M->failed = true;
+        M->why = why;
+    }
+}
+
+static bool mtFire_(multiTimer *mt, multiTimerId id, void *clientData);
+
+/* @model: src/multiTimer.h */
+static void mtRegister_(mtModel_ *M, uint64_t delay, uint64_t interval,
+                        mtAct_ act) {
+    if (M->n >= MT_CAP) {
+        return;
+    }
+    mtTimer_ *t = &M->t[M->n];
+    *t = (mtTimer_){.interval = interval,
+                    .maxFires = interval ? 1 + (uint32_t)(M->rng % 4) : 1,
+                    .live = true,
+                    .act = act};
+    M->rng = dkSplitmix64Next(&M->rng) | 1;
+    const int64_t before = mtClock_(M);
+    t->id = multiTimerRegister(M->mt, delay, interval, mtFire_,
+                               (void *)(uintptr_t)M->n);
+    t->dueLo = before + (int64_t)delay;
+    t->dueHi = mtClock_(M) + (int64_t)delay;
+    M->n++;
+    if (t->id == 0 || (M->n > 1 && t->id <= M->t[M->n - 2].id)) {
+        mtFail_(M, "an id is 0 or not above the last");
+    }
+}
+
+static void mtCancel_(mtModel_ *M, uint32_t at) {
+    mtTimer_ *t = &M->t[at];
+    if (!multiTimerUnregister(M->mt, t->id)) {
+        mtFail_(M, "an issued id was not known");
+    }
+    t->live = false;
+    t->cancelled = true;
+}
+
+/* @model: src/multiTimer.h */
+static bool mtFire_(multiTimer *mt, multiTimerId id, void *clientData) {
+    mtModel_ *M = mtModelLive_;
+    const uint32_t at = (uint32_t)(uintptr_t)clientData;
+    mtTimer_ *t = &M->t[at];
+    const int64_t now = mtClock_(M);
+    if (mt != M->mt || id != t->id) {
+        mtFail_(M, "a callback got another timer set or id");
+        return false;
+    }
+    if (!t->live || t->cancelled) {
+        mtFail_(M, "a stopped or finished timer fired");
+        return false;
+    }
+    if (now < t->dueLo) {
+        mtFail_(M, "a timer fired early");
+    }
+    if (t->dueHi < M->passLastDueLo) {
+        mtFail_(M, "a pass fired out of expiry order");
+    }
+    M->passLastDueLo = t->dueLo;
+    t->fires++;
+    t->firedInPass = M->pass;
+    const bool again = t->interval && t->fires < t->maxFires;
+    t->live = again;
+    /* The next expiry: from this run, or inclusive of runtime from this
+     * expiry; the upper end is settled when the pass ends */
+    if (again) {
+        if (mt->timersInclusiveOfTimerRuntime) {
+            t->dueLo += (int64_t)t->interval;
+            t->dueHi += (int64_t)t->interval;
+        } else {
+            t->dueLo = now + (int64_t)t->interval;
+            t->dueHi = INT64_MAX;
+        }
+    }
+    M->acted[t->act]++;
+    switch (t->act) {
+    case MT_ACT_CANCEL_OTHER: {
+        const uint32_t other = (uint32_t)(dkSplitmix64Next(&M->rng) % M->n);
+        if (other != at) {
+            mtCancel_(M, other);
+        }
+        break;
+    }
+    case MT_ACT_CANCEL_SELF:
+        if (!multiTimerUnregister(mt, id)) {
+            mtFail_(M, "the firing timer's id was not known");
+        }
+        t->live = false;
+        t->cancelled = true;
+        return again;
+    case MT_ACT_REGISTER: /* deferred until processing completes */
+        mtRegister_(M, dkSplitmix64Next(&M->rng) % 3000, 0, MT_ACT_NONE);
+        break;
+    case MT_ACT_STOP_ALL:
+        if (!multiTimerStopAll(mt)) {
+            mtFail_(M, "StopAll failed in a callback");
+        }
+        for (uint32_t i = 0; i < M->n; i++) {
+            M->t[i].cancelled = M->t[i].cancelled || M->t[i].live || i == at;
+            M->t[i].live = false;
+        }
+        mtRegister_(M, 500, 0, MT_ACT_NONE); /* registered after: survives */
+        return again;
+    case MT_ACT_REENTER: /* a no-op, reported */
+        multiTimerProcessTimerEvents(mt);
+        break;
+    default:
+        break;
+    }
+    return again;
+}
+
+/* @model: src/multiTimer.h */
+/* One processing pass, from the timer's own clock or after an advance */
+static void mtPass_(mtModel_ *M, uint64_t advance) {
+    const int64_t before = mtClock_(M) + (int64_t)advance;
+    M->pass++;
+    M->passLastDueLo = INT64_MIN;
+    M->advanced += (int64_t)advance;
+    M->mt->initialStartTime -= (multiTimerSystemMonotonicUs)advance;
+    multiTimerProcessTimerEvents(M->mt);
+    const int64_t after = mtClock_(M);
+    for (uint32_t i = 0; i < M->n; i++) {
+        mtTimer_ *t = &M->t[i];
+        if (!t->live || t->cancelled) {
+            continue;
+        }
+        if (t->firedInPass == M->pass && t->dueHi == INT64_MAX) {
+            t->dueHi = after + (int64_t)t->interval; /* counted from its run */
+        }
+        /* Due by the pass's start, and not waiting on this pass's
+         * reschedule: it fired */
+        if (t->dueHi <= before && t->firedInPass != M->pass) {
+            mtFail_(M, "a timer past its expiry did not fire");
+        }
+    }
+}
+
+/* @model: src/multiTimer.h */
+/* The count, next event and statistics agree with the model */
+static void mtCheckState_(mtModel_ *M) {
+    size_t live = 0;
+    int64_t lo = INT64_MAX;
+    int64_t hi = INT64_MAX;
+    for (uint32_t i = 0; i < M->n; i++) {
+        const mtTimer_ *t = &M->t[i];
+        if (t->live && !t->cancelled) {
+            live++;
+            lo = t->dueLo < lo ? t->dueLo : lo;
+            hi = t->dueHi < hi ? t->dueHi : hi;
+        }
+    }
+    if (multiTimerCount(M->mt) != live) {
+        mtFail_(M, "the count");
+    }
+    const int64_t nowBefore = mtClock_(M);
+    const multiTimerUs offset = multiTimerNextTimerEventOffsetFromNowUs(M->mt);
+    const multiTimerSystemMonotonicUs next =
+        multiTimerNextTimerEventStartUs(M->mt);
+    const int64_t nowAfter = mtClock_(M);
+    if ((live == 0) != (next == 0) || (live == 0 && offset != 0)) {
+        static char why[160];
+        snprintf(why, sizeof(why),
+                 "the next event is %" PRId64 " (offset %" PRId64
+                 ") with %zu live, count %zu",
+                 next, offset, live, multiTimerCount(M->mt));
+        mtFail_(M, why);
+    } else if (live && (offset < lo - nowAfter - 100 ||
+                        (hi != INT64_MAX && offset > hi - nowBefore + 100))) {
+        mtFail_(M, "the next event is not the earliest live timer's");
+    }
+    multiTimerStats st = {};
+    multiTimerGetStats(M->mt, &st);
+    if (st.activeCount != live || st.pendingCount != 0 || st.memoryBytes == 0) {
+        mtFail_(M, "the statistics");
+    }
+    const multiTimerSystemMonotonicUs us = multiTimerGetUs();
+    const multiTimerSystemMonotonicUs ns = multiTimerGetNs();
+    if (us <= 0 || ns / 1000 + 1000 < us) {
+        mtFail_(M, "the clocks");
+    }
+}
+
+/* @model: src/multiTimer.h */
+static int multiTimerTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, MtModel) mtModel_ *M = zcalloc(1, sizeof(*M));
+    mtModelLive_ = M;
+    /* @own: container; free=multiTimerFree */
+    M->mt = multiTimerNew();
+    M->mt->timersInclusiveOfTimerRuntime = seed % 2;
+    M->realStart = (int64_t)timeUtilMonotonicUs();
+    M->rng = seed;
+    uint64_t rng = seed * 7919;
+    for (uint32_t step = 0; step < 3000 && !err && !M->failed; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const uint32_t op = (uint32_t)(r % 12);
+        switch (op) {
+        case 0:
+        case 1:
+        case 2: {
+            const uint64_t span = (r >> 8) % 20;
+            const uint64_t delay = span < 12   ? (r >> 16) % 3000
+                                   : span < 18 ? (r >> 16) % 20000000
+                                               : UINT64_C(70000000000);
+            const uint64_t interval =
+                (r >> 40) % 4 == 0 ? 1000 + (r >> 44) % 5000 : 0;
+            const uint64_t pick = (r >> 50) % 40;
+            const mtAct_ act = pick < 28   ? MT_ACT_NONE
+                               : pick < 32 ? MT_ACT_CANCEL_OTHER
+                               : pick < 35 ? MT_ACT_CANCEL_SELF
+                               : pick < 38 ? MT_ACT_REGISTER
+                               : pick < 39 ? MT_ACT_REENTER
+                                           : MT_ACT_STOP_ALL;
+            mtRegister_(M, delay, interval, act);
+            break;
+        }
+        case 3:
+            if (M->n) {
+                mtCancel_(M, (uint32_t)((r >> 8) % M->n));
+            }
+            break;
+        case 4:
+            if (multiTimerUnregister(M->mt,
+                                     M->n ? M->t[M->n - 1].id + 1000 : 1) ||
+                multiTimerUnregister(M->mt, 0)) {
+                mtFail_(M, "an unissued id was known");
+            }
+            break;
+        case 5:
+        case 6:
+        case 7:
+        case 8: {
+            const uint64_t span = (r >> 8) % 20;
+            mtPass_(M, span < 14   ? (r >> 16) % 2500
+                       : span < 19 ? (r >> 16) % 2000000
+                                   : UINT64_C(80000000000));
+            break;
+        }
+        case 9:
+            mtPass_(M, 0);
+            break;
+        case 10:
+            if ((r >> 8) % 8 == 0) {
+                if (!multiTimerStopAll(M->mt)) {
+                    mtFail_(M, "StopAll failed");
+                }
+                for (uint32_t i = 0; i < M->n; i++) {
+                    M->t[i].cancelled = M->t[i].cancelled || M->t[i].live;
+                    M->t[i].live = false;
+                }
+            }
+            break;
+        default:
+            if ((r >> 8) % 16 == 0) { /* made anew in place */
+                const bool inclusive = M->mt->timersInclusiveOfTimerRuntime;
+                multiTimerDeinit(M->mt);
+                if (!multiTimerInit(M->mt)) {
+                    mtFail_(M, "Init failed");
+                }
+                M->mt->timersInclusiveOfTimerRuntime = inclusive;
+                M->realStart = (int64_t)timeUtilMonotonicUs();
+                M->advanced = 0;
+                M->n = 0;
+            }
+            break;
+        }
+        if (M->n >= MT_CAP - 8) {
+            const bool inclusive = M->mt->timersInclusiveOfTimerRuntime;
+            multiTimerFree(M->mt);
+            /* @own: container; free=multiTimerFree */
+            M->mt = multiTimerNew();
+            M->mt->timersInclusiveOfTimerRuntime = inclusive;
+            M->realStart = (int64_t)timeUtilMonotonicUs();
+            M->advanced = 0;
+            M->n = 0;
+        }
+        if (!M->failed && step % 10 == 9) {
+            mtCheckState_(M);
+        }
+        if (M->failed) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 ": %s (%" PRIu32
+                " timers, seed %" PRIu64 ")",
+                step, op, M->why, M->n, seed);
+        }
+    }
+    for (uint32_t a = 0; a < MT_ACT_COUNT_ && !err; a++) {
+        if (!M->acted[a]) {
+            ERR("callback action %" PRIu32 " never ran", a);
+        }
+    }
+    multiTimerFree(M->mt);
+    mtModelLive_ = nullptr;
+    return err;
+}
+
 int multiTimerTest(int, char *[]) {
     int32_t err = 0;
 
     /* ================================================================
      * Basic Initialization Tests
      * ================================================================ */
+
+    TEST("model: every public call against a table of timers") {
+        for (uint64_t seed = 1; seed <= 4; seed++) {
+            err += multiTimerTestModel_(seed);
+        }
+    }
+
+    TEST("multiTimer: a stopped earliest timer is not the next event") {
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
+        const multiTimerId first =
+            multiTimerRegister(t, 2000, 0, mtFire_, nullptr);
+        (void)multiTimerRegister(t, 9000, 0, mtFire_, nullptr);
+        const multiTimerSystemMonotonicUs before =
+            multiTimerNextTimerEventStartUs(t);
+        (void)multiTimerUnregister(t, first);
+        const multiTimerSystemMonotonicUs after =
+            multiTimerNextTimerEventStartUs(t);
+        if (after < before + 6000) {
+            ERR("the next event after the stop is %" PRId64 " (was %" PRId64
+                ")",
+                after, before);
+        }
+    }
 
     TEST("multiTimer: create and free") {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();

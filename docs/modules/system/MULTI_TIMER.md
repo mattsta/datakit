@@ -242,7 +242,8 @@ size_t multiTimerCount(multiTimer *t);
 
 /* Get absolute time of next timer
  * t: timer manager
- * Returns: monotonic time (microseconds) of next timer, or 0 if no timers
+ * Returns: monotonic time (microseconds) of the earliest timer that will
+ * fire (a stopped timer still stored is skipped), or 0 if none will
  */
 multiTimerSystemMonotonicUs multiTimerNextTimerEventStartUs(multiTimer *t);
 
