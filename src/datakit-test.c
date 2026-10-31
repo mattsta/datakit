@@ -2421,6 +2421,559 @@ static int dkTestOwnedArenaSoak(void) {
     return err;
 }
 
+/* ====================================================================
+ * ownedState model test: random sequences against a model of each
+ * primitive, on one thread with the clock driven:
+ *   - an arena under each release rule: a row goes once its grace has
+ *     passed (the default rule) and the gate was seen idle after its
+ *     retire (a Drain sampling it at zero, or an Exit bringing it to
+ *     zero), never before; each cargo released exactly once; a row
+ *     held too long reported once;
+ *   - a cell of each form: the last publication reads back, every
+ *     displaced value retires through the arena, a foreign writer is
+ *     counted and still lands;
+ *   - a slot through every transition, its cargo released exactly once
+ *     whichever side releases it;
+ *   - a sequence ring: every read's verdict from the publication the
+ *     version holds, the cursors, oversize refusals and CAPACITY.
+ * ==================================================================== */
+#define DK_OM_ROWS 512u
+#define DK_OM_SEQ_N 4u
+
+typedef struct dkOmRow_ {
+    dkOwnedCargo cargo;
+    uint64_t parked;
+    uint64_t epoch;
+    bool idleSeen; /* the gate was seen idle after the retire */
+    bool live;     /* parked, not yet released */
+    bool reported;
+} dkOmRow_;
+
+typedef struct dkOmModel_ {
+    dkOmRow_ rows[DK_OM_ROWS];
+    uint32_t n;
+    uint32_t depth;
+    uint64_t retires;      /* the arena's retire epoch */
+    uint64_t lastIdleSeen; /* the retire epoch at the last idle sighting */
+    bool readersOnly;
+    uint32_t holds;
+    uint64_t parked; /* every retire, across table restarts */
+    uint64_t released;
+} dkOmModel_;
+
+defcleanerName(dkOmModel_ *, zfree, OmModel);
+
+static uint32_t g_dkOmHolds;
+static uint64_t g_dkOmReleases;
+static bool g_dkOmTwice; /* a cargo released twice */
+
+static void dkOmRelease_(void *cargo) {
+    dkOwnedCargo *c = cargo;
+    g_dkOmTwice = g_dkOmTwice || c->released;
+    c->released = true;
+    g_dkOmReleases++;
+}
+
+static void dkOmNoteHold_(void *, const char *, const char *, uint64_t,
+                          uint64_t, uint32_t) {
+    g_dkOmHolds++;
+}
+
+static const ownedArenaDecl dkOmGraceDecl_ = {
+    .name = "datakit.selftest.model.grace",
+    .graceUs = DK_OWNED_GRACE_US,
+    .holdMultiple = DK_OWNED_HOLD_MULTIPLE,
+    .nowUs = dkOwnedNowUs_,
+    .noteHold = dkOmNoteHold_,
+};
+
+static const ownedArenaDecl dkOmReadersDecl_ = {
+    .name = "datakit.selftest.model.readers",
+    .nowUs = dkOwnedNowUs_,
+    .noteHold = dkOmNoteHold_,
+    .release = OWNED_RELEASE_READERS_ONLY,
+    .reportHorizonUs = DK_OWNED_GRACE_US * 7,
+};
+
+/* An idle sighting now: every row retired so far has seen the gate idle */
+static void dkOmIdle_(dkOmModel_ *M) {
+    M->lastIdleSeen = M->retires;
+    for (uint32_t i = 0; i < M->n; i++) {
+        M->rows[i].idleSeen = true;
+    }
+}
+
+/* @model: src/ownedState.h */
+static int dkTestOwnedModelArena_(bool readersOnly, uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, OmModel) dkOmModel_ *M = zcalloc(1, sizeof(*M));
+    g_dkOmHolds = 0;
+    g_dkOmTwice = false;
+    M->readersOnly = readersOnly;
+    g_dkOwnedNowUs = 5'000'000;
+    ownedArena a;
+    ownedArenaInit(&a, readersOnly ? &dkOmReadersDecl_ : &dkOmGraceDecl_);
+    const uint64_t baseDeferred = ownedArenaDeferredTotal();
+    const uint64_t baseRetired = ownedArenaRetiredTotal();
+    const uint64_t baseLive = ownedArenaLiveRows();
+    const uint64_t baseGraceHeld = ownedArenaGraceHeldTotal();
+    const uint64_t baseNeverLeft = ownedArenaHeldReadersNeverLeftTotal();
+    uint64_t graceHeld = 0;
+    uint64_t rng = seed;
+    for (uint32_t step = 0; step < 6000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        switch (r % 6) {
+        case 0: /* a reader comes in */
+            if (M->depth < 6) {
+                ownedArenaEnter(&a);
+                M->depth++;
+            }
+            break;
+        case 1: /* a reader leaves; the last one out sees the gate idle */
+            if (M->depth) {
+                ownedArenaExit(&a);
+                if (--M->depth == 0) {
+                    dkOmIdle_(M);
+                }
+            }
+            break;
+        case 2: /* an object retired */
+            if (M->n < DK_OM_ROWS) {
+                dkOmRow_ *row = &M->rows[M->n++];
+                *row = (dkOmRow_){.cargo = {.id = M->n},
+                                  .parked = g_dkOwnedNowUs,
+                                  .epoch = ++M->retires,
+                                  .live = true};
+                M->parked++;
+                ownedArenaRetire(&a, &row->cargo, dkOmRelease_,
+                                 dkOwnedDescribe_, OWNED_OOM_LEAK);
+            }
+            break;
+        case 3: /* time passes */
+            g_dkOwnedNowUs += (r >> 8) % (DK_OWNED_GRACE_US * 2);
+            break;
+        default: { /* a drain: idle now, or by an earlier sighting */
+            if (M->depth == 0) {
+                dkOmIdle_(M);
+            }
+            const uint64_t held = DK_OWNED_GRACE_US * DK_OWNED_HOLD_MULTIPLE;
+            const uint64_t horizon = DK_OWNED_GRACE_US * 7;
+            for (uint32_t i = 0; i < M->n; i++) {
+                dkOmRow_ *row = &M->rows[i];
+                if (!row->live) {
+                    continue;
+                }
+                const uint64_t age = g_dkOwnedNowUs - row->parked;
+                /* (past the grace: strictly older than it) */
+                const bool graced = readersOnly || age > DK_OWNED_GRACE_US;
+                if (row->idleSeen && graced) {
+                    row->live = false;
+                    M->released++;
+                    continue;
+                }
+                graceHeld += graced; /* past its grace, readers remain */
+                if (!row->reported &&
+                    (readersOnly ? age > horizon : graced && age > held)) {
+                    row->reported = true;
+                    M->holds++;
+                }
+            }
+            ownedArenaDrain(&a);
+            break;
+        }
+        }
+        /* Released exactly as the model says (each cargo once) */
+        uint32_t released = 0;
+        uint32_t live = 0;
+        for (uint32_t i = 0; i < M->n; i++) {
+            released += M->rows[i].cargo.released;
+            live += M->rows[i].live;
+            if (M->rows[i].cargo.released == M->rows[i].live) {
+                printf("dkTestOwnedState FAIL: model (%s, seed %" PRIu64
+                       ") step %" PRIu32 ": row %" PRIu32
+                       " released %d, the model's live %d\n",
+                       readersOnly ? "readers" : "grace", seed, step, i,
+                       (int)M->rows[i].cargo.released, (int)M->rows[i].live);
+                err++;
+                break;
+            }
+        }
+        (void)released;
+        if (!err &&
+            (ownedArenaDepth(&a) != M->depth || g_dkOmHolds != M->holds ||
+             a.count != live || g_dkOmTwice ||
+             ownedArenaDeferredTotal() - baseDeferred != M->parked ||
+             ownedArenaRetiredTotal() - baseRetired != M->released ||
+             ownedArenaLiveRows() - baseLive != live ||
+             ownedArenaGraceHeldTotal() - baseGraceHeld != graceHeld ||
+             ownedArenaHeldReadersNeverLeftTotal() - baseNeverLeft !=
+                 M->holds)) {
+            printf("dkTestOwnedState FAIL: model (%s, seed %" PRIu64
+                   ") step %" PRIu32 ": depth %" PRIu32 "/%" PRIu32
+                   ", holds %" PRIu32 "/%" PRIu32 ", rows %zu/%" PRIu32 "\n",
+                   readersOnly ? "readers" : "grace", seed, step,
+                   ownedArenaDepth(&a), M->depth, g_dkOmHolds, M->holds,
+                   a.count, live);
+            err++;
+        }
+        if (M->n == DK_OM_ROWS && M->depth == 0 && a.count == 0) {
+            M->n = 0; /* every row released: start the table over */
+        }
+    }
+    while (M->depth) {
+        ownedArenaExit(&a);
+        M->depth--;
+    }
+    ownedArenaDestruct(&a); /* the rest released, held ones included */
+    for (uint32_t i = 0; i < M->n && !err; i++) {
+        if (!M->rows[i].cargo.released) {
+            printf("dkTestOwnedState FAIL: model: destruct kept row %" PRIu32
+                   "\n",
+                   i);
+            err++;
+        }
+    }
+    return err;
+}
+
+/* @model: src/ownedState.h */
+/* A cell of each form, its displaced values through an arena, the
+ * writer check counted but never refusing */
+static int dkTestOwnedModelCell_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, OmModel) dkOmModel_ *M = zcalloc(1, sizeof(*M));
+    g_dkOmTwice = false;
+    g_dkOwnedNowUs = 7'000'000;
+    ownedArena a;
+    ownedArenaInit(&a, &dkOmGraceDecl_);
+    static const ownedCellDecl indirect = {
+        .name = "datakit.selftest.model.cell",
+        .form = OWNED_CELL_INDIRECT,
+        .discipline = OWNED_WRITER_SERIALIZED,
+        .writer_ok = dkOwnedWriterOk_,
+        .release = dkOmRelease_,
+        .describe = dkOwnedDescribe_,
+        .oom = OWNED_OOM_LEAK,
+    };
+    static const ownedCellDecl inlineDecl = {
+        .name = "datakit.selftest.model.cell.inline",
+        .form = OWNED_CELL_INLINE,
+        .discipline = OWNED_WRITER_CLASS,
+        .writer_ok = dkOwnedWriterOk_,
+    };
+    ownedCell cell;
+    ownedCell word;
+    ownedCellInit(&cell, &indirect, M, &a);
+    ownedCellInit(&word, &inlineDecl, M, nullptr);
+    const uint64_t baseViolations = ownedCellWriterViolationTotal();
+    uint64_t violations = 0;
+    uint64_t wordValue = 0;
+    const dkOwnedCargo *current = nullptr;
+    uint32_t published = 0;
+    uint64_t rng = seed;
+    for (uint32_t step = 0; step < 2000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        g_dkOwnedWriterOk = (r >> 30) % 5 != 0;
+        violations += !g_dkOwnedWriterOk;
+        if (r % 2 && published < DK_OM_ROWS) {
+            dkOmRow_ *row = &M->rows[published++];
+            row->cargo = (dkOwnedCargo){.id = published};
+            ownedCellPublish(&cell, &row->cargo);
+            current = &row->cargo;
+        } else {
+            wordValue = r;
+            ownedCellStore(&word, wordValue);
+        }
+        ownedArenaEnter(&a);
+        const bool readsBack = ownedCellRead(&cell) == current &&
+                               ownedCellLoad(&word) == wordValue;
+        ownedArenaExit(&a);
+        g_dkOwnedNowUs += DK_OWNED_GRACE_US + 1;
+        ownedArenaDrain(&a);
+        /* every displaced value released (the gate idle, a grace on),
+         * the current one never */
+        bool displacedGone = true;
+        for (uint32_t i = 0; i + 1 < published; i++) {
+            displacedGone = displacedGone && M->rows[i].cargo.released;
+        }
+        if (!readsBack || !displacedGone || g_dkOmTwice ||
+            (current && current->released) ||
+            ownedCellWriterViolationTotal() - baseViolations != violations) {
+            printf("dkTestOwnedState FAIL: cell model step %" PRIu32 "\n",
+                   step);
+            err++;
+        }
+    }
+    g_dkOwnedWriterOk = true;
+    ownedCellDestruct(&cell); /* the current value released directly */
+    ownedCellDestruct(&word);
+    ownedArenaDestruct(&a);
+    for (uint32_t i = 0; i < published && !err; i++) {
+        if (!M->rows[i].cargo.released) {
+            printf("dkTestOwnedState FAIL: cell model kept value %" PRIu32 "\n",
+                   i);
+            err++;
+        }
+    }
+    if (ownedCellLoad(&word) != 0) {
+        err++;
+    }
+    return err;
+}
+
+/* @model: src/ownedState.h */
+/* A slot through random claims, publishes and retires: its state as the
+ * model's, each cargo released once by whichever side owes it */
+static int dkTestOwnedModelSlot_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, OmModel) dkOmModel_ *M = zcalloc(1, sizeof(*M));
+    g_dkOmTwice = false;
+    const uint64_t baseReleases = g_dkOmReleases;
+    uint64_t wantReleases = 0;
+    static ownedStateRow row;
+    static const ownedSlotDecl decl = {.name = "datakit.selftest.model.slot",
+                                       .row = &row};
+    uint64_t rng = seed;
+    uint64_t refused = 0;
+    uint64_t metClaimed = 0;
+    uint64_t byClaimant = 0;
+    const uint64_t baseRefused = ownedSlotClaimRefusedTotal(&decl);
+    const uint64_t baseMet = ownedSlotRetireMetClaimedTotal(&decl);
+    const uint64_t baseBy = ownedSlotReleaseByClaimantTotal(&decl);
+    for (uint32_t round = 0; round < 400 && !err; round++) {
+        ownedSlot s;
+        ownedSlotInit(&s, &decl);
+        ownedSlotState state = OWNED_SLOT_EMPTY;
+        bool owed = false; /* the claimant owes the release */
+        dkOmRow_ *cargo = &M->rows[round % DK_OM_ROWS];
+        cargo->cargo = (dkOwnedCargo){.id = round};
+        for (uint32_t step = 0; step < 12 && !err; step++) {
+            const uint64_t r = dkSplitmix64Next(&rng);
+            const uint32_t op = (uint32_t)(r % 3);
+            bool ok = true;
+            if (op == 0) {
+                ownedSlotState prior = OWNED_SLOT_RETIRED;
+                const bool can =
+                    state == OWNED_SLOT_EMPTY || state == OWNED_SLOT_ARMED;
+                ok = ownedSlotClaim(&s, &prior) == can &&
+                     (!can || prior == state);
+                if (can) {
+                    state = OWNED_SLOT_CLAIMED;
+                } else {
+                    refused++;
+                }
+            } else if (op == 1) {
+                if (state == OWNED_SLOT_CLAIMED) {
+                    const bool arm = (r >> 8) % 2;
+                    ok = ownedSlotPublish(&s, arm, dkOmRelease_, &cargo->cargo);
+                    state = arm ? OWNED_SLOT_ARMED : OWNED_SLOT_EMPTY;
+                } else if (state == OWNED_SLOT_RETIRED && owed) {
+                    /* the claimant's publish meets RETIRED and releases */
+                    ok = !ownedSlotPublish(&s, true, dkOmRelease_,
+                                           &cargo->cargo);
+                    owed = false;
+                    byClaimant++;
+                    wantReleases++;
+                }
+            } else {
+                const ownedSlotState displaced =
+                    ownedSlotRetire(&s, dkOmRelease_, &cargo->cargo);
+                ok = displaced == state;
+                if (state == OWNED_SLOT_ARMED) {
+                    wantReleases++; /* this retire releases the cargo */
+                } else if (state == OWNED_SLOT_CLAIMED) {
+                    owed = true;
+                    metClaimed++;
+                }
+                state = OWNED_SLOT_RETIRED;
+            }
+            if (!ok || ownedSlotLoad(&s) != state || g_dkOmTwice ||
+                g_dkOmReleases - baseReleases != wantReleases) {
+                printf("dkTestOwnedState FAIL: slot model round %" PRIu32
+                       " step %" PRIu32 " op %" PRIu32 "\n",
+                       round, step, op);
+                err++;
+            }
+        }
+        if (owed) { /* the claimant finishes: its publish releases */
+            (void)ownedSlotPublish(&s, false, dkOmRelease_, &cargo->cargo);
+            byClaimant++;
+            wantReleases++;
+        }
+    }
+    if (!err &&
+        (ownedSlotClaimRefusedTotal(&decl) - baseRefused != refused ||
+         ownedSlotRetireMetClaimedTotal(&decl) - baseMet != metClaimed ||
+         ownedSlotReleaseByClaimantTotal(&decl) - baseBy != byClaimant ||
+         g_dkOmReleases - baseReleases != wantReleases)) {
+        printf("dkTestOwnedState FAIL: slot model counters\n");
+        err++;
+    }
+    return err;
+}
+
+/* @model: src/ownedState.h */
+static void dkOmSeqFill_(ownedSeqVersionRef *v, void *ctx) {
+    const uint64_t *n = ctx;
+    ownedSeqPutWord(v, 0, *n);
+    ownedSeqPutBytes(v, 8, "fill", 4);
+}
+
+/* @model: src/ownedState.h */
+/* A sequence ring of DK_OM_SEQ_N versions, one writer: every read's
+ * verdict is the one the version's publication gives, every counter as
+ * the model's */
+static int dkTestOwnedModelSeq_(uint64_t seed) {
+    int err = 0;
+    static ownedStateRow row;
+    static const ownedSeqDecl decl = {.name = "datakit.selftest.model.seq",
+                                      .versions = DK_OM_SEQ_N,
+                                      .version_bytes = 24,
+                                      .discipline = OWNED_WRITER_CLASS,
+                                      .row = &row};
+    _Alignas(
+        8) static uint8_t storage[OWNED_SEQ_STORAGE_WORDS(DK_OM_SEQ_N, 24) * 8];
+    ownedSeq s;
+    ownedSeqInit(&s, &decl, nullptr, storage);
+    if (ownedSeqStorageBytes(&decl) != sizeof(storage)) {
+        err++;
+    }
+    /* The counters, by column: published, torn, overwritten, abandoned,
+     * oversize */
+    uint64_t cnt[5] = {};
+    uint64_t baseCol[5];
+    for (uint32_t c = 0; c < 5; c++) {
+        baseCol[c] = ownedSeqColumnTotal(&decl, (ownedSeqColumn)c);
+    }
+    const uint64_t baseTotals[5] = {
+        ownedSeqPublishedTotal(), ownedSeqTornReadsTotal(),
+        ownedSeqOverwrittenReadsTotal(), ownedSeqPublishAbandonedTotal(),
+        ownedSeqPublishRefusedOversizeTotal()};
+    uint64_t holds[DK_OM_SEQ_N] = {}; /* the publication each version holds */
+    size_t lens[DK_OM_SEQ_N] = {};
+    uint64_t n = 0;
+    uint64_t rng = seed;
+    for (uint32_t step = 0; step < 3000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        bool ok = true;
+        if (r % 3 == 0) { /* published: bytes, through a fill, oversize */
+            const size_t len = 8 + (r >> 8) % 17;
+            if ((r >> 30) % 9 == 0) {
+                ok =
+                    !ownedSeqPublish(&s, "toolong-toolong-toolong-toolong", 25);
+                cnt[OWNED_SEQ_C_REFUSED_OVERSIZE]++;
+            } else {
+                n++;
+                cnt[OWNED_SEQ_C_PUBLISHED]++;
+                uint8_t src[24];
+                for (size_t i = 0; i < sizeof(src); i++) {
+                    src[i] = (uint8_t)(n + i);
+                }
+                memcpy(src, &n, sizeof(n));
+                const bool with = (r >> 31) % 2;
+                ok = with ? ownedSeqPublishWith(&s, 12, dkOmSeqFill_, &n)
+                          : ownedSeqPublish(&s, src, len);
+                holds[(n - 1) % DK_OM_SEQ_N] = n;
+                lens[(n - 1) % DK_OM_SEQ_N] = with ? 12 : len;
+            }
+        } else { /* a read of a publication near the cursor */
+            const uint64_t want =
+                n + 1 > (r >> 8) % 8 ? n + 1 - (r >> 8) % 8 : 0;
+            uint8_t dst[24];
+            size_t outLen = 99;
+            const size_t cap = (r >> 20) % 4 == 0 ? 4 : sizeof(dst);
+            const ownedSeqReadResult got =
+                ownedSeqReadAt(&s, want, dst, cap, &outLen);
+            const uint64_t held = want ? holds[(want - 1) % DK_OM_SEQ_N] : 0;
+            const size_t len = want ? lens[(want - 1) % DK_OM_SEQ_N] : 0;
+            ownedSeqReadResult expect;
+            if (want == 0 || held > want) {
+                expect = OWNED_SEQ_OVERWRITTEN;
+            } else if (held < want) {
+                expect = OWNED_SEQ_TORN;
+            } else if (cap < len) {
+                expect = OWNED_SEQ_CAPACITY;
+            } else {
+                expect = OWNED_SEQ_VALID;
+            }
+            cnt[OWNED_SEQ_C_TORN_READS] += expect == OWNED_SEQ_TORN;
+            cnt[OWNED_SEQ_C_OVERWRITTEN_READS] +=
+                expect == OWNED_SEQ_OVERWRITTEN;
+            uint64_t first = 0;
+            memcpy(&first, dst, sizeof(first));
+            ok = got == expect &&
+                 ((expect != OWNED_SEQ_VALID && expect != OWNED_SEQ_CAPACITY) ||
+                  outLen == len) &&
+                 (expect != OWNED_SEQ_VALID || first == want);
+            /* A word read of a 24-byte version is overwritten (counted); a
+             * missed read counts through the word reader's out-of-line
+             * half */
+            uint64_t word = 0;
+            if ((r >> 40) % 8 == 0) {
+                ok = ok && ownedSeqReadWordAt(&s, want, &word) ==
+                               OWNED_SEQ_OVERWRITTEN;
+                cnt[OWNED_SEQ_C_OVERWRITTEN_READS]++;
+            }
+            if ((r >> 44) % 8 == 0) {
+                ok = ok &&
+                     ownedSeqReadMissed(&s, OWNED_SEQ_TORN) == OWNED_SEQ_TORN;
+                cnt[OWNED_SEQ_C_TORN_READS]++;
+            }
+            /* A retry can find a version while fewer than N - 1
+             * publications were assigned since the read began */
+            ok = ok && ownedSeqReadCanSucceed(&s, n) &&
+                 (n < DK_OM_SEQ_N - 1 ||
+                  !ownedSeqReadCanSucceed(&s, n - (DK_OM_SEQ_N - 1)));
+        }
+        if (!ok || ownedSeqCursor(&s) != n || ownedSeqAssigned(&s) != n ||
+            ownedSeqVersions(&s) != DK_OM_SEQ_N) {
+            printf("dkTestOwnedState FAIL: seq model step %" PRIu32 "\n", step);
+            err++;
+        }
+    }
+    const uint64_t totals[5] = {
+        ownedSeqPublishedTotal(), ownedSeqTornReadsTotal(),
+        ownedSeqOverwrittenReadsTotal(), ownedSeqPublishAbandonedTotal(),
+        ownedSeqPublishRefusedOversizeTotal()};
+    for (uint32_t c = 0; c < 5 && !err; c++) {
+        const uint64_t col =
+            ownedSeqColumnTotal(&decl, (ownedSeqColumn)c) - baseCol[c];
+        if (col != cnt[c] || totals[c] - baseTotals[c] != cnt[c]) {
+            printf("dkTestOwnedState FAIL: seq model counter %" PRIu32
+                   ": %" PRIu64 " (total %" PRIu64 "), want %" PRIu64 "\n",
+                   c, col, totals[c] - baseTotals[c], cnt[c]);
+            err++;
+        }
+    }
+    /* Its row is in the registry once, under its kind */
+    ownedStateRowEnrol(&row, decl.name, OWNED_ROW_SEQ);
+    bool listed = false;
+    for (size_t i = 0; i < ownedStateRowCount(); i++) {
+        listed = listed || ownedStateRowAt(i) == &row;
+    }
+    if (!listed || row.kind != OWNED_ROW_SEQ ||
+        strcmp(ownedStateKindName(OWNED_ROW_SEQ),
+               ownedStateKindName(OWNED_ROW_SLOT)) == 0) {
+        printf("dkTestOwnedState FAIL: seq model row\n");
+        err++;
+    }
+    ownedSeqDestruct(&s);
+    return err;
+}
+
+/* @model: src/ownedState.h */
+static int dkTestOwnedModel(void) {
+    int err = 0;
+    for (uint64_t seed = 1; seed <= 3; seed++) {
+        err += dkTestOwnedModelArena_(false, seed);
+        err += dkTestOwnedModelArena_(true, seed + 10);
+        err += dkTestOwnedModelCell_(seed);
+        err += dkTestOwnedModelSlot_(seed);
+        err += dkTestOwnedModelSeq_(seed);
+    }
+    return err;
+}
+
 static int dkTestOwnedStateTest(int, char *[]) {
     int failures = 0;
 #define OEXPECT(cond, msg)                                                     \
@@ -2481,15 +3034,16 @@ static int dkTestOwnedStateTest(int, char *[]) {
             "the retire parked one row");
     OEXPECT(ownedArenaLiveRows() == baseLive + 1,
             "live_rows counts the parked row");
+    /* A reader in its scope from before any idle sighting */
+    ownedArenaEnter(&g_dkOwnedArena);
+    OEXPECT(ownedArenaDepth(&g_dkOwnedArena) == 1, "the reader scope is open");
     g_dkOwnedNowUs += DK_OWNED_GRACE_US / 2;
     ownedArenaDrain(&g_dkOwnedArena);
     OEXPECT(!rowA.released, "a row inside its grace is kept");
     OEXPECT(ownedArenaGraceHeldTotal() == baseGraceHeld,
             "a row inside its grace is not a grace hold");
 
-    /* --- 1b: grace elapsed, but a reader is inside its scope. --- */
-    ownedArenaEnter(&g_dkOwnedArena);
-    OEXPECT(ownedArenaDepth(&g_dkOwnedArena) == 1, "the reader scope is open");
+    /* --- 1b: grace elapsed, but the reader is still inside its scope. --- */
     g_dkOwnedNowUs += DK_OWNED_GRACE_US;
     ownedArenaDrain(&g_dkOwnedArena);
     OEXPECT(!rowA.released, "a present reader holds the row past the grace");
@@ -2503,6 +3057,24 @@ static int dkTestOwnedStateTest(int, char *[]) {
     OEXPECT(ownedArenaRetiredTotal() == baseRetired + 1,
             "the release is counted");
     OEXPECT(ownedArenaLiveRows() == baseLive, "live_rows fell back");
+
+    /* --- 1c': a Drain's idle sighting is kept.  The gate is seen idle
+     * inside the grace; a reader entering after that cannot hold the
+     * cargo (it was unpublished before the sighting), so once the grace
+     * passes the row goes with that reader still inside. --- */
+    {
+        dkOwnedCargo rowS = {.id = 12, .released = false};
+        ownedArenaRetire(&g_dkOwnedArena, &rowS, dkOwnedRelease_,
+                         dkOwnedDescribe_, OWNED_OOM_FREE);
+        ownedArenaDrain(&g_dkOwnedArena); /* idle, inside the grace */
+        OEXPECT(!rowS.released, "a row inside its grace is kept, gate idle");
+        ownedArenaEnter(&g_dkOwnedArena);
+        g_dkOwnedNowUs += DK_OWNED_GRACE_US + 1;
+        ownedArenaDrain(&g_dkOwnedArena);
+        OEXPECT(rowS.released, "an earlier idle sighting releases the row "
+                               "past its grace");
+        ownedArenaExit(&g_dkOwnedArena);
+    }
 
     /* --- 1d: a reader scope reads no clock under the default rule; the
      * idle observation is carried by the retire epoch. --- */
@@ -3513,6 +4085,7 @@ static int dkTestOwnedStateTest(int, char *[]) {
     /* READERS_ONLY runs after the default block so that block's
      * process-wide baselines are untouched by it. */
     failures += dkTestOwnedReadersOnly();
+    failures += dkTestOwnedModel();
     failures += dkTestOwnedArenaSoak();
 
     if (failures == 0) {
@@ -6691,7 +7264,8 @@ static int dkTestKeyringRequireSaltTest(int, char *[]) {
         hmacKeyringFree(ring);
     }
 
-    /* Case 4: runtime fail-closed when salt becomes zero on salted slot */
+    /* Case 4: a salted slot never takes an all-zero salt: the setter
+     * refuses it and the slot keeps issuing under its own salt */
     {
         hmacKeyring *ring = hmacKeyringCreate();
         const uint8_t key[32] = {0xCC};
@@ -6704,11 +7278,12 @@ static int dkTestKeyringRequireSaltTest(int, char *[]) {
             failures++;
         }
         const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
-        hmacKeyringSetAeadSalt(ring, 4u, zero_salt);
         uint8_t nonce[12];
-        if (hmacKeyringNextAeadNonce(ring, 4u, nonce)) {
-            printf("dkTestKeyringRequireSalt: NextAeadNonce must REFUSE "
-                   "zero-salt on salted slot\n");
+        if (hmacKeyringSetAeadSalt(ring, 4u, zero_salt) ||
+            !hmacKeyringNextAeadNonce(ring, 4u, nonce) ||
+            memcmp(nonce + 8, salt, sizeof(salt)) != 0) {
+            printf("dkTestKeyringRequireSalt: a salted slot took a zero salt "
+                   "or stopped issuing under its own\n");
             failures++;
         }
         hmacKeyringFree(ring);

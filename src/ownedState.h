@@ -29,8 +29,8 @@
  *     the atomic operations themselves, which ThreadSanitizer models.
  *
  * ownedArena release rules
- *   GRACE_AND_READERS (default): a row is released when graceUs has
- *   elapsed since it was retired AND the reader gate has been observed
+ *   GRACE_AND_READERS (default): a row is released when more than graceUs
+ *   has elapsed since it was retired AND the reader gate has been observed
  *   empty at some instant after the retire (sampled at zero by Drain with
  *   an RMW, or brought to zero by an exit that had already observed the
  *   row's retire epoch). The idle observation covers readers that enter

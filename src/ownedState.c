@@ -301,6 +301,25 @@ void ownedArenaDrain(ownedArena *arena) {
     const bool readers_only =
         arena->decl->release == OWNED_RELEASE_READERS_ONLY;
     const bool gate_idle_now = inflightGateSampleLatest(&arena->readers) == 0;
+    /* A zero sample is an idle sighting after every row present (each was
+     * retired before this lock was taken), kept for the Drains after it
+     * as an exit's is: a row seen idle before its grace passed is released
+     * once the grace passes, whoever is reading then */
+    if (gate_idle_now) {
+        /* Retires hold the lock, so the epoch is stable here */
+        /* @sync: relaxed owner */
+        const uint64_t e =
+            atomic_load_explicit(&arena->retireEpoch, memory_order_relaxed);
+        /* @sync: relaxed seed */
+        uint64_t prev =
+            atomic_load_explicit(&arena->idleEpoch, memory_order_relaxed);
+        /* @sync: release arena.idle */
+        while (prev < e && !atomic_compare_exchange_weak_explicit(
+                               &arena->idleEpoch, &prev, e,
+                               memory_order_release, memory_order_relaxed)) {
+            /* prev reloaded by the exchange. */
+        }
+    }
     /* @sync: acquire arena.idle */
     const uint64_t idle_epoch =
         atomic_load_explicit(&arena->idleEpoch, memory_order_acquire);
