@@ -4280,7 +4280,7 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     const uint32_t elementsPerEntry = shape & MULTIMAP_PERSIST_ELEMENTS_MASK;
     const uint32_t known = MULTIMAP_PERSIST_SET | MULTIMAP_PERSIST_LIMIT_MASK |
                            MULTIMAP_PERSIST_ELEMENTS_MASK;
-    if (elementsPerEntry == 0 || elementsPerEntry > 1024 ||
+    if (elementsPerEntry == 0 || elementsPerEntry > MULTIMAP_ELEMENTS_MAX ||
         limit > FLEX_CAP_LEVEL_65536 || (shape & ~known)) {
         return nullptr; /* Sanity check */
     }
@@ -4360,24 +4360,49 @@ static bool multimapPersistInt64(const databoxBig *b, int64_t *out) {
     return false;
 }
 
-/* Decode a WAL row (a flex of up to 32 elements, from untrusted bytes)
- * into `boxes`, with `ptrs` aimed at them.  databoxBig so a 96/128-bit
- * element decodes into storage the box owns. */
+/* A WAL row decoded: rows up to MULTIMAP_PERSIST_ROW_INLINE elements in
+ * place, wider ones (up to MULTIMAP_ELEMENTS_MAX) on the heap.
+ * databoxBig so a 96/128-bit element decodes into storage the box owns. */
+static constexpr size_t MULTIMAP_PERSIST_ROW_INLINE = 32;
+typedef struct multimapPersistRow {
+    databoxBig inlineBoxes[MULTIMAP_PERSIST_ROW_INLINE];
+    const databox *inlinePtrs[MULTIMAP_PERSIST_ROW_INLINE];
+    databoxBig *boxes;
+    const databox **ptrs;
+    size_t count;
+} multimapPersistRow;
+
+static void multimapPersistRowRelease_cleanup(multimapPersistRow *row) {
+    if (row->boxes != row->inlineBoxes) {
+        zfree(row->boxes);
+        zfree(row->ptrs);
+    }
+}
+
+/* Decode a WAL row (a flex of whole elements, from untrusted bytes) into
+ * 'row', its 'ptrs' aimed at its 'boxes' */
 static bool multimapPersistDecodeRow(const uint8_t *data, size_t len,
-                                     databoxBig boxes[32],
-                                     const databox *ptrs[32], size_t *count) {
+                                     multimapPersistRow *row) {
+    row->boxes = row->inlineBoxes;
+    row->ptrs = row->inlinePtrs;
     if (!flexValidateBufferDeep(data, len)) {
         return false;
     }
     const flex *f = (const flex *)data;
-    *count = flexCount(f);
-    if (*count == 0 || *count > 32) {
+    row->count = flexCount(f);
+    if (row->count == 0 || row->count > MULTIMAP_ELEMENTS_MAX) {
         return false;
     }
+    if (row->count > MULTIMAP_PERSIST_ROW_INLINE) {
+        /* @own: container; free=multimapPersistRowRelease_cleanup */
+        row->boxes = zmalloc(row->count * sizeof(*row->boxes));
+        /* @own: container; free=multimapPersistRowRelease_cleanup */
+        row->ptrs = zmalloc(row->count * sizeof(*row->ptrs));
+    }
     flexEntry *fe = flexHead(f);
-    for (size_t i = 0; i < *count; i++) {
-        flexGetByTypeBig(fe, &boxes[i]);
-        ptrs[i] = (const databox *)&boxes[i];
+    for (size_t i = 0; i < row->count; i++) {
+        flexGetByTypeBig(fe, &row->boxes[i]);
+        row->ptrs[i] = (const databox *)&row->boxes[i];
         fe = flexNext(f, fe);
     }
     return true;
@@ -4386,28 +4411,28 @@ static bool multimapPersistDecodeRow(const uint8_t *data, size_t len,
 static bool multimapPersistApplyOp(void *structure, persistOp op,
                                    const uint8_t *data, size_t len) {
     multimap **m = structure;
-    databoxBig boxes[32];
-    const databox *ptrs[32];
-    size_t count;
+    /* Only the pointers: the inline boxes are filled as a row decodes */
+    cleaner(multimapPersistRowRelease) multimapPersistRow row;
+    row.boxes = row.inlineBoxes;
 
     switch (op) {
     case PERSIST_OP_INSERT:
         /* A full row: anything else would leave elements unread */
-        if (!multimapPersistDecodeRow(data, len, boxes, ptrs, &count) ||
-            count != multimapPersistGetElementsPerEntry(*m)) {
+        if (!multimapPersistDecodeRow(data, len, &row) ||
+            row.count != multimapPersistGetElementsPerEntry(*m)) {
             return false;
         }
-        multimapInsert(m, ptrs);
+        multimapInsert(m, row.ptrs);
         return true;
 
     case PERSIST_OP_DELETE:
-        if (!multimapPersistDecodeRow(data, len, boxes, ptrs, &count)) {
+        if (!multimapPersistDecodeRow(data, len, &row)) {
             return false;
         }
-        if (count == 1) {
-            multimapDelete(m, ptrs[0]);
-        } else if (count == multimapPersistGetElementsPerEntry(*m)) {
-            multimapDeleteFullWidth(m, ptrs);
+        if (row.count == 1) {
+            multimapDelete(m, row.ptrs[0]);
+        } else if (row.count == multimapPersistGetElementsPerEntry(*m)) {
+            multimapDeleteFullWidth(m, row.ptrs);
         } else {
             return false;
         }
@@ -4416,17 +4441,17 @@ static bool multimapPersistApplyOp(void *structure, persistOp op,
     case PERSIST_OP_NUM_INCR: {
         int64_t offset;
         int64_t delta;
-        if (!multimapPersistDecodeRow(data, len, boxes, ptrs, &count) ||
-            count != 3 || !multimapPersistInt64(&boxes[1], &offset) ||
-            offset < 0 || offset > UINT32_MAX ||
-            !multimapPersistInt64(&boxes[2], &delta)) {
+        if (!multimapPersistDecodeRow(data, len, &row) || row.count != 3 ||
+            !multimapPersistInt64(&row.boxes[1], &offset) || offset < 0 ||
+            offset > UINT32_MAX ||
+            !multimapPersistInt64(&row.boxes[2], &delta)) {
             return false;
         }
         /* A refused increment (missing key, not a counter, outside int64)
          * was refused the same way where it was logged, so replaying the
          * refusal is the faithful replay */
         int64_t ignored;
-        multimapFieldIncrBy(m, ptrs[0], (uint32_t)offset, delta, &ignored);
+        multimapFieldIncrBy(m, row.ptrs[0], (uint32_t)offset, delta, &ignored);
         return true;
     }
 

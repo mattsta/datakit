@@ -235,8 +235,7 @@ DK_INLINE_ALWAYS void mmBareRelink_(const multimap *m, multimapEntry *me,
 /* A new, empty Small map: bare when its shape allows (mmSmallOf_) */
 static multimap *mmNew_(const multimapElements elementsPerEntry,
                         const bool isSet, const flexCapSizeLimit limit) {
-    /* Note: You can only have up to 64k 'elementsPerEntry'
-     *       (which is overkill anyway) */
+    assert(elementsPerEntry >= 1 && elementsPerEntry <= MULTIMAP_ELEMENTS_MAX);
     multimapSmall view = {.middle = FLEX_EMPTY_SIZE,
                           .elementsPerEntry = elementsPerEntry,
                           .mapIsSet = isSet};
@@ -333,7 +332,8 @@ static bool multimapDumpAscends_(const flex *rows,
                                  multimapElements elementsPerEntry,
                                  bool isSet) {
     const size_t count = flexCount(rows);
-    if (elementsPerEntry == 0 || count % elementsPerEntry) {
+    if (elementsPerEntry == 0 || elementsPerEntry > MULTIMAP_ELEMENTS_MAX ||
+        count % elementsPerEntry) {
         return false;
     }
 
@@ -444,7 +444,8 @@ multimapDumpAscendsWithReference_(const flex *rows,
                                   multimapElements elementsPerEntry,
                                   const multimapAtom *referenceContainer) {
     const size_t count = flexCount(rows);
-    if (elementsPerEntry == 0 || count % elementsPerEntry) {
+    if (elementsPerEntry == 0 || elementsPerEntry > MULTIMAP_ELEMENTS_MAX ||
+        count % elementsPerEntry) {
         return false;
     }
 

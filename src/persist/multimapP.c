@@ -18,6 +18,10 @@ struct multimapP {
 };
 
 defcleanerName(multimapP *, zfree, MultimapP);
+defcleanerName(databox *, zfree, WideBoxes);
+defcleanerName(const databox **, zfree, WideRow);
+defcleaner(multimap *, multimapFree);
+defcleaner(flex *, flexFree);
 
 /* ============================================================================
  * Lifecycle
@@ -1342,6 +1346,61 @@ int multimapPTest(int, char *[]) {
         }
         multimapCloseP(m);
         persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multimapP rows of every width survive a reopen: from the log and "
+         "from a snapshot") {
+        static const uint32_t widths[] = {40, 2000};
+        for (size_t w = 0; w < countof(widths); w++) {
+            const uint32_t width = widths[w];
+            ptestCleanupFiles(basePath);
+            cleaner(multimapFree) multimap *model = multimapNew(width);
+            cleanerName(zfree, WideBoxes) databox *boxes =
+                zcalloc(width, sizeof(*boxes));
+            cleanerName(zfree, WideRow) const databox **row =
+                zcalloc(width, sizeof(*row));
+            for (uint32_t e = 0; e < width; e++) {
+                row[e] = &boxes[e];
+            }
+
+            persistCtx *ctx = persistCtxNew(basePath, nullptr);
+            multimapP *m = multimapNewP(ctx, width);
+            for (int round = 0; round < 2 && m; round++) {
+                /* Rows, one deleted by its full row: replayed from the
+                 * log (round 0), then over a snapshot (round 1) */
+                for (int64_t i = round * 30; i < round * 30 + 30; i++) {
+                    for (uint32_t e = 0; e < width; e++) {
+                        boxes[e] = DATABOX_SIGNED(i * 10000 + e);
+                    }
+                    PTEST_LOGGED(multimapInsertP(m, row, nullptr));
+                    multimapInsert(&model, row);
+                }
+                for (uint32_t e = 0; e < width; e++) {
+                    boxes[e] = DATABOX_SIGNED((round * 30 + 7) * 10000 + e);
+                }
+                PTEST_LOGGED(multimapDeleteFullWidthP(m, row));
+                multimapDeleteFullWidth(&model, row);
+                if (round == 1 && !multimapCompactP(m)) {
+                    ERR("width %" PRIu32 ": compaction refused", width);
+                }
+
+                multimapCloseP(m);
+                persistCtxFree(ctx);
+                ctx = persistCtxOpen(basePath, nullptr);
+                m = multimapOpenP(ctx);
+                cleaner(flexFree) flex *want = multimapDump(model);
+                cleaner(flexFree) flex *got = m ? multimapDump(m->m) : nullptr;
+                if (!got || !flexEqual(want, got)) {
+                    ERR("width %" PRIu32 " round %d: the reopened rows "
+                        "differ (%zu of %zu)",
+                        width, round, m ? multimapCount(m->m) : 0,
+                        multimapCount(model));
+                }
+            }
+            multimapCloseP(m);
+            persistCtxFree(ctx);
+        }
         ptestCleanupFiles(basePath);
     }
 

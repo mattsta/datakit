@@ -11,6 +11,11 @@
 /* @handle: moves: a call that can move it takes its address ('**') */
 typedef struct multimap multimap;
 
+/* The most elements a row holds (key first): a row's width is kept in 16
+ * bits.  Every constructor takes 1 .. MULTIMAP_ELEMENTS_MAX elements per
+ * entry; the dump constructors refuse others, the rest assert. */
+static constexpr multimapElements MULTIMAP_ELEMENTS_MAX = UINT16_MAX;
+
 [[nodiscard]] multimap *multimapNew(multimapElements elementsPerEntry);
 [[nodiscard]] multimap *multimapNewLimit(multimapElements elementsPerEntry,
                                          const flexCapSizeLimit limit);
@@ -30,7 +35,8 @@ bool multimapIsSet(const multimap *m);
  * reference keys whose values, resolved through 'referenceContainer',
  * strictly ascend.  Built straight into the tier and inner maps inserts
  * would reach under the size limit 'limit', in O(rows) beyond the order
- * check.  NULL, with 'rows' freed, when the rows are not whole, out of
+ * check.  NULL, with 'rows' freed, when 'elementsPerEntry' is 0 or past
+ * MULTIMAP_ELEMENTS_MAX, or the rows are not whole, out of
  * order or repeat a value. */
 multimap *
 multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
@@ -50,7 +56,7 @@ void multimapStats(const multimap *m, dkTierStats *out);
  * no per-row insert, and later inserts split at `limit` too.  Takes `rows`.
  * NULL, with `rows` freed, when the rows are not whole or not in the
  * multimap's row order (ascending by whole row; a set's rows strictly
- * ascending). */
+ * ascending), or 'elementsPerEntry' is 0 or past MULTIMAP_ELEMENTS_MAX. */
 multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
                               flexCapSizeLimit limit, flex *rows);
 

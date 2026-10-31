@@ -186,12 +186,15 @@ routing, Full range boxes) compare wide keys by value.
 Signatures exactly as declared in `multimap.h`:
 
 ```c
-/* Default size-limit level is FLEX_CAP_LEVEL_2048 */
+/* Rows hold 1 .. MULTIMAP_ELEMENTS_MAX (65535) elements, key first */
+static constexpr multimapElements MULTIMAP_ELEMENTS_MAX = UINT16_MAX;
+
+/* The size limit is the DK_TIER_MULTIMAP default (dkTierLimit.h) */
 multimap *multimapNew(multimapElements elementsPerEntry);
 
-/* 'limit' is a flexCapSizeLimit level; the header spells it uint32_t */
+/* 'limit' is a size level (FLEX_CAP_LEVEL_1024, ...) */
 multimap *multimapNewLimit(multimapElements elementsPerEntry,
-                           const uint32_t limit);
+                           const flexCapSizeLimit limit);
 
 /* Set mode: entire rows are unique (see "Insertion Semantics") */
 multimap *multimapSetNew(multimapElements elementsPerEntry);
