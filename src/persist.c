@@ -5136,7 +5136,7 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     if (seedBox.type != DATABOX_UNSIGNED_64 || seedBox.data.u > UINT32_MAX) {
         return nullptr;
     }
-    const int32_t seed = (int32_t)(uint32_t)seedBox.data.u;
+    const uint32_t seed = (uint32_t)seedBox.data.u;
     fe = flexNext(f, fe);
 
     /* The settings (mdPersistSetting order), each an unsigned, checked as

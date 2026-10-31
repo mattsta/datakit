@@ -239,7 +239,7 @@ typedef struct multidictLoadMetrics {
 
 ```c
 /* Create new multidict with hash type and storage class */
-multidict *multidictNew(multidictType *type, multidictClass *qdc, int32_t seed);
+multidict *multidictNew(multidictType *type, multidictClass *qdc, uint32_t seed);
 
 /* Get the class from an existing multidict (for creating siblings) */
 multidictClass *multidictGetClass(multidict *d);
@@ -265,16 +265,16 @@ multidictDefaultClassFree(cls);
 ### Hash Function Seeding
 
 ```c
-/* Set hash seed. The seed is applied unconditionally; the return value
- * reports whether it was inside the recommended bound of 2^20. */
+/* A new seed for an empty dict (any 32 bits).  False, unchanged, when the
+ * dict holds keys: their slots were placed by the old seed. */
 bool multidictSetHashFunctionSeed(multidict *d, uint32_t seed);
 
 /* Get current seed */
 uint32_t multidictGetHashFunctionSeed(multidict *d);
 
-/* Example */
+/* Example: seed before the first insert */
 if (!multidictSetHashFunctionSeed(d, 12345)) {
-    /* seed applied anyway, but it exceeded 2^20 */
+    /* d already holds keys; its seed is unchanged */
 }
 
 /* The seed multidictNew takes: a fixed one lays slots out the same every

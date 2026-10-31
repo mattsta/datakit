@@ -41,7 +41,7 @@ multimap *m = multimapNew(2);  // 2 = key+value
 **multidict** (hash table with custom storage):
 
 ```c
-/* multidictNew(multidictType *type, multidictClass *qdc, int32_t seed) */
+/* multidictNew(multidictType *type, multidictClass *qdc, uint32_t seed) */
 multidictClass *storage = /* your storage class, or NULL for default */;
 multidict *d = multidictNew(&multidictTypeExactKey, storage, 0);
 ```

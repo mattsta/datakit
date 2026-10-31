@@ -458,14 +458,12 @@ uint32_t multidictLongLongHashFunction(uint64_t key) {
     return multidictMixLongLong(key);
 }
 
-#define SEED_MAX (1 << 20)
 bool multidictSetHashFunctionSeed(multidict *d, uint32_t seed) {
-    d->seed = seed; /* we set it even if we are outside requested bounds */
-    if (seed > SEED_MAX) {
+    if (multidictCount(d) > 0) {
         return false;
-    } else {
-        return true;
     }
+    d->seed = seed;
+    return true;
 }
 
 uint32_t multidictGetHashFunctionSeed(multidict *d) {
@@ -892,7 +890,7 @@ DK_INLINE_ALWAYS uint64_t _multidictNextPower(const uint64_t size) {
  * draw their own and one wins the CAS; every caller returns the winner. */
 static _Atomic uint64_t mdRandomSeed_;
 
-int32_t multidictRandomSeed(void) {
+uint32_t multidictRandomSeed(void) {
     /* @sync: relaxed init */
     uint64_t seed = atomic_load_explicit(&mdRandomSeed_, memory_order_relaxed);
     if (!seed) {
@@ -907,11 +905,11 @@ int32_t multidictRandomSeed(void) {
                    ? mine
                    : expected;
     }
-    return (int32_t)(uint32_t)seed;
+    return (uint32_t)seed;
 }
 
 multidict *multidictNew(multidictType *type, multidictClass *qdc,
-                        int32_t seed) {
+                        uint32_t seed) {
     if (!type || !qdc) {
         return nullptr;
     }
@@ -6766,12 +6764,12 @@ static int mdTestNumericKeyIdentity_(multidictClass *qdc) {
  * dict's seed, and its restore uses it with every pair */
 static int mdTestSeedRoundTrip_(multidictClass *qdc) {
     int err = 0;
-    const int32_t seed = multidictRandomSeed();
+    const uint32_t seed = multidictRandomSeed();
     if (multidictRandomSeed() != seed) {
         ERR("the process seed changed between calls");
     }
 
-    static constexpr int32_t seeds[2] = {(int32_t)0x9E3779B9u, 0};
+    static constexpr uint32_t seeds[2] = {0x9E3779B9u, 0};
     for (size_t s = 0; s < 2; s++) {
         cleaner(multidictFree) multidict *d = multidictNew(
             &multidictTypeExactKey, qdc, s ? multidictRandomSeed() : seeds[0]);
@@ -6955,6 +6953,26 @@ int multidictTest(int, char *[]) {
         multidictSetHashFunctionSeed(d, 99999);
         assert(multidictGetHashFunctionSeed(d) == 99999);
         multidictSetHashFunctionSeed(d, 12345); /* restore */
+    }
+
+    TEST("1.3b a seed changes only an empty dict, and takes any 32 bits") {
+        cleaner(multidictFree) multidict *seeded =
+            multidictNew(&multidictTypeExactKey, qdc, multidictRandomSeed());
+        if (!multidictSetHashFunctionSeed(seeded, UINT32_MAX) ||
+            multidictGetHashFunctionSeed(seeded) != UINT32_MAX) {
+            ERR("%s", "an empty dict refused a full 32-bit seed");
+        }
+        const databox key = databoxNewBytesString("held");
+        const databox val = databoxNewSigned(7);
+        (void)multidictAdd(seeded, &key, &val);
+        if (multidictSetHashFunctionSeed(seeded, 12345) ||
+            multidictGetHashFunctionSeed(seeded) != UINT32_MAX) {
+            ERR("%s", "a dict holding keys took a new seed");
+        }
+        databox got = {};
+        if (!multidictFind(seeded, &key, &got) || got.data.i != 7) {
+            ERR("%s", "a key was lost to a refused seed change");
+        }
     }
 
     TEST("1.4 empty dict operations") {

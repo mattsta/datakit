@@ -359,8 +359,8 @@ bool multidictIsRehashing_(const multidict *d);  /* Is rehash in progress? */
  * dicts use the random seed; a persisted multidict records its seed, so a
  * restore lays its keys out as they were. */
 [[nodiscard]] multidict *multidictNew(multidictType *type, multidictClass *qdc,
-                                      int32_t seed);
-int32_t multidictRandomSeed(void);
+                                      uint32_t seed);
+uint32_t multidictRandomSeed(void);
 multidictClass *multidictGetClass(multidict *d);
 /* The type 'd' was created with (how its keys hash and match) */
 multidictType *multidictGetType(const multidict *d);
@@ -501,6 +501,8 @@ void multidictDefaultLoadFactors(uint32_t *expandPercent,
                                  uint32_t *shrinkPercent);
 bool multidictRehash(multidict *d, int32_t n);
 int64_t multidictRehashMilliseconds(multidict *d, int64_t ms);
+/* A new seed for an empty dict (any 32 bits); false, unchanged, when the
+ * dict holds keys, whose slots the old seed placed */
 bool multidictSetHashFunctionSeed(multidict *d, uint32_t seed);
 uint32_t multidictGetHashFunctionSeed(multidict *d);
 uint64_t multidictScan(multidict *d, uint64_t v, multidictScanFunction *fn,
