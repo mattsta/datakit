@@ -475,15 +475,19 @@ extern const dkFormatSpec clusterMailboxProtocol;
  * datakit's `flex` format; Restore reads it back into a fresh (or
  * non-fresh) mailbox.
  *
- * Wire layout: 3 flex entries per persisted origin slot, in order:
+ * Wire layout: the mailbox's flags (its mode: strict, or
+ * CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW), then 3 flex entries per
+ * persisted origin slot, in order:
  *
  * 1. origin_id (unsigned)
  * 2. last_applied (unsigned, > 0 — slots with last_applied == 0
  * are not persisted)
- * 3. window_bits (unsigned, 64-bit replay bitmap; 0 if window
- * feature is disabled or no in-window state)
+ * 3. window_bits (unsigned, 64-bit replay bitmap; every bit set in a
+ * strict mailbox, whose whole window reads as seen)
  *
- * Total flex entry count is always 3 * N persisted slots.  Restore
+ * Total flex entry count is always 1 + 3 * N persisted slots.  The
+ * persist restore's fresh mailbox takes the recorded mode;
+ * clusterMailboxRestore into an existing mailbox keeps its own.  Restore
  * validates the buffer via flexValidateBufferDeep (O(N) per-entry
  * bound check) before walking it, so a corrupted on-disk record cannot
  * over-read.

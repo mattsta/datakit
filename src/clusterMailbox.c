@@ -1258,6 +1258,11 @@ bool clusterMailboxParseRotateAnnounce(const uint8_t *payload, size_t len,
 static flex *cmBuildSnapshotFlex(const clusterMailbox *mb) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
+    /* The mode first (strict or replay window), which the persist
+     * restore's mailbox takes */
+    flexRow mode = FLEX_ROW_INIT;
+    flexRowUnsigned(&mode, (uint64_t)mb->flags);
+    flexRowAppendExact(&f, &mode);
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
         const clusterMailboxOrigin *o = &mb->origins[i];
         /* @sync: relaxed owner */
@@ -1352,7 +1357,10 @@ static uint64_t cmReorientWindowBits(uint64_t bits, uint64_t from_last_applied,
     return bits << gap;
 }
 
-bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
+/* clusterMailboxRestore; 'takeMode' also gives the mailbox the snapshot's
+ * mode (the persist restore's fresh mailbox), else it keeps its own */
+static bool cmRestore_(clusterMailbox *mb, const uint8_t *buf, size_t len,
+                       bool takeMode) {
     if (mb != nullptr && mb->applying) {
         return false; /* from inside on_apply */
     }
@@ -1370,10 +1378,12 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
     }
     const flex *f = (const flex *)buf;
     const size_t entry_count = flexCount(f);
-    if ((entry_count % CLUSTER_MAILBOX_PERSIST_ENTRIES_PER_SLOT) != 0u) {
+    if (entry_count == 0 ||
+        ((entry_count - 1) % CLUSTER_MAILBOX_PERSIST_ENTRIES_PER_SLOT) != 0u) {
         return false;
     }
-    const size_t slots = entry_count / CLUSTER_MAILBOX_PERSIST_ENTRIES_PER_SLOT;
+    const size_t slots =
+        (entry_count - 1) / CLUSTER_MAILBOX_PERSIST_ENTRIES_PER_SLOT;
     if (slots > CLUSTER_MAILBOX_ORIGIN_CAP) {
         return false;
     }
@@ -1387,7 +1397,14 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
         uint64_t window_bits;
     } recs[CLUSTER_MAILBOX_ORIGIN_CAP];
 
+    /* The mode: only known flags */
     flexEntry *fe = flexHead(f);
+    uint64_t raw_mode = 0;
+    if (!flexGetUnsigned(fe, &raw_mode) ||
+        (raw_mode & ~(uint64_t)CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW) != 0u) {
+        return false;
+    }
+    fe = flexNext(f, fe);
     for (size_t i = 0; i < slots; i++) {
         if (fe == nullptr) {
             return false;
@@ -1506,7 +1523,14 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
             slot->window_bits |= snap_bits_in_current_frame;
         }
     }
+    if (takeMode) {
+        mb->flags = (clusterMailboxFlags)raw_mode;
+    }
     return true;
+}
+
+bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
+    return cmRestore_(mb, buf, len, false);
 }
 
 /* --- Envelope-wrapped snapshot/restore ----------------------------- */
@@ -1651,7 +1675,8 @@ static void *cmPersistRestore(const uint8_t *data, size_t len) {
     if (mb == nullptr) {
         return nullptr;
     }
-    if (!clusterMailboxRestore(mb, data, len)) {
+    /* A fresh mailbox: it takes the snapshot's mode with its state */
+    if (!cmRestore_(mb, data, len, true)) {
         clusterMailboxFree(mb);
         return nullptr;
     }
@@ -2186,7 +2211,7 @@ int clusterMailboxTest(int, char *[]) {
         clusterMailboxFree(mb);
         const flex *src = (const flex *)snap;
         const size_t entries = flexCount(src);
-        if (entries != 2u * CLUSTER_MAILBOX_PERSIST_ENTRIES_PER_SLOT) {
+        if (entries != 1u + 2u * CLUSTER_MAILBOX_PERSIST_ENTRIES_PER_SLOT) {
             ERR("snapshot has %zu entries, expected 6", entries);
         }
 
@@ -3000,6 +3025,37 @@ int clusterMailboxTest(int, char *[]) {
         hmacKeyringFree(ring);
     }
 
+    TEST("a mailbox restored through persist keeps its replay mode") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        static const clusterMailboxFlags modes[] = {
+            CLUSTER_MAILBOX_FLAG_NONE, CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW};
+        for (size_t m = 0; m < countof(modes); m++) {
+            clusterMailbox *mb = clusterMailboxCreateEx(
+                ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr, nullptr, modes[m]);
+            size_t len = 0;
+            cleanerName(zfree, Bytes) uint8_t *snap =
+                persistOpsClusterMailbox.snapshot(mb, &len);
+            clusterMailbox *back =
+                snap ? persistOpsClusterMailbox.restore(snap, len) : nullptr;
+            /* A Restore into a live mailbox keeps the live one's mode */
+            clusterMailbox *live =
+                clusterMailboxCreateEx(ring, FLEX_ENV_ALGO_HMAC_SHA256, nullptr,
+                                       nullptr, modes[1 - m]);
+            const bool liveOk = snap &&
+                                clusterMailboxRestore(live, snap, len) &&
+                                live->flags == modes[1 - m];
+            if (!back || back->flags != modes[m] || !liveOk) {
+                ERR("mode %u: restored as %d, live restore %s",
+                    (unsigned)modes[m], back ? (int)back->flags : -1,
+                    liveOk ? "kept its mode" : "changed or failed");
+            }
+            clusterMailboxFree(live);
+            clusterMailboxFree(back);
+            clusterMailboxFree(mb);
+        }
+        hmacKeyringFree(ring);
+    }
+
     TEST("a strict watermark restored into a windowed mailbox keeps every "
          "applied frame closed") {
         hmacKeyring *ring = hmacKeyringCreate();
@@ -3130,8 +3186,8 @@ int clusterMailboxTest(int, char *[]) {
         if (!flexValidateBufferDeep(snap, snap_size)) {
             ERR("Snapshot is not a valid flex buffer");
         }
-        if (flexCount((const flex *)snap) != 3u * 3u) {
-            ERR("Expected 9 flex entries (3 slots * 3 entries), got %zu",
+        if (flexCount((const flex *)snap) != 1u + 3u * 3u) {
+            ERR("Expected 10 flex entries (the mode, 3 slots * 3), got %zu",
                 flexCount((const flex *)snap));
         }
 
@@ -3191,8 +3247,10 @@ int clusterMailboxTest(int, char *[]) {
             ERR("Restore must reject non-flex bytes");
         }
 
-        /* Entry count NOT a multiple of 3 — flex valid but wrong shape. */
+        /* Entry count past the mode NOT a multiple of 3 — flex valid but
+         * wrong shape. */
         cleaner(flexFree) flex *bad_count = flexNew();
+        flexPushUnsigned(&bad_count, 0u, FLEX_ENDPOINT_TAIL); /* strict */
         flexPushUnsigned(&bad_count, 99u, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&bad_count, 42u, FLEX_ENDPOINT_TAIL);
         if (clusterMailboxRestore(mb, (const uint8_t *)bad_count,
@@ -3201,6 +3259,7 @@ int clusterMailboxTest(int, char *[]) {
         }
         /* Record with seq == 0 (sentinel). */
         cleaner(flexFree) flex *seq_zero = flexNew();
+        flexPushUnsigned(&seq_zero, 0u, FLEX_ENDPOINT_TAIL);  /* strict */
         flexPushUnsigned(&seq_zero, 99u, FLEX_ENDPOINT_TAIL); /* origin */
         flexPushUnsigned(&seq_zero, 0u, FLEX_ENDPOINT_TAIL);  /* seq=0 */
         flexPushUnsigned(&seq_zero, 0u, FLEX_ENDPOINT_TAIL);  /* window_bits */
@@ -3210,6 +3269,7 @@ int clusterMailboxTest(int, char *[]) {
         }
         /* Record with origin_id == 0 (reserved sentinel). */
         cleaner(flexFree) flex *origin_zero = flexNew();
+        flexPushUnsigned(&origin_zero, 0u, FLEX_ENDPOINT_TAIL);  /* strict */
         flexPushUnsigned(&origin_zero, 0u, FLEX_ENDPOINT_TAIL);  /* origin=0 */
         flexPushUnsigned(&origin_zero, 42u, FLEX_ENDPOINT_TAIL); /* seq */
         flexPushUnsigned(&origin_zero, 0u, FLEX_ENDPOINT_TAIL);  /* window */
@@ -3219,6 +3279,7 @@ int clusterMailboxTest(int, char *[]) {
         }
         /* Slot count exceeds origin table capacity. */
         cleaner(flexFree) flex *too_many = flexNew();
+        flexPushUnsigned(&too_many, 0u, FLEX_ENDPOINT_TAIL); /* strict */
         for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP + 1u; i++) {
             flexPushUnsigned(&too_many, (uint64_t)(i + 1u), FLEX_ENDPOINT_TAIL);
             flexPushUnsigned(&too_many, 1u, FLEX_ENDPOINT_TAIL);
@@ -3239,6 +3300,7 @@ int clusterMailboxTest(int, char *[]) {
 
         /* Origins 1..5 at sequences 100..500 with window bits set */
         cleaner(flexFree) flex *base = flexNew();
+        flexPushUnsigned(&base, 0u, FLEX_ENDPOINT_TAIL); /* strict */
         for (uint64_t o = 1; o <= 5; o++) {
             flexPushUnsigned(&base, o, FLEX_ENDPOINT_TAIL);
             flexPushUnsigned(&base, o * 100u, FLEX_ENDPOINT_TAIL);
@@ -3258,6 +3320,7 @@ int clusterMailboxTest(int, char *[]) {
          * reaching the bad record that follows them */
         for (int kind = 0; kind < 4; kind++) {
             cleaner(flexFree) flex *bad = flexNew();
+            flexPushUnsigned(&bad, 0u, FLEX_ENDPOINT_TAIL); /* strict */
             for (uint64_t o = 1; o <= 3; o++) {
                 flexPushUnsigned(&bad, o, FLEX_ENDPOINT_TAIL);
                 flexPushUnsigned(&bad, o * 100u + 50u, FLEX_ENDPOINT_TAIL);
@@ -3309,6 +3372,7 @@ int clusterMailboxTest(int, char *[]) {
 
         /* The same leading records alone still merge */
         cleaner(flexFree) flex *good = flexNew();
+        flexPushUnsigned(&good, 0u, FLEX_ENDPOINT_TAIL); /* strict */
         for (uint64_t o = 1; o <= 3; o++) {
             flexPushUnsigned(&good, o, FLEX_ENDPOINT_TAIL);
             flexPushUnsigned(&good, o * 100u + 50u, FLEX_ENDPOINT_TAIL);
@@ -3349,6 +3413,7 @@ int clusterMailboxTest(int, char *[]) {
 
         /* Build a "stale" snapshot showing origin 5 at seq=3 via flex. */
         cleaner(flexFree) flex *stale = flexNew();
+        flexPushUnsigned(&stale, 0u, FLEX_ENDPOINT_TAIL); /* strict */
         flexPushUnsigned(&stale, 5u, FLEX_ENDPOINT_TAIL); /* origin */
         flexPushUnsigned(&stale, 3u, FLEX_ENDPOINT_TAIL); /* seq */
         flexPushUnsigned(&stale, 0u, FLEX_ENDPOINT_TAIL); /* window */
@@ -3455,9 +3520,10 @@ int clusterMailboxTest(int, char *[]) {
             .algo = FLEX_ENV_ALGO_HMAC_SHA256, .key = key, .key_len = 32};
         const flexEnvelopeVerifyParams vp = {.key = key, .key_len = 32};
 
-        /* One watermark: origin 5 at sequence 3 */
+        /* Strict mode, one watermark: origin 5 at sequence 3 */
         cleaner(flexFree) flex *raw = flexNew();
         flexRow row = FLEX_ROW_INIT;
+        flexRowUnsigned(&row, 0);
         flexRowUnsigned(&row, 5);
         flexRowUnsigned(&row, 3);
         flexRowUnsigned(&row, 0);
@@ -3810,8 +3876,8 @@ int clusterMailboxTest(int, char *[]) {
             ERR("Snapshot wrote %zu, expected %zu", snap_written,
                 expected_size);
         }
-        if (flexCount((const flex *)snap) != 3u) {
-            ERR("Expected 3 flex entries (1 slot), got %zu",
+        if (flexCount((const flex *)snap) != 4u) {
+            ERR("Expected 4 flex entries (the mode, 1 slot), got %zu",
                 flexCount((const flex *)snap));
         }
         /* Restore into a fresh mailbox and confirm origin 50 is at
