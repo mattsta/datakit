@@ -695,6 +695,94 @@ static void *aeadOomFailCalloc(size_t, size_t) {
 defcleanerName(uint8_t *, zfree, TestBytes);
 defcleaner(flex *, flexFree);
 
+/* @model: src/aeadNonceLog.h */
+/* Every call against a FIFO of (key id, generation, nonce) tuples
+ * holding 7/8 of the capacity, the log rebuilt from its bytes now and
+ * then and the run going on with the copy */
+static int aeadNonceLogTestModel_(uint64_t rng) {
+    int err = 0;
+    aeadNonceLog *log = aeadNonceLogCreate(64u);
+    const size_t window = aeadNonceLogCapacity(log) * 7u / 8u;
+    uint32_t modelKey[56];
+    uint64_t modelGen[56];
+    uint64_t modelVal[56];
+    size_t modelCount = 0;
+    if (aeadNonceLogCapacity(log) != 64u || window != 56u) {
+        ERR("capacity %zu", aeadNonceLogCapacity(log));
+    }
+    for (size_t step = 0; step < 20000u && !err; step++) {
+        dkLcg64Next(&rng);
+        const uint32_t key = 1u + (uint32_t)((rng >> 33) % 3u);
+        const uint64_t gen = (rng >> 50) % 3u;
+        const uint64_t val = (rng >> 40) % 120u;
+        if ((rng >> 20) % 64u == 0) {
+            aeadNonceLogClearKey(log, key); /* every generation of it */
+            size_t w = 0;
+            for (size_t m = 0; m < modelCount; m++) {
+                if (modelKey[m] != key) {
+                    modelKey[w] = modelKey[m];
+                    modelGen[w] = modelGen[m];
+                    modelVal[w++] = modelVal[m];
+                }
+            }
+            modelCount = w;
+        } else {
+            bool present = false;
+            for (size_t m = 0; m < modelCount && !present; m++) {
+                present = modelKey[m] == key && modelGen[m] == gen &&
+                          modelVal[m] == val;
+            }
+            uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
+            nonceFromCounter(val, nonce);
+            const bool inserted =
+                gen == 0 && (rng >> 18) % 2
+                    ? aeadNonceLogObserve(log, key, nonce)
+                    : aeadNonceLogObserveAt(log, key, gen, nonce);
+            if (inserted == present) {
+                ERR("step %zu: observe(%u, %" PRIu64 ", %" PRIu64 ") disagrees",
+                    step, key, gen, val);
+            }
+            if (!present) {
+                if (modelCount == window) { /* the oldest goes */
+                    memmove(modelKey, modelKey + 1, 55u * sizeof(*modelKey));
+                    memmove(modelGen, modelGen + 1, 55u * sizeof(*modelGen));
+                    memmove(modelVal, modelVal + 1, 55u * sizeof(*modelVal));
+                    modelCount--;
+                }
+                modelKey[modelCount] = key;
+                modelGen[modelCount] = gen;
+                modelVal[modelCount++] = val;
+            }
+        }
+        if (aeadNonceLogSize(log) != modelCount ||
+            !persistOpsAeadNonceLog.validate(log)) {
+            ERR("step %zu: size %zu (model %zu) or validate failed", step,
+                aeadNonceLogSize(log), modelCount);
+        }
+        if (step % 500u == 499u) {
+            /* Its bytes: sized, refused short, then a copy that carries
+             * on (same tuples, same eviction order) */
+            const size_t need = aeadNonceLogToBytes(log, nullptr, 0);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(need);
+            if (!need || aeadNonceLogToBytes(log, buf, need - 1) != 0 ||
+                aeadNonceLogToBytes(log, buf, need) != need) {
+                ERR("step %zu: ToBytes sizes disagree", step);
+                break;
+            }
+            aeadNonceLog *back = aeadNonceLogFromBytes(buf, need);
+            if (!back || aeadNonceLogSize(back) != modelCount) {
+                ERR("step %zu: FromBytes did not rebuild the log", step);
+                aeadNonceLogFree(back);
+                break;
+            }
+            aeadNonceLogFree(log);
+            log = back;
+        }
+    }
+    aeadNonceLogFree(log);
+    return err;
+}
+
 int aeadNonceLogTest(int, char *[]) {
     int err = 0;
 
@@ -1057,55 +1145,9 @@ int aeadNonceLogTest(int, char *[]) {
      * the same 7/8 load limit, over a small tuple space so reuses and
      * evictions are frequent and probe runs collide; validate (every
      * tuple reachable, FIFO intact) holds after every step */
-    TEST("observe and clear match a FIFO model") {
-        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
-        uint32_t modelKey[56];
-        uint64_t modelVal[56];
-        size_t modelCount = 0;
-        uint64_t rng = 0xA5A5A5A5u;
-        for (size_t step = 0; step < 20000u && !err; step++) {
-            dkLcg64Next(&rng);
-            const uint32_t key = 1u + (uint32_t)((rng >> 33) % 3u);
-            const uint64_t val = (rng >> 40) % 120u;
-            if ((rng >> 20) % 64u == 0) {
-                aeadNonceLogClearKey(log, key);
-                size_t w = 0;
-                for (size_t m = 0; m < modelCount; m++) {
-                    if (modelKey[m] != key) {
-                        modelKey[w] = modelKey[m];
-                        modelVal[w++] = modelVal[m];
-                    }
-                }
-                modelCount = w;
-            } else {
-                bool present = false;
-                for (size_t m = 0; m < modelCount && !present; m++) {
-                    present = modelKey[m] == key && modelVal[m] == val;
-                }
-                uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
-                nonceFromCounter(val, nonce);
-                if (aeadNonceLogObserve(log, key, nonce) == present) {
-                    ERR("step %zu: observe(%u, %" PRIu64 ") disagrees", step,
-                        key, val);
-                }
-                if (!present) {
-                    if (modelCount == 56u) {
-                        memmove(modelKey, modelKey + 1,
-                                55u * sizeof(*modelKey));
-                        memmove(modelVal, modelVal + 1,
-                                55u * sizeof(*modelVal));
-                        modelCount--;
-                    }
-                    modelKey[modelCount] = key;
-                    modelVal[modelCount++] = val;
-                }
-            }
-            if (aeadNonceLogSize(log) != modelCount ||
-                !persistOpsAeadNonceLog.validate(log)) {
-                ERR("step %zu: size %zu (model %zu) or validate failed", step,
-                    aeadNonceLogSize(log), modelCount);
-            }
-        }
+    TEST("model: every public call against a FIFO of tuples") {
+        err += aeadNonceLogTestModel_(0xA5A5A5A5u);
+        err += aeadNonceLogTestModel_(7u);
     }
 
     TEST("capacity limit and snapshot order") {
