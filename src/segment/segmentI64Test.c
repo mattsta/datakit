@@ -130,6 +130,23 @@ int segmentI64Test(int, char *[]) {
         segmentI64Free(seg);
     }
 
+    TEST("a query whose left is past its right is empty on every tier") {
+        /* Past 32 bits, a Small tier's bounds must not wrap into range */
+        int64_t values[100];
+        for (int i = 0; i < 100; i++) {
+            values[i] = i + 1;
+        }
+        void *small = segmentI64NewFromArray(SEGMENT_OP_SUM, values, 100);
+        const int64_t wrapped =
+            segmentI64Query(small, (UINT64_C(1) << 32) + 5, 50);
+        const int64_t empty = segmentI64Query(small, 60, 50);
+        if (wrapped != 0 || empty != 0) {
+            ERR("empty ranges summed to %" PRId64 " and %" PRId64, wrapped,
+                empty);
+        }
+        segmentI64Free(small);
+    }
+
     TEST("basic: range sum queries") {
         void *seg = segmentI64New(SEGMENT_OP_SUM);
 

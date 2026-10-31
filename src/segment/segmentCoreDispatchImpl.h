@@ -128,8 +128,11 @@ SEGMENT_VALUE_TYPE SEGMENT_D_FN_(Query)(const void *seg, size_t left,
     }
 
     const size_t count = SEGMENT_D_FN_(Count)(seg);
-    if (right >= count) {
-        right = count; /* out of range: the tier returns the identity */
+    if (right >= count || left > right) {
+        /* Out of range or empty: the tier returns the identity (before
+         * the Small tier's 32-bit bounds could cut a huge 'left' down to
+         * a range that holds something) */
+        right = count;
         left = count;
     }
 
