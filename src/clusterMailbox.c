@@ -313,36 +313,44 @@ static const clusterMailboxOrigin *cmLookupOriginConst(const clusterMailbox *mb,
  * cmLookupOriginConst so a reader who matches the new origin_id
  * is guaranteed to see the 0-initialised last_applied (not stale junk
  * from a previously-occupied slot). */
-static clusterMailboxOrigin *cmInsertOrigin(clusterMailbox *mb,
-                                            uint32_t origin_id) {
-    /* Free slots are signalled by origin_id == 0. Scan order doesn't
-     * matter; the typical cluster has a handful of peers and the table
-     * is mostly empty. */
+/* The first free slot (origin_id == 0), or NULL when the table is full.
+ * Scan order doesn't matter; the typical cluster has a handful of peers
+ * and the table is mostly empty. */
+static clusterMailboxOrigin *cmFreeOrigin(clusterMailbox *mb) {
     for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
         /* The writer is the only thread that stores origin_id. */
         /* @sync: relaxed owner */
         const uint32_t cur = atomic_load_explicit(&mb->origins[i].origin_id,
                                                   memory_order_relaxed);
         if (cur == 0u) {
-            /* The slot is unpublished (origin_id == 0), so no observer
-             * reaches it; the origin_id release below orders this. */
-            /* @sync: relaxed init */
-            atomic_store_explicit(&mb->origins[i].last_applied, 0u,
-                                  memory_order_relaxed);
-            mb->origins[i].window_bits = 0u;
-            /* Release-publish the slot: any reader who sees this
-             * origin_id is guaranteed to also see the last_applied=0
-             * initialisation above. */
-            /* @sync: release mailbox.slotPublish */
-            atomic_store_explicit(&mb->origins[i].origin_id, origin_id,
-                                  memory_order_release);
-            /* @sync: release mailbox.originCount */
-            atomic_fetch_add_explicit(&mb->origin_count, 1u,
-                                      memory_order_release);
             return &mb->origins[i];
         }
     }
     return nullptr;
+}
+
+/* Publish free slot 'slot' as origin_id's, its watermark at 0 */
+static clusterMailboxOrigin *cmPublishOrigin(clusterMailbox *mb,
+                                             clusterMailboxOrigin *slot,
+                                             uint32_t origin_id) {
+    /* The slot is unpublished (origin_id == 0), so no observer reaches
+     * it; the origin_id release below orders this. */
+    /* @sync: relaxed init */
+    atomic_store_explicit(&slot->last_applied, 0u, memory_order_relaxed);
+    slot->window_bits = 0u;
+    /* Release-publish the slot: any reader who sees this origin_id is
+     * guaranteed to also see the last_applied=0 initialisation above. */
+    /* @sync: release mailbox.slotPublish */
+    atomic_store_explicit(&slot->origin_id, origin_id, memory_order_release);
+    /* @sync: release mailbox.originCount */
+    atomic_fetch_add_explicit(&mb->origin_count, 1u, memory_order_release);
+    return slot;
+}
+
+static clusterMailboxOrigin *cmInsertOrigin(clusterMailbox *mb,
+                                            uint32_t origin_id) {
+    clusterMailboxOrigin *slot = cmFreeOrigin(mb);
+    return slot ? cmPublishOrigin(mb, slot, origin_id) : nullptr;
 }
 
 /* Encode the inner frame header (flex-based).
@@ -917,10 +925,15 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
         }
         /* sequence > last_applied: advance watermark + shift window. */
     }
+    /* A new origin needs a free slot, taken once its frame is applied:
+     * the table holds the origins with an applied frame, so a refused
+     * one neither counts nor keeps a slot (the apply callback cannot
+     * ingest, so the slot stays free until then) */
     clusterMailboxOrigin *slot = existing;
+    clusterMailboxOrigin *freeSlot = nullptr;
     if (slot == nullptr) {
-        slot = cmInsertOrigin(mb, origin_id);
-        if (slot == nullptr) {
+        freeSlot = cmFreeOrigin(mb);
+        if (freeSlot == nullptr) {
             return CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL;
         }
     }
@@ -946,6 +959,9 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
              * lets the producer retransmit and get re-applied. */
             return CLUSTER_MAILBOX_ERR_APPLY_REJECTED;
         }
+    }
+    if (slot == nullptr) {
+        slot = cmPublishOrigin(mb, freeSlot, origin_id);
     }
     /* Advance watermark + maintain the replay bitmap. The watermark
      * publish uses release so an observer whose acquire load in
@@ -1865,6 +1881,500 @@ static size_t cmTestSealInner(const flex *inner, const uint8_t *key,
     return written;
 }
 
+/* ====================================================================
+ * The model test: a producer seals frames for many origins and the
+ * consumer ingests them, against a model of the consumer's watermarks
+ * and replay windows (strict or windowed), every rejection's result
+ * and counter checked, through faults (a flipped tag, an absent,
+ * retired or revoked key, another algorithm), apply refusals and
+ * re-entry, and snapshots restored fresh or merged back stale
+ * ==================================================================== */
+#include "dkRandom.h"
+
+static constexpr uint32_t CMB_ORIGINS = 80; /* past the 64-slot table */
+static constexpr uint32_t CMB_KEYS = 6;
+
+typedef struct cmbOrigin_ {
+    bool tracked;
+    uint64_t last;
+    uint64_t bits; /* bit i: last - i was applied */
+} cmbOrigin_;
+
+typedef struct cmbModel_ {
+    hmacKeyring *ring;
+    clusterMailbox *producer;
+    clusterMailbox *other; /* seals under another algorithm */
+    clusterMailbox *consumer;
+    bool windowed;
+    cmbOrigin_ o[CMB_ORIGINS + 1];
+    uint32_t tracked;
+    bool keyIn[CMB_KEYS + 1];
+    hmacKeyId floor;
+    bool accept;       /* what the apply callback answers */
+    bool reenter;      /* the apply callback tries to ingest and restore */
+    bool applied;      /* the callback ran */
+    clusterFrame seen; /* the frame it saw */
+    uint8_t seenPayload[64];
+    clusterMailboxStats want;
+    const char *why;
+} cmbModel_;
+
+static void cmbModelFree_(cmbModel_ *M) {
+    if (M) {
+        clusterMailboxFree(M->consumer);
+        clusterMailboxFree(M->producer);
+        clusterMailboxFree(M->other);
+        hmacKeyringFree(M->ring);
+        zfree(M);
+    }
+}
+
+defcleaner(cmbModel_ *, cmbModelFree_);
+defcleanerName(cmbOrigin_ *, zfree, Origins);
+
+static void cmbKey_(hmacKeyId id, uint8_t key[32]) {
+    for (uint32_t i = 0; i < 32; i++) {
+        key[i] = (uint8_t)(id * 31 + i);
+    }
+}
+
+static bool cmbApply_(const clusterFrame *frame, void *ctx) {
+    cmbModel_ *M = ctx;
+    M->applied = true;
+    M->seen = *frame;
+    memcpy(M->seenPayload, frame->payload,
+           frame->payload_len < sizeof(M->seenPayload)
+               ? frame->payload_len
+               : sizeof(M->seenPayload));
+    if (M->reenter) {
+        /* Neither ingest nor restore reaches the mailbox mid-apply */
+        uint8_t junk[8] = {};
+        if (clusterMailboxIngest(M->consumer, junk, sizeof(junk), 1) !=
+                CLUSTER_MAILBOX_ERR_PARAM ||
+            clusterMailboxRestore(M->consumer, junk, sizeof(junk))) {
+            M->why = "a re-entry from the apply callback was let in";
+        }
+        M->want.ingest_total++;
+        M->want.param_error++;
+        M->want.bytes_ingested += sizeof(junk);
+    }
+    return M->accept;
+}
+
+/* The model's verdict for a good frame at (origin, seq), applied or not */
+static clusterMailboxIngestResult cmbVerdict_(const cmbModel_ *M,
+                                              uint32_t origin, uint64_t seq) {
+    const cmbOrigin_ *o = &M->o[origin];
+    if (!o->tracked && M->tracked == CLUSTER_MAILBOX_ORIGIN_CAP) {
+        return CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL;
+    }
+    if (seq > o->last) {
+        return CLUSTER_MAILBOX_OK;
+    }
+    if (!M->windowed || o->last - seq >= 64 ||
+        (o->bits >> (o->last - seq)) & 1) {
+        return CLUSTER_MAILBOX_ERR_REPLAY;
+    }
+    return CLUSTER_MAILBOX_OK;
+}
+
+static void cmbApplyModel_(cmbModel_ *M, uint32_t origin, uint64_t seq) {
+    cmbOrigin_ *o = &M->o[origin];
+    if (!o->tracked) {
+        o->tracked = true;
+        M->tracked++;
+    }
+    if (seq > o->last) {
+        const uint64_t shift = seq - o->last;
+        o->bits = shift >= 64 ? 0 : o->bits << shift;
+        o->bits |= 1;
+        o->last = seq;
+    } else {
+        o->bits |= UINT64_C(1) << (o->last - seq);
+    }
+    if (!M->windowed) {
+        o->bits = UINT64_MAX; /* strict: the whole window reads as seen */
+    }
+}
+
+/* A snapshot's watermarks merged in: per origin the later last wins, the
+ * windows re-oriented to it and joined */
+static void cmbMergeModel_(cmbModel_ *M, const cmbOrigin_ *snap) {
+    for (uint32_t i = 1; i <= CMB_ORIGINS; i++) {
+        const cmbOrigin_ *s = &snap[i];
+        cmbOrigin_ *o = &M->o[i];
+        if (!s->tracked || !s->last) {
+            continue;
+        }
+        if (!o->tracked) {
+            o->tracked = true;
+            M->tracked++;
+        }
+        if (s->last > o->last) {
+            const uint64_t shift = s->last - o->last;
+            o->bits = (shift >= 64 ? 0 : o->bits << shift) | s->bits;
+            o->last = s->last;
+        } else {
+            const uint64_t shift = o->last - s->last;
+            /* (the older window's bit i is sequence s->last - i, so
+             * bit i + shift here) */
+            o->bits |= shift >= 64 ? 0 : s->bits << shift;
+        }
+        if (!M->windowed) {
+            o->bits = UINT64_MAX;
+        }
+    }
+}
+
+/* @model: src/clusterMailbox.h */
+/* The consumer's watermarks and counters are the model's */
+static bool cmbSame_(cmbModel_ *M, const clusterMailbox *mb) {
+    if (clusterMailboxOriginCount(mb) != M->tracked) {
+        M->why = "the origin count";
+        return false;
+    }
+    for (uint32_t i = 1; i <= CMB_ORIGINS; i++) {
+        if (clusterMailboxLastApplied(mb, i) != M->o[i].last) {
+            M->why = "an origin's last applied";
+            return false;
+        }
+    }
+    clusterMailboxStats st = {};
+    clusterMailboxGetStats(mb, &st);
+    if (memcmp(&st, &M->want, sizeof(st)) != 0) {
+        M->why = "the counters";
+        return false;
+    }
+    return true;
+}
+
+/* @model: src/clusterMailbox.h */
+/* One frame sealed and ingested, a fault in it now and then */
+static bool cmbFrame_(cmbModel_ *M, uint64_t r) {
+    const uint32_t origin = 1 + (uint32_t)(r % CMB_ORIGINS);
+    const cmbOrigin_ *o = &M->o[origin];
+    /* Next, a replay, an older one inside the window, or far ahead */
+    const uint64_t pick = (r >> 8) % 8;
+    const uint64_t seq = pick < 4 || !o->last ? o->last + 1 + (r >> 12) % 3
+                         : pick < 5           ? o->last
+                         : pick < 7 ? (o->last > 70 ? o->last - (r >> 12) % 70
+                                                    : 1 + (r >> 12) % o->last)
+                                    : o->last + 200;
+    const hmacKeyId key = (hmacKeyId)(1 + (r >> 20) % CMB_KEYS);
+    const uint8_t type = (uint8_t)((r >> 24) % 200);
+    uint8_t payload[48];
+    const size_t plen = (r >> 32) % sizeof(payload);
+    for (size_t i = 0; i < plen; i++) {
+        payload[i] = (uint8_t)(r >> (i % 56));
+    }
+    const uint64_t fault = (r >> 40) % 12;
+    clusterMailbox *sealer = fault == 1 ? M->other : M->producer;
+    const size_t cap = clusterMailboxSealedSize(sealer, plen);
+    uint8_t out[512];
+    size_t wrote = 0;
+    /* A seal refused: sequence 0, or a buffer one byte short */
+    const bool sealable = M->keyIn[key] && key >= M->floor;
+    if (clusterMailboxSeal(sealer, origin, 0, type, payload, plen, key, out,
+                           sizeof(out), &wrote) ||
+        (sealable &&
+         clusterMailboxSeal(sealer, origin, seq, type, payload, plen, key, out,
+                            cap - 1, &wrote) &&
+         wrote > cap - 1)) {
+        M->why = "a seal past its refusals";
+        return false;
+    }
+    const bool sealed = clusterMailboxSeal(sealer, origin, seq, type, payload,
+                                           plen, key, out, cap, &wrote);
+    if (sealed != sealable) {
+        M->why = "a seal under a key";
+        return false;
+    }
+    if (!sealed) {
+        return true;
+    }
+    /* The fault, and the result it must give */
+    hmacKeyId ingestKey = key;
+    clusterMailboxIngestResult want;
+    if (fault == 1) {
+        want = CLUSTER_MAILBOX_ERR_ALGO_MISMATCH;
+    } else if (fault == 2) {
+        out[wrote - 1] ^= 0x40; /* the tag */
+        want = CLUSTER_MAILBOX_ERR_VERIFY_FAILED;
+    } else if (fault == 3) {
+        ingestKey = CMB_KEYS + 3; /* never installed */
+        want = CLUSTER_MAILBOX_ERR_KEY_MISSING;
+    } else {
+        want = cmbVerdict_(M, origin, seq);
+    }
+    M->accept = (r >> 50) % 6 != 0;
+    M->reenter = (r >> 53) % 16 == 0;
+    M->applied = false;
+    const clusterMailboxIngestResult got =
+        clusterMailboxIngest(M->consumer, out, wrote, ingestKey);
+    if (want == CLUSTER_MAILBOX_OK && !M->accept) {
+        want = CLUSTER_MAILBOX_ERR_APPLY_REJECTED;
+    }
+    M->want.ingest_total++;
+    M->want.bytes_ingested += wrote;
+    switch (want) {
+    case CLUSTER_MAILBOX_OK:
+        M->want.apply_ok++;
+        break;
+    case CLUSTER_MAILBOX_ERR_APPLY_REJECTED:
+        M->want.apply_rejected++;
+        break;
+    case CLUSTER_MAILBOX_ERR_REPLAY:
+        M->want.replay_rejected++;
+        break;
+    case CLUSTER_MAILBOX_ERR_ALGO_MISMATCH:
+        M->want.algo_mismatch++;
+        break;
+    case CLUSTER_MAILBOX_ERR_VERIFY_FAILED:
+        M->want.verify_failed++;
+        break;
+    case CLUSTER_MAILBOX_ERR_KEY_MISSING:
+        M->want.key_missing++;
+        break;
+    case CLUSTER_MAILBOX_ERR_KEY_REVOKED:
+        M->want.key_revoked++;
+        break;
+    case CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL:
+        M->want.origin_table_full++;
+        break;
+    default:
+        break;
+    }
+    if (got != want) {
+        static char why[128];
+        snprintf(why, sizeof(why),
+                 "ingest of origin %" PRIu32 " seq %" PRIu64 " (last %" PRIu64
+                 ", fault %" PRIu64 "): %d, want %d",
+                 origin, seq, o->last, fault, (int)got, (int)want);
+        M->why = why;
+        return false;
+    }
+    /* The callback ran exactly for frames that reached it, and saw them */
+    const bool reached = want == CLUSTER_MAILBOX_OK ||
+                         want == CLUSTER_MAILBOX_ERR_APPLY_REJECTED;
+    if (M->applied != reached ||
+        (reached && (M->seen.origin_id != origin || M->seen.sequence != seq ||
+                     M->seen.msg_type != type || M->seen.payload_len != plen ||
+                     memcmp(M->seenPayload, payload, plen) != 0))) {
+        M->why = "the frame the callback saw";
+        return false;
+    }
+    if (want == CLUSTER_MAILBOX_OK) {
+        cmbApplyModel_(M, origin, seq);
+    }
+    return true;
+}
+
+/* @model: src/clusterMailbox.h */
+/* The consumer's snapshot, plain or wrapped, in a fresh mailbox that
+ * then takes the consumer's place; and an older snapshot merged back */
+static bool cmbRebuild_(cmbModel_ *M, cmbOrigin_ *stale, uint8_t **staleBuf,
+                        size_t *staleLen, uint64_t r) {
+    const bool wrapped = (r >> 8) % 2;
+    uint8_t key[32];
+    cmbKey_(1, key);
+    const flexEnvelopeWrapParams wp = {
+        .key = key, .key_len = sizeof(key), .algo = FLEX_ENV_ALGO_HMAC_SHA256};
+    const flexEnvelopeVerifyParams vp = {.max_payload_len =
+                                             FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD,
+                                         .key = key,
+                                         .key_len = sizeof(key)};
+    const size_t need =
+        wrapped ? clusterMailboxSnapshotWrappedSize(M->consumer, wp.algo)
+                : clusterMailboxSnapshotSize(M->consumer);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(need ? need : 1);
+    size_t wrote = 0;
+    const bool took =
+        wrapped
+            ? clusterMailboxSnapshotWrapped(M->consumer, &wp, buf, need, &wrote)
+            : clusterMailboxSnapshot(M->consumer, buf, need, &wrote);
+    if (!took || wrote != need ||
+        (!wrapped &&
+         clusterMailboxSnapshot(M->consumer, buf, need - 1, &wrote))) {
+        M->why = "a snapshot's size";
+        return false;
+    }
+    clusterMailboxCreateOptions opts = {
+        .ring = M->ring,
+        .envelope_algo = FLEX_ENV_ALGO_HMAC_BLAKE3,
+        .on_apply = cmbApply_,
+        .apply_ctx = M,
+        .flags = M->windowed ? CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW : 0,
+        .disable_nonce_log = (r >> 9) % 2,
+    };
+    clusterMailbox *fresh = clusterMailboxCreateOpts(&opts);
+    if (!fresh ||
+        (clusterMailboxNonceLog(fresh) != nullptr) == opts.disable_nonce_log) {
+        clusterMailboxFree(fresh);
+        M->why = "a fresh mailbox";
+        return false;
+    }
+    /* A tampered wrapped snapshot changes nothing */
+    if (wrapped) {
+        buf[wrote / 2] ^= 1;
+        const bool tamperTook =
+            clusterMailboxRestoreWrapped(fresh, &vp, buf, wrote);
+        buf[wrote / 2] ^= 1;
+        if (tamperTook || clusterMailboxOriginCount(fresh) != 0) {
+            clusterMailboxFree(fresh);
+            M->why = "a tampered wrapped snapshot was taken";
+            return false;
+        }
+    }
+    const bool restored =
+        wrapped ? clusterMailboxRestoreWrapped(fresh, &vp, buf, wrote)
+                : clusterMailboxRestore(fresh, buf, wrote);
+    if (!restored) {
+        clusterMailboxFree(fresh);
+        M->why = "a restore into a fresh mailbox";
+        return false;
+    }
+    /* The fresh mailbox's counters start at zero; the model's follow */
+    clusterMailboxFree(M->consumer);
+    M->consumer = fresh;
+    memset(&M->want, 0, sizeof(M->want));
+    if (!cmbSame_(M, M->consumer)) {
+        return false;
+    }
+    /* An older snapshot merged back: the later watermarks win, the
+     * windows join */
+    if (*staleBuf) {
+        if (!clusterMailboxRestore(M->consumer, *staleBuf, *staleLen)) {
+            M->why = "an older snapshot was refused";
+            return false;
+        }
+        cmbMergeModel_(M, stale);
+        if (!cmbSame_(M, M->consumer)) {
+            return false;
+        }
+    }
+    /* This one is the next older snapshot */
+    zfree(*staleBuf);
+    *staleLen = clusterMailboxSnapshotSize(M->consumer);
+    /* @own: caller; free=zfree */
+    *staleBuf = zmalloc(*staleLen);
+    size_t staleWrote = 0;
+    memcpy(stale, M->o, sizeof(M->o));
+    return clusterMailboxSnapshot(M->consumer, *staleBuf, *staleLen,
+                                  &staleWrote) &&
+           staleWrote == *staleLen;
+}
+
+/* @model: src/clusterMailbox.h */
+static int clusterMailboxTestModel_(uint64_t seed) {
+    int err = 0;
+    cleaner(cmbModelFree_) cmbModel_ *M = zcalloc(1, sizeof(*M));
+    M->windowed = seed % 2;
+    /* @own: container; free=hmacKeyringFree */
+    M->ring = hmacKeyringCreate();
+    for (hmacKeyId id = 1; id <= CMB_KEYS; id++) {
+        uint8_t key[32];
+        cmbKey_(id, key);
+        M->keyIn[id] = hmacKeyringInstallUnsalted(M->ring, id, &hmacAlgoSHA256,
+                                                  key, sizeof(key));
+    }
+    /* @own: container; free=clusterMailboxFree */
+    M->producer = clusterMailboxCreate(M->ring, FLEX_ENV_ALGO_HMAC_BLAKE3,
+                                       nullptr, nullptr);
+    /* @own: container; free=clusterMailboxFree */
+    M->other = clusterMailboxCreateEx(M->ring, FLEX_ENV_ALGO_HMAC_SHA256,
+                                      nullptr, nullptr, 0);
+    /* @own: container; free=clusterMailboxFree */
+    M->consumer = clusterMailboxCreateEx(
+        M->ring, FLEX_ENV_ALGO_HMAC_BLAKE3, cmbApply_, M,
+        M->windowed ? CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW : 0);
+    cleanerName(zfree, Origins) cmbOrigin_ *stale =
+        zcalloc(CMB_ORIGINS + 1, sizeof(*stale));
+    cleanerName(zfree, Bytes) uint8_t *staleBuf = nullptr;
+    size_t staleLen = 0;
+    /* A frame sealed under key 1 now, for after it is revoked */
+    size_t earlyLen = clusterMailboxSealedSize(M->producer, 4);
+    cleanerName(zfree, Bytes) uint8_t *early = zmalloc(earlyLen);
+    if (!clusterMailboxSeal(M->producer, 1, 1000000, 7, (const uint8_t *)"late",
+                            4, 1, early, earlyLen, &earlyLen)) {
+        ERR("%s", "the early frame was not sealed");
+    }
+    uint64_t rng = seed + 11;
+    for (uint32_t step = 0; step < 6000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const uint32_t op = (uint32_t)(r % 20);
+        bool ok = true;
+        M->why = "the call's result";
+        if (op < 14) {
+            ok = cmbFrame_(M, r >> 5);
+        } else if (op == 14) { /* a key retired, or put back */
+            const hmacKeyId id = (hmacKeyId)(1 + (r >> 8) % CMB_KEYS);
+            uint8_t key[32];
+            cmbKey_(id, key);
+            if (M->keyIn[id]) {
+                ok = hmacKeyringRetire(M->ring, id);
+            } else {
+                ok = hmacKeyringInstallUnsalted(M->ring, id, &hmacAlgoSHA256,
+                                                key, sizeof(key));
+            }
+            M->keyIn[id] = !M->keyIn[id];
+        } else if (op == 15 && (r >> 8) % 20 == 0 && M->floor < 3) {
+            M->floor++; /* revoked below it: nothing seals under them */
+            ok = hmacKeyringSetMinValidKeyId(M->ring, M->floor);
+            if (ok && M->floor > 1 && M->keyIn[1] && early) {
+                /* A frame sealed under key 1 before its revocation */
+                ok = clusterMailboxIngest(M->consumer, early, earlyLen, 1) ==
+                     CLUSTER_MAILBOX_ERR_KEY_REVOKED;
+                M->want.ingest_total++;
+                M->want.key_revoked++;
+                M->want.bytes_ingested += earlyLen;
+            }
+        } else if (op == 16 && (r >> 8) % 10 == 0) {
+            ok = cmbRebuild_(M, stale, &staleBuf, &staleLen, r);
+        } else if (op == 17 && (r >> 8) % 10 == 0) {
+            clusterMailboxResetStats(M->consumer);
+            memset(&M->want, 0, sizeof(M->want));
+        } else if (op == 18) { /* the keyring re-attached */
+            ok = clusterMailboxAttachKeyring(M->consumer, M->ring,
+                                             FLEX_ENV_ALGO_HMAC_BLAKE3,
+                                             cmbApply_, M) &&
+                 !clusterMailboxAttachKeyring(
+                     M->consumer, M->ring, FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
+                     cmbApply_, M);
+        } else if (op == 19) { /* the rotation helpers, as a pure state */
+            clusterRotationState st;
+            const hmacKeyId a = (hmacKeyId)(1 + (r >> 8) % 9);
+            const hmacKeyId b = a % 9 + 1;
+            uint8_t ann[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
+            const size_t annLen = clusterMailboxBuildRotateAnnounce(ann, b);
+            hmacKeyId parsed = 0;
+            ok = !clusterRotationInit(&st, HMAC_KEY_ID_INVALID) &&
+                 clusterRotationInit(&st, a) &&
+                 clusterRotationAccepts(&st, a) &&
+                 !clusterRotationAccepts(&st, b) &&
+                 !clusterRotationPromote(&st, a) &&
+                 clusterRotationPromote(&st, b) && st.primary == b &&
+                 clusterRotationAccepts(&st, a) &&
+                 clusterRotationAccepts(&st, b) && annLen > 0 &&
+                 annLen <= sizeof(ann) &&
+                 clusterMailboxParseRotateAnnounce(ann, annLen, &parsed) &&
+                 parsed == b &&
+                 !clusterMailboxParseRotateAnnounce(ann, annLen - 1, &parsed);
+            clusterRotationRetirePrevious(&st);
+            ok = ok && !clusterRotationAccepts(&st, a) &&
+                 clusterRotationAccepts(&st, b);
+        }
+        if (ok && step % 40 == 39 && !cmbSame_(M, M->consumer)) {
+            ok = false;
+        }
+        if (!ok) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 ": %s (%" PRIu32
+                " origins, windowed %d, seed %" PRIu64 ")",
+                step, op, M->why, M->tracked, (int)M->windowed, seed);
+        }
+    }
+    return err;
+}
+
 int clusterMailboxTest(int, char *[]) {
     int err = 0;
 
@@ -1873,6 +2383,49 @@ int clusterMailboxTest(int, char *[]) {
         0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
         0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xfe, 0xff};
     const hmacKeyId K1 = 100u;
+
+    TEST("a new origin whose frame is refused takes no slot") {
+        cleaner(cmbModelFree_) cmbModel_ *M = zcalloc(1, sizeof(*M));
+        /* @own: container; free=hmacKeyringFree */
+        M->ring = hmacKeyringCreate();
+        uint8_t key[32];
+        cmbKey_(1, key);
+        (void)hmacKeyringInstallUnsalted(M->ring, 1, &hmacAlgoSHA256, key,
+                                         sizeof(key));
+        /* @own: container; free=clusterMailboxFree */
+        M->producer = clusterMailboxCreate(M->ring, FLEX_ENV_ALGO_HMAC_BLAKE3,
+                                           nullptr, nullptr);
+        /* @own: container; free=clusterMailboxFree */
+        M->consumer = clusterMailboxCreate(M->ring, FLEX_ENV_ALGO_HMAC_BLAKE3,
+                                           cmbApply_, M);
+        uint8_t out[256];
+        size_t wrote = 0;
+        if (!clusterMailboxSeal(M->producer, 9, 1, 0, nullptr, 0, 1, out,
+                                sizeof(out), &wrote)) {
+            ERR("%s", "seal");
+        }
+        M->accept = false;
+        if (clusterMailboxIngest(M->consumer, out, wrote, 1) !=
+                CLUSTER_MAILBOX_ERR_APPLY_REJECTED ||
+            clusterMailboxOriginCount(M->consumer) != 0 ||
+            clusterMailboxSnapshotSize(M->consumer) !=
+                clusterMailboxSnapshotSize(M->producer)) {
+            ERR("%s", "a refused origin was kept");
+        }
+        M->accept = true;
+        if (clusterMailboxIngest(M->consumer, out, wrote, 1) !=
+                CLUSTER_MAILBOX_OK ||
+            clusterMailboxOriginCount(M->consumer) != 1 ||
+            clusterMailboxLastApplied(M->consumer, 9) != 1) {
+            ERR("%s", "the retransmitted frame was not applied");
+        }
+    }
+
+    TEST("model: frames for many origins against a model of the watermarks") {
+        for (uint64_t seed = 1; seed <= 4; seed++) {
+            err += clusterMailboxTestModel_(seed);
+        }
+    }
 
     TEST("Seal fits its frame exactly within SealedSize, and no smaller") {
         /* For header fields of every varint width and payloads around

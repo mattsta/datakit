@@ -273,7 +273,9 @@ size_t clusterMailboxSealedSize(const clusterMailbox *mb, size_t payload_len);
  *
  * Returns false on:
  * - mailbox or out is NULL
- * - key_id is invalid or absent from the keyring
+ * - key_id is invalid or absent from the keyring, or below its
+ *   revoked-key floor (hmacKeyringMinValidKeyId)
+ * - origin_id is 0, or payload is NULL with payload_len above 0
  * - out_cap is too small (use clusterMailboxSealedSize to size)
  * - sequence is 0 (reserved as "never seen" sentinel)
  *
