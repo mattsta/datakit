@@ -20,6 +20,7 @@ from . import (
     coverage,
     deadsurface,
     defconst,
+    docexamples,
     docgaps,
     dropargs,
     dropinclude,
@@ -437,6 +438,12 @@ def main(argv: list[str] | None = None) -> int:
     dg.add_argument(
         "--names", action="store_true", help="list each header's undocumented names"
     )
+    dg.add_argument(
+        "--stale",
+        action="store_true",
+        help="list the calls the docs' C code blocks make that no source file "
+        "names (exit 1 when there are any)",
+    )
 
     hdr = sub.add_parser(
         "headers",
@@ -452,6 +459,25 @@ def main(argv: list[str] | None = None) -> int:
     hdr.add_argument("--preset", default="dev", help="build/PRESET's database")
     hdr.add_argument("-j", "--jobs", type=int, help="parallel compiles")
     hdr.add_argument("paths", nargs="*", help="repo-relative headers (default: src)")
+
+    dx = sub.add_parser(
+        "docexamples",
+        help="compile the docs' C examples against the headers (exit 0, 1 for "
+        "an example calling datakit as it no longer is)",
+    )
+    dx.add_argument(
+        "--build",
+        type=Path,
+        help="binary dir whose compile_commands.json to use (default: build/PRESET)",
+    )
+    dx.add_argument("--preset", default="dev", help="build/PRESET's database")
+    dx.add_argument("-j", "--jobs", type=int, help="parallel compiles")
+    dx.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print each failing example's unit and the compiler's whole output",
+    )
+    dx.add_argument("docs", nargs="*", help="repo-relative docs (default: all)")
 
     tc = sub.add_parser(
         "testchecks",
@@ -1536,7 +1562,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "typeaudit":
         return typeaudit.run(args.repo, tuple(args.headers), args.concept, args.min)
     if args.command == "docgaps":
-        return docgaps.run(args.repo, tuple(args.headers), args.names)
+        return docgaps.run(args.repo, tuple(args.headers), args.names, args.stale)
     if args.command == "handles":
         return handles.run(args.repo, tuple(args.headers), args.list)
     if args.command == "structs":
@@ -1546,6 +1572,16 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "headers":
         return headers.run(
             args.repo, tuple(args.paths), args.build, args.preset, args.jobs
+        )
+
+    if args.command == "docexamples":
+        return docexamples.run(
+            args.repo,
+            tuple(args.docs),
+            args.build,
+            args.preset,
+            args.jobs,
+            args.verbose,
         )
 
     if args.command == "testchecks":

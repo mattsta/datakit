@@ -48,6 +48,7 @@ HEADERS_TIMEOUT = 10 * 60
 #: The test-check gate is lexical too: one pass, plus every header's
 #: macros.
 TESTCHECKS_TIMEOUT = 10 * 60
+DOCS_TIMEOUT = 10 * 60
 #: ``ctest --timeout``: the limit for each test that sets no TIMEOUT
 #: property of its own (ctest's conventional default), so one hung
 #: test fails alone instead of running into CTEST_TIMEOUT.
@@ -594,6 +595,17 @@ def headers_command(bindir: Path) -> Callable[[str, Path], list[str]]:
 
     def command(uv: str, tree: Path) -> list[str]:
         return tree_dktools(uv, tree, "headers", "--build", str(bindir))
+
+    return command
+
+
+def docs_command(bindir: Path) -> Callable[[str, Path], list[str]]:
+    """The docs gate (every C example compiles against the headers, and
+    no doc names a call no source has) against the compile database in
+    'bindir'"""
+
+    def command(uv: str, tree: Path) -> list[str]:
+        return tree_dktools(uv, tree, "docexamples", "--build", str(bindir))
 
     return command
 

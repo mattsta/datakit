@@ -506,6 +506,16 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         src,
         steps.TESTCHECKS_TIMEOUT,
     )
+    # Needs the build's compile database too
+    docs = Step("docexamples", work / "docs.log")
+    if configure.ok:
+        docs = steps.run_tree_gate(
+            "docexamples",
+            steps.docs_command(bindir),
+            docs.log,
+            src,
+            steps.DOCS_TIMEOUT,
+        )
 
     failed = ctest_result.failed + serial_result.failed
     passed = (
@@ -524,6 +534,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         and models.ok
         and header.ok
         and testcheck.ok
+        and docs.ok
         and fmt.clean()
         and len(also) == len(others)
         and all(a.ok for a in also)
@@ -561,6 +572,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"({steps.last_line(header.log)})",
         f"  checks    {'ok' if testcheck.ok else 'FAILED'} "
         f"({steps.last_line(testcheck.log)})",
+        f"  docs      {'ok' if docs.ok else 'FAILED'} ({steps.last_line(docs.log)})",
         f"  format    {formatting.gate_line(fmt)}",
         *(f"  formatted {line}" for line in formatted),
     ]

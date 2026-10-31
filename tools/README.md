@@ -376,7 +376,9 @@ gate before a milestone.
   `outputaudit check`, `spell`, `idioms`, `magic`, `modelcover` and
   `testchecks` then run on the exported tree with the tree's own dktools
   (the `alloc`, `atomic`, `output`, `spell`, `idioms`, `magic`, `models`
-  and `checks` lines).
+  and `checks` lines), and `docexamples` against the build's compile
+  database (the `docs` line: every doc's C examples compile, and no doc
+  names a call no source has).
 - Prints a result block (tree hash, build with its warning-line and
   linker-note counts, ctest, sanitizer reports from the test output,
   allocaudit, failing test names, log paths), also kept in
@@ -450,7 +452,8 @@ uv run --project tools dktools validate [--rev REV] \
 - Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
   output, `allocaudit check --constructors`, `atomicaudit check`,
   `outputaudit check`, `spell`, `idioms`, `magic`, `modelcover` and
-  `testchecks` on the exported tree, and the leakage
+  `testchecks` on the exported tree, `docexamples` against the first
+  configuration's compile database, and the leakage
   gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
   to `origin/main`; `--leak-base ''` skips it).
 - `--python` also builds the Python package's wheel from the exported
@@ -752,6 +755,29 @@ uv run --project tools dktools docgaps [HEADER ...] [--names]
   that `docs/INDEX.md` does not link.
 - A report for writing docs from: exit 0 (2 for a header that is not
   public).
+- `--stale` turns it around: the calls the docs' C code blocks make
+  whose name starts like a public function's (`flex` of `flexNew`) but
+  that no source file under `src/` names (a typed name counts by a
+  sibling type), nor a function the block defines. Exit 1 when any.
+
+## docexamples — the docs' C examples call datakit as it is
+
+```sh
+uv run --project tools dktools docexamples [--build DIR | --preset P] [-j N] [DOC ...]
+```
+
+- Every fenced `c` block in `docs/**/*.md` and `README.md` (or the DOCs)
+  is compiled, syntax only, with the command the build compiles
+  `src/datakit.c` with (`--build`: any tree's binary dir, a verify
+  tree's included), after the public headers declaring its datakit calls
+  and the C headers examples lean on. A block with a definition, an
+  `#include` or a declaration at its left margin is a file; any other is
+  a function body.
+- Examples are fragments whose variables are the reader's, so only the
+  errors proving an example stale are reported, at their doc lines: a
+  call no header declares, too many or too few arguments, an argument of
+  the wrong type, a member the struct lacks, an undeclared ALL_CAPS
+  constant with a datakit prefix. Exit 1 when any.
 
 ## idioms — hand-written forms of what a shared helper does
 

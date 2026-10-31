@@ -494,9 +494,11 @@ class VerifyRun(unittest.TestCase):
                 "modelcover",
                 "headers",
                 "testchecks",
+                "docexamples",
             ],
         )
         self.assertIn("  spell     ok (", out)
+        self.assertIn("  docs      ok (", out)
         self.assertIn("  magic     ok (", out)
         self.assertIn("  models    ok (", out)
         self.assertIn("  headers   ok (", out)

@@ -138,7 +138,7 @@ class ValidateRun(unittest.TestCase):
                 self.assertIn(f"{label} {step}", names)
         self.assertFalse(any(LIBRARY_ONLY in name for name in names))
         self.assertEqual(
-            names[-9:],
+            names[-10:],
             [
                 "allocaudit",
                 "atomicaudit",
@@ -149,6 +149,7 @@ class ValidateRun(unittest.TestCase):
                 "modelcover",
                 "headers",
                 "testchecks",
+                "docexamples",
             ],
         )
         self.assertIn("## Spelling\n\n", out)
@@ -481,6 +482,7 @@ class ValidateRun(unittest.TestCase):
             "modelcover",
             "headers",
             "testchecks",
+            "docexamples",
         ):
             with self.subTest(step=step):
                 runner = MatrixRunner(timed_out=[step])

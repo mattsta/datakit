@@ -72,6 +72,29 @@ class DocGaps(unittest.TestCase):
         self.assertEqual(by["src/sys.h"].declared, 1)
         self.assertEqual(by["src/sys.h"].undocumented, ("sysOwn",))
 
+    def test_stale_calls_are_the_example_calls_no_source_names(self) -> None:
+        # zorkOne exists; zorkGone does not; zorkLocal is the block's own
+        # helper; zorkTypedI64 counts by its U32 sibling; zzNope has no
+        # public stem
+        (self.repo / "src" / "z.h").write_text("#pragma once\nint zorkOne(int x);\n")
+        (self.repo / "src" / "z.c").write_text("int zorkTypedU32(void);\n")
+        (self.repo / "docs" / "modules" / "S.md").write_text(
+            "```c\nstatic int zorkLocal(int x) {\n"
+            "    return zorkOne(x) + zorkGone(x);\n}\n"
+            "int zorkYours(void); /* the reader's */\n"
+            "zorkLocal(1); zorkTypedI64(); zzNope(); zorkYours();\n"
+            "return zorkAlsoGone(1);\n```\n"
+        )
+        headers = docgaps.collect_headers(self.repo)
+        stale = docgaps.stale_calls(self.repo, headers)
+        self.assertEqual(
+            [(s.doc, s.line, s.name) for s in stale],
+            [
+                ("docs/modules/S.md", 3, "zorkGone"),
+                ("docs/modules/S.md", 7, "zorkAlsoGone"),
+            ],
+        )
+
     def test_per_structure_calls_document_every_structures_call(self) -> None:
         (self.repo / "src" / "p.h").write_text(
             "#pragma once\nvoid listNewP(void);\nvoid mapNewP(void);\n"

@@ -287,6 +287,7 @@ def render(
     passed: bool,
     fmt: tuple[formatting.Report, Path],
     python: tuple[pybuild.Built, list[pybuild.Tested]] | None = None,
+    docs: Step | None = None,
 ) -> str:
     """The markdown summary."""
     md = [
@@ -403,6 +404,10 @@ def render(
     md += ["", "## Test checks", ""]
     md.append(f"{_step_cell(testcheck)}: {steps.last_line(testcheck.log)}")
 
+    if docs is not None:
+        md += ["", "## Docs", ""]
+        md.append(f"{_step_cell(docs)}: {steps.last_line(docs.log)}")
+
     md += ["", "## Formatting", ""]
     md.append(formatting.gate_line(fmt[0]))
     md += [f"- {line}" for line in fmt[0].lines("would change")]
@@ -450,6 +455,8 @@ def render(
     md.append(f"- {models.log}")
     md.append(f"- {header.log}")
     md.append(f"- {testcheck.log}")
+    if docs is not None:
+        md.append(f"- {docs.log}")
     md.append(f"- {fmt[1]}")
     return "\n".join(md) + "\n"
 
@@ -552,6 +559,13 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         src,
         steps.TESTCHECKS_TIMEOUT,
     )
+    docs = steps.run_tree_gate(
+        "docexamples",
+        steps.docs_command(configs[0].binary_dir(src)),
+        work / "docs.log",
+        src,
+        steps.DOCS_TIMEOUT,
+    )
 
     python = None
     if opts.python:
@@ -585,6 +599,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         and models.ok
         and header.ok
         and testcheck.ok
+        and docs.ok
         and leak_ok
         and fmt.clean()
         and (python is None or (python[0].ok and all(t.ok for t in python[1])))
@@ -607,6 +622,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
         passed,
         (fmt, work / "format.log"),
         python,
+        docs,
     )
     summary = work / "summary.md"
     summary.write_text(text)
