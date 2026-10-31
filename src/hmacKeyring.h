@@ -648,7 +648,11 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len);
  * new snapshot.  The WAL carries one op, a nonce reservation
  * (PERSIST_OP_UPDATE with args [id, limit], both unsigned), which
  * hmacKeyringReserveThroughPersist logs; replay raises that slot's counter
- * to at least `limit` (a retired id is skipped). */
+ * to at least `limit`.  For an id not installed (one installed after the
+ * snapshot the replay starts from, or retired) the limit is kept as a
+ * floor: the id's next install starts its counter there, so reinstalling
+ * the key after a crash never reissues its nonces.  Snapshots carry the
+ * floors not yet taken by an install. */
 extern const struct persistOps persistOpsHmacKeyring;
 
 #ifdef DATAKIT_TEST

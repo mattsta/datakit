@@ -13,6 +13,7 @@
 #include "dkDiag.h"
 #include "dkEndian.h" /* dkStoreLe64, dkLoadLe64 */
 #include "flex.h"
+#include "multimap.h"
 #include "persist.h"
 
 #include <pthread.h>
@@ -94,6 +95,11 @@ struct hmacKeyring {
     hmacKeyringAeadReserveFn reserve_fn;
     void *reserve_ctx;
     uint64_t reserve_window;
+    /* Reservation floors for ids not installed (id -> limit; NULL while
+     * there are none): a WAL replay meets reservations of a key installed
+     * after the snapshot it starts from, and the key's next install
+     * starts its counter at the floor instead of 0.  Under `lock`. */
+    multimap *pendingFloors;
 };
 
 /* Thin forwarder kept so call sites stay self-describing. The actual
@@ -230,9 +236,44 @@ void hmacKeyringFree(hmacKeyring *ring) {
     for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
         hmacKeyringEntryClear(ring, &ring->entries[i]);
     }
+    multimapFree(ring->pendingFloors);
     pthread_mutex_destroy(&ring->reserve_mu);
     pthread_rwlock_destroy(&ring->lock);
     zfree(ring);
+}
+
+/* The pending floor of `id` (0: none), removed when `take` (lock held) */
+static uint64_t hkrPendingFloor_(hmacKeyring *ring, hmacKeyId id, bool take) {
+    if (ring->pendingFloors == nullptr) {
+        return 0;
+    }
+    const databox key = DATABOX_UNSIGNED(id);
+    databox limit = {};
+    databox *got[1] = {&limit};
+    if (!multimapLookup(ring->pendingFloors, &key, got)) {
+        return 0;
+    }
+    if (take) {
+        (void)multimapDelete(&ring->pendingFloors, &key);
+    }
+    return limit.data.u64;
+}
+
+/* Raise the pending floor of the absent `id` to at least `limit` (lock
+ * held) */
+static void hkrRaisePendingFloor_(hmacKeyring *ring, hmacKeyId id,
+                                  uint64_t limit) {
+    if (hkrPendingFloor_(ring, id, false) >= limit) {
+        return;
+    }
+    if (ring->pendingFloors == nullptr) {
+        /* @own: container; free=hmacKeyringFree */
+        ring->pendingFloors = multimapNew(2);
+    }
+    const databox key = DATABOX_UNSIGNED(id);
+    const databox val = DATABOX_UNSIGNED(limit);
+    const databox *row[2] = {&key, &val};
+    (void)multimapInsert(&ring->pendingFloors, row);
 }
 
 /* Constant-time check that the salt is all-zero. Constant-time isn't
@@ -336,11 +377,14 @@ static bool hmacKeyringInstallInternal(
     slot->aead_schedule = aead_sched;
     slot->raw_key_len = key_len;
     slot->id = id;
+    /* From 0, or from the floor a WAL replay left for this id: nonces
+     * below it may have been issued under it before a crash */
+    const uint64_t floor = hkrPendingFloor_(ring, id, true);
     /* @sync: relaxed owner */
-    atomic_store_explicit(&slot->aead_counter, 0u, memory_order_relaxed);
+    atomic_store_explicit(&slot->aead_counter, floor, memory_order_relaxed);
     /* With a reservation function, the first nonce reserves. */
     slot->aead_limit = 0;
-    slot->aead_reserved = 0;
+    slot->aead_reserved = floor;
     memcpy(slot->aead_salt, aead_salt, HMAC_KEYRING_AEAD_SALT_BYTES);
     slot->is_unsalted = is_unsalted;
     /* Bump generation on Install — a previously-attached consumer holding
@@ -749,12 +793,16 @@ bool hmacKeyringSetAeadReservation(hmacKeyring *ring, uint64_t window,
 /* Raise `id`'s counter (and recorded reservation) to at least `limit`:
  * nonces below it may have been issued.  For WAL replay of a reservation
  * and for Restore's per-slot counter (UINT64_MAX restores an exhausted
- * key as exhausted).  A retired id is skipped. */
+ * key as exhausted).  An id not installed (installed after the snapshot
+ * the replay started from, or retired) keeps the limit as a floor for its
+ * next install. */
 static void hkrApplyReservation(hmacKeyring *ring, hmacKeyId id,
                                 uint64_t limit) {
     pthread_rwlock_wrlock(&ring->lock);
     hmacKeyringEntry *slot = hmacKeyringFindLockedMut(ring, id);
-    if (slot != nullptr) {
+    if (slot == nullptr) {
+        hkrRaisePendingFloor_(ring, id, limit);
+    } else {
         /* @sync: relaxed owner */
         if (atomic_load_explicit(&slot->aead_counter, memory_order_relaxed) <
             limit) {
@@ -919,6 +967,25 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
      * there). */
     const databox floor = DATABOX_UNSIGNED(ring->min_valid_key_id);
     flexPushByTypeExact(&f, &floor, FLEX_ENDPOINT_TAIL);
+    /* Then the pending reservation floors: their count, then [id, limit]
+     * each, in id order */
+    const size_t pending =
+        ring->pendingFloors ? multimapCount(ring->pendingFloors) : 0;
+    const databox pendingBox = DATABOX_UNSIGNED(pending);
+    flexPushByTypeExact(&f, &pendingBox, FLEX_ENDPOINT_TAIL);
+    if (pending) {
+        multimapIterator it;
+        multimapIteratorInit(ring->pendingFloors, &it, true);
+        databox idBox = {};
+        databox limitBox = {};
+        databox *pair[2] = {&idBox, &limitBox};
+        while (multimapIteratorNext(&it, pair)) {
+            flexRow row = FLEX_ROW_INIT;
+            flexRowUnsigned(&row, idBox.data.u64);
+            flexRowUnsigned(&row, limitBox.data.u64);
+            flexRowAppendExact(&f, &row);
+        }
+    }
     for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
         const hmacKeyringEntry *e = &ring->entries[i];
         if (e->id == HMAC_KEY_ID_INVALID) {
@@ -1021,11 +1088,10 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
     }
     const flex *f = (const flex *)buf;
     const size_t count = flexCount(f);
-    /* [floor, then whole slot rows] */
-    if (count < 1 || ((count - 1) % HMAC_KEYRING_ENTRIES_PER_SLOT) != 0u) {
+    /* [floor, pending count, pending pairs, then whole slot rows] */
+    if (count < 2) {
         return false;
     }
-    const size_t records = (count - 1) / HMAC_KEYRING_ENTRIES_PER_SLOT;
     hkrRestoreUndoLog undo = {};
 
     /* The floor applies after every slot has installed (a rollback then
@@ -1037,6 +1103,27 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
     }
     const hmacKeyId parsed_floor = (hmacKeyId)floor_id;
     fe = flexNext(f, fe);
+
+    /* The pending floors are checked here and applied with the floor */
+    uint64_t pending = 0;
+    if (!flexGetUnsigned(fe, &pending) || pending > (count - 2) / 2) {
+        return false;
+    }
+    fe = flexNext(f, fe);
+    flexEntry *const pendingAt = fe;
+    for (uint64_t i = 0; i < 2 * pending; i++) {
+        uint64_t v = 0;
+        if (!flexGetUnsigned(fe, &v) ||
+            (i % 2 == 0 && (v == 0 || v > UINT32_MAX))) {
+            return false;
+        }
+        fe = flexNext(f, fe);
+    }
+    const size_t rest = count - 2 - (size_t)(2 * pending);
+    if (rest % HMAC_KEYRING_ENTRIES_PER_SLOT != 0u) {
+        return false;
+    }
+    const size_t records = rest / HMAC_KEYRING_ENTRIES_PER_SLOT;
 
     for (size_t i = 0; i < records; i++) {
         if (fe == nullptr) {
@@ -1132,6 +1219,18 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
      * rule, so a concurrent raise in between is kept too. */
     if (parsed_floor > hmacKeyringMinValidKeyId(ring)) {
         (void)hmacKeyringSetMinValidKeyId(ring, parsed_floor);
+    }
+    /* Each pending floor: an installed id's counter rises to it, an
+     * absent one keeps it for its next install */
+    flexEntry *pe = pendingAt;
+    for (uint64_t i = 0; i < pending; i++) {
+        uint64_t id = 0;
+        uint64_t limit = 0;
+        (void)flexGetUnsigned(pe, &id);
+        pe = flexNext(f, pe);
+        (void)flexGetUnsigned(pe, &limit);
+        pe = flexNext(f, pe);
+        hkrApplyReservation(ring, (hmacKeyId)id, limit);
     }
     return true;
 
@@ -1556,8 +1655,8 @@ int hmacKeyringTest(int, char *[]) {
         hmacKeyringFree(ring);
         const flex *src = (const flex *)buf;
         const size_t entries = flexCount(src);
-        if (entries != 1u + 2u * HMAC_KEYRING_ENTRIES_PER_SLOT) {
-            ERR("snapshot has %zu entries, expected 11", entries);
+        if (entries != 2u + 2u * HMAC_KEYRING_ENTRIES_PER_SLOT) {
+            ERR("snapshot has %zu entries, expected 12", entries);
         }
 
         databoxBig wides[3];
@@ -2256,6 +2355,68 @@ int hmacKeyringTest(int, char *[]) {
         persistClose(p);
     }
 
+    TEST("AEAD reservation through persist: a key installed after the "
+         "snapshot, reinstalled after recovery, never reissues") {
+        /* The only snapshot is of an empty keyring; the key, its
+         * reservations and its nonces all come after it.  Recovery has no
+         * key 36, and its install afterwards (the operator reloading the
+         * key) starts above every nonce issued, as does the install into
+         * a keyring restored from the recovered one's snapshot */
+        persist *p = persistCreate(&persistOpsHmacKeyring, nullptr);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x37};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {4, 3, 2, 1};
+        if (!persistSnapshot(p, ring) ||
+            !hmacKeyringSetAeadReservation(
+                ring, 16, hmacKeyringReserveThroughPersist, p) ||
+            !hmacKeyringInstall(ring, 36u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt)) {
+            ERR("persist setup");
+        }
+        uint64_t highest = 0;
+        for (int i = 0; i < 40; i++) {
+            uint8_t n[12];
+            if (!hmacKeyringNextAeadNonce(ring, 36u, n)) {
+                ERR("issuance through persist reservations");
+                break;
+            }
+            highest = dkLoadLe64(n);
+        }
+        hmacKeyring *recovered = persistRecover(p);
+        uint64_t start = 0;
+        const bool absent =
+            recovered && !hmacKeyringPeekAeadCounter(recovered, 36u, &start);
+        uint8_t snap[512];
+        size_t snapLen = 0;
+        const bool snapped =
+            recovered &&
+            hmacKeyringSnapshot(recovered, snap, sizeof(snap), &snapLen);
+        const bool reinstalled =
+            recovered &&
+            hmacKeyringInstall(recovered, 36u, &hmacAlgoSHA256, key,
+                               sizeof(key), salt) &&
+            hmacKeyringPeekAeadCounter(recovered, 36u, &start);
+        hmacKeyring *fromSnap = hmacKeyringCreate();
+        uint64_t snapStart = 0;
+        const bool viaSnap =
+            snapped && hmacKeyringRestore(fromSnap, snap, snapLen) &&
+            hmacKeyringInstall(fromSnap, 36u, &hmacAlgoSHA256, key, sizeof(key),
+                               salt) &&
+            hmacKeyringPeekAeadCounter(fromSnap, 36u, &snapStart);
+        if (!absent || !reinstalled || start <= highest || !viaSnap ||
+            snapStart != start) {
+            ERR("reinstalled after recovery at %" PRIu64 ", through its "
+                "snapshot at %" PRIu64 ", after issuing up to %" PRIu64,
+                start, snapStart, highest);
+        }
+        hmacKeyringFree(fromSnap);
+        hmacKeyringFree(recovered);
+        hmacKeyringFree(ring);
+        persistClose(p);
+    }
+
     TEST("AEAD reservation through persist: no nonce until the limit is "
          "synced") {
         /* Both sync policies: the reservation logged durable at once, or
@@ -2553,6 +2714,7 @@ int hmacKeyringTest(int, char *[]) {
         memset(oversize_key, 0xAB, oversize_len);
 
         flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* no floor */
+        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* no pending floors */
         flexPushUnsigned(&f, (uint64_t)id, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f, algo_tag, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&f, salt, sizeof(salt), FLEX_ENDPOINT_TAIL);
@@ -2579,6 +2741,7 @@ int hmacKeyringTest(int, char *[]) {
             zmalloc(HMAC_KEYRING_MAX_KEY_BYTES);
         memset(max_key, 0xCD, HMAC_KEYRING_MAX_KEY_BYTES);
         flexPushUnsigned(&f_ok, 0u, FLEX_ENDPOINT_TAIL); /* no floor */
+        flexPushUnsigned(&f_ok, 0u, FLEX_ENDPOINT_TAIL); /* no pending */
         flexPushUnsigned(&f_ok, (uint64_t)id, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f_ok, algo_tag, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&f_ok, salt, sizeof(salt), FLEX_ENDPOINT_TAIL);
@@ -2943,9 +3106,9 @@ int hmacKeyringTest(int, char *[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         hmacKeyringSnapshot(src, buf, sz, nullptr);
 
-        if (flexCount((const flex *)buf) != 1 + HMAC_KEYRING_ENTRIES_PER_SLOT) {
+        if (flexCount((const flex *)buf) != 2 + HMAC_KEYRING_ENTRIES_PER_SLOT) {
             ERR("expected %zu flex entries, got %zu",
-                1 + HMAC_KEYRING_ENTRIES_PER_SLOT,
+                2 + HMAC_KEYRING_ENTRIES_PER_SLOT,
                 flexCount((const flex *)buf));
         }
         hmacKeyring *dst = hmacKeyringCreate();
