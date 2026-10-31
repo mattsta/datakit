@@ -4002,8 +4002,17 @@ void multiroarXorN(uint64_t n, multiroar *const *roars) {
         return;
     }
 
+    /* A later operand that is roars[0] itself stands for its value before
+     * the fold (Xor of a roar with itself would clear it): XorN(A, B, A)
+     * is B, as multiroarNewXorN gives */
+    cleaner(multiroarFree) multiroar *before = nullptr;
+    for (uint64_t i = 1; i < n && !before; i++) {
+        if (roars[i] == roars[0]) {
+            before = multiroarDuplicate(roars[0]);
+        }
+    }
     for (uint64_t i = 1; i < n; i++) {
-        multiroarXor(roars[0], roars[i]);
+        multiroarXor(roars[0], roars[i] == roars[0] ? before : roars[i]);
     }
 }
 
@@ -7536,6 +7545,25 @@ int multiroarTest(int, char *[]) {
         }
         if (!multiroarBitGet(result, 300)) {
             ERR("XorN: bit 300 should be set");
+        }
+    }
+
+    TEST("multiroarXorN with its first roar again later: the in-place and "
+         "new forms agree") {
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
+        for (uint64_t pos = 0; pos < 20000; pos += 3) {
+            multiroarBitSet(a, pos);
+        }
+        for (uint64_t pos = 0; pos < 20000; pos += 7) {
+            multiroarBitSet(b, pos);
+        }
+        multiroar *roars[] = {a, b, a};
+        cleaner(multiroarFree) multiroar *fresh = multiroarNewXorN(3, roars);
+        multiroarXorN(3, roars);
+        /* A ^ B ^ A = B */
+        if (!multiroarEquals(a, b) || !multiroarEquals(fresh, b)) {
+            ERR("%s", "XorN(A, B, A) is not B");
         }
     }
 
