@@ -413,6 +413,14 @@ static void pcWal(pcRow *row, const persistOps *ops,
         PC_FAIL(row, ops, "%s", "generator recorded no starting snapshot");
         return;
     }
+    /* An op whose encodeOp gives NULL is one the real WAL refuses: the
+     * live structure applied it, a recovery would not */
+    for (size_t i = 0; i < log->count; i++) {
+        if (!log->entries[i].data) {
+            PC_FAIL(row, ops, "op %zu (%s): encodeOp refused it", i,
+                    persistOpName(log->entries[i].op));
+        }
+    }
 
     /* Onto the restored starting structure */
     void *s = pcRestore(ops, log->start, log->startLen);

@@ -442,9 +442,11 @@ static void *FENWICK_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
 static uint8_t *FENWICK_D_FN_(PersistEncodeOp_)(persistOp op, const void *args,
                                                 size_t argc, size_t *len) {
     *len = 0;
+    if (op == PERSIST_OP_CLEAR) {
+        return persistOpNoBody(len);
+    }
     if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2) {
-        /* CLEAR has no operand; nothing else is replayed */
-        return nullptr;
+        return nullptr; /* nothing else is replayed */
     }
 
     return persistOpEncodeBoxes(args, argc, len);
