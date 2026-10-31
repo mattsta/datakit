@@ -129,7 +129,10 @@ void multiroarXorN(uint64_t n, multiroar *const *roars);
 [[nodiscard]] multiroar *multiroarNewOrN(uint64_t n, multiroar *const *roars);
 [[nodiscard]] multiroar *multiroarNewXorN(uint64_t n, multiroar *const *roars);
 
-/* Iterator for efficient traversal */
+/* Iterator for efficient traversal: the set positions in ascending order.
+ * It reads the multiroar's chunks in place, so any write to the multiroar
+ * (a set, clear, bulk operation or its free) ends the iterator: Init it
+ * again (or Reset it) before the next Next. */
 typedef struct multiroarIterator {
     const multiroar *roar;
     multimapIterator mapIter;
