@@ -130,7 +130,9 @@ typedef void(multidictIterProcess)(void *privdata, const databox *key,
  * again and moves on to the next-coldest entry; once 64 LRU entries have
  * been passed over, the rest of that call picks random victims.  It runs
  * between the dict's operations (the victim's value is read, then the
- * entry deleted once allowed), so it may read the dict. */
+ * entry deleted once allowed), so it may read the dict: no rehash step
+ * runs meanwhile, so 'key' and 'val' stay valid.  Lifting the limit or
+ * setting MULTIDICT_EVICT_NONE from it ends the eviction. */
 typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
                                         const databox *val);
 
@@ -512,6 +514,8 @@ int64_t multidictRehashMilliseconds(multidict *d, int64_t ms);
  * dict holds keys, whose slots the old seed placed */
 bool multidictSetHashFunctionSeed(multidict *d, uint32_t seed);
 uint32_t multidictGetHashFunctionSeed(multidict *d);
+/* 'fn' may read the dict (the rehash waits during the call) but not
+ * change it */
 uint64_t multidictScan(multidict *d, uint64_t v, multidictScanFunction *fn,
                        void *privdata);
 
@@ -584,7 +588,8 @@ int multidictGetLRULevel(multidict *d, const databox *keybox);
 /* The use history, for saving and restoring it: multidictLRUWalk visits
  * every tracked key coldest first (level 0 oldest to newest, then level
  * 1, ...) with its level, until 'visit' returns false; it returns the keys
- * visited (the key is borrowed for the call).  multidictLRUPlace makes a
+ * visited (the key is borrowed for the call; 'visit' may read the dict,
+ * and the rehash waits meanwhile).  multidictLRUPlace makes a
  * tracked key the newest of 'level', moving no other key: placing keys
  * in a walk's order rebuilds that order exactly.  False when the key is
  * not tracked or the level is past the LRU's. */

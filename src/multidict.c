@@ -555,6 +555,16 @@ uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
             multidictRehash(d, 1);                                             \
     } while (0)
 
+/* Run 'call' (a callback handed rows that borrow from the dict's slots,
+ * which may read the dict) with the rehash paused, as a safe iterator
+ * pauses it: no step moves those rows while it runs */
+#define MD_REHASH_PAUSED_(d, call)                                             \
+    do {                                                                       \
+        (d)->iterators++;                                                      \
+        call;                                                                  \
+        (d)->iterators--;                                                      \
+    } while (0)
+
 /* The key's slot in the table new rows go to: ht[1] while rehashing, else
  * ht[0].  A key still in ht[0] during a rehash is not looked for here;
  * inserts remove it from ht[0] first (multidictAddExact_).  'knownHash',
@@ -2440,8 +2450,10 @@ uint32_t multidictEvictToLimit(multidict *d) {
     lruCands.pos = 0;
     lruCands.skip = 0;
 
-    /* Use user bytes (key + val) for limit comparison, not total overhead */
-    while (multidictUserBytes(d) > d->maxMemory && multidictCount(d) > 0 &&
+    /* Use user bytes (key + val) for limit comparison, not total overhead.
+     * The callback may lift the limit or end eviction: checked each pass */
+    while (d->maxMemory && d->evictPolicy != MULTIDICT_EVICT_NONE &&
+           multidictUserBytes(d) > d->maxMemory && multidictCount(d) > 0 &&
            attempts < maxAttempts) {
         attempts++;
 
@@ -2482,7 +2494,14 @@ uint32_t multidictEvictToLimit(multidict *d) {
             mdBoxAim_(&valbox, &valWide);
             if (multidictFindNoTouch_(d, &victim, &valbox)) {
                 mdBoxSettle_(&valbox);
-                vetoed = !d->evictionCb(d->evictionPrivdata, &victim, &valbox);
+                const multilru *lruBefore = d->lru;
+                MD_REHASH_PAUSED_(d,
+                                  vetoed = !d->evictionCb(d->evictionPrivdata,
+                                                          &victim, &valbox));
+                if (d->lru != lruBefore) {
+                    /* The callback replaced the LRU: its handles are new */
+                    lruCands = (mdLRUCandidates){};
+                }
             }
         }
 
@@ -2869,7 +2888,10 @@ size_t multidictLRUWalk(multidict *d, multidictLRUVisitFn *visit, void *ctx) {
             continue;
         }
         visited++;
-        if (!visit(ctx, &keybox, multilruGetLevel(d->lru, order[i]))) {
+        bool more;
+        MD_REHASH_PAUSED_(
+            d, more = visit(ctx, &keybox, multilruGetLevel(d->lru, order[i])));
+        if (!more) {
             break;
         }
     }
@@ -3408,6 +3430,8 @@ uint64_t multidictScan(multidict *d, uint64_t v, multidictScanFunction *fn,
         return 0;
     }
 
+    /* 'fn' may read the dict: the tables walked here stay put meanwhile */
+    d->iterators++;
     multidictClass *shared = d->shared;
     if (!multidictIsRehashing(d)) {
         t0 = HT(d, 0);
@@ -3446,6 +3470,8 @@ uint64_t multidictScan(multidict *d, uint64_t v, multidictScanFunction *fn,
             /* Continue while bits covered by mask difference is non-zero */
         } while (v & (m0 ^ m1));
     }
+
+    d->iterators--;
 
     /* Set unmasked bits so incrementing the reversed cursor
      * operates on the masked bits of the smaller table */
@@ -4208,6 +4234,47 @@ static bool evictRehashCb_(void *, const databox *key, const databox *val) {
         memcmp(k + prefixLen, v + prefixLen, 6) != 0) {
         testEvictRehashBad_++;
     }
+    return true;
+}
+
+/* Callbacks that read the dict (30 finds, each a rehash step were it not
+ * paused) before checking the row they were handed */
+static multidict *testReadingDict_ = nullptr;
+static void testReadAround_(void) {
+    char kbuf[64];
+    for (int j = 0; j < 30; j++) {
+        snprintf(kbuf, sizeof(kbuf), "evict-rehash-key-%06d", (j * 37) % 800);
+        const databox key = databoxNewBytesString(kbuf);
+        databox val = {};
+        (void)multidictFind(testReadingDict_, &key, &val);
+    }
+}
+
+static bool testReadingEvictCb_(void *, const databox *key,
+                                const databox *val) {
+    testReadAround_();
+    return evictRehashCb_(nullptr, key, val);
+}
+
+static void testReadingScanCb_(void *, const databox *key, const databox *val) {
+    testReadAround_();
+    (void)evictRehashCb_(nullptr, key, val);
+}
+
+static bool testReadingWalkCb_(void *, const databox *key, size_t) {
+    testReadAround_();
+    testEvictRehashSeen_++;
+    static constexpr char keyPrefix[] = "evict-rehash-key-";
+    if (!DATABOX_IS_BYTES(key) || key->len != sizeof(keyPrefix) - 1 + 6 ||
+        memcmp(databoxCBytes(key), keyPrefix, sizeof(keyPrefix) - 1) != 0) {
+        testEvictRehashBad_++;
+    }
+    return true;
+}
+
+/* Allows one eviction, then lifts the limit */
+static bool testLiftLimitCb_(void *privdata, const databox *, const databox *) {
+    multidictSetMaxMemory(privdata, 0);
     return true;
 }
 
@@ -9870,6 +9937,68 @@ int multidictTest(int, char *[]) {
         multidictSetMaxMemory(d, 0); /* Unlimited */
         uint32_t evicted = multidictEvictToLimit(d);
         assert(evicted == 0);
+    }
+
+    TEST("eviction, scan and LRU walk callbacks read the dict mid-rehash") {
+        /* Each callback reads the dict before checking the key and value
+         * it was handed: the rehash waits, so they are still its own */
+        for (int kind = 0; kind < 3; kind++) {
+            cleaner(multidictFree) multidict *e =
+                multidictNew(&multidictTypeExactKey, qdc, 778);
+            multidictEnableLRU(e, 4);
+            multidictSetEvictPolicy(e, MULTIDICT_EVICT_LRU);
+            char kbuf[64];
+            char vbuf[64];
+            for (int j = 0; j < 800; j++) {
+                snprintf(kbuf, sizeof(kbuf), "evict-rehash-key-%06d", j);
+                snprintf(vbuf, sizeof(vbuf), "evict-rehash-val-%06d", j);
+                const databox key = databoxNewBytesString(kbuf);
+                const databox val = databoxNewBytesString(vbuf);
+                (void)multidictAdd(e, &key, &val);
+            }
+            multidictExpand(e, UINT64_C(800) * 4);
+            testReadingDict_ = e;
+            testEvictRehashSeen_ = 0;
+            testEvictRehashBad_ = 0;
+            if (kind == 0) {
+                multidictSetEvictionCallback(e, testReadingEvictCb_, nullptr);
+                multidictSetMaxMemory(
+                    e, (multidictKeyBytes(e) + multidictValBytes(e)) / 4);
+                (void)multidictEvictToLimit(e);
+            } else if (kind == 1) {
+                uint64_t cursor = 0;
+                do {
+                    cursor =
+                        multidictScan(e, cursor, testReadingScanCb_, nullptr);
+                } while (cursor);
+            } else {
+                (void)multidictLRUWalk(e, testReadingWalkCb_, nullptr);
+            }
+            if (!multidictIsRehashing(e) && kind) {
+                ERR("kind %d: the rehash ended before the callbacks", kind);
+            }
+            if (testEvictRehashSeen_ == 0 || testEvictRehashBad_) {
+                ERR("kind %d: %d rows seen, %d not their own", kind,
+                    testEvictRehashSeen_, testEvictRehashBad_);
+            }
+        }
+        testReadingDict_ = nullptr;
+
+        /* A callback that lifts the limit ends the eviction after it */
+        cleaner(multidictFree) multidict *l =
+            multidictNew(&multidictTypeExactKey, qdc, 779);
+        multidictSetEvictPolicy(l, MULTIDICT_EVICT_RANDOM);
+        for (int64_t j = 0; j < 200; j++) {
+            const databox key = databoxNewSigned(j);
+            const databox val = databoxNewSigned(j);
+            (void)multidictAdd(l, &key, &val);
+        }
+        multidictSetEvictionCallback(l, testLiftLimitCb_, l);
+        multidictSetMaxMemory(l, 1);
+        const uint32_t lifted = multidictEvictToLimit(l);
+        if (lifted != 1 || multidictCount(l) != 199) {
+            ERR("a lifted limit still evicted %u", lifted);
+        }
     }
 
     TEST("14.7 eviction with a rehash in flight") {
