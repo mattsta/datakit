@@ -380,10 +380,6 @@ static bool SEGMENT_D_FN_(PersistApplyOp_)(void *structure, persistOp op,
     return true;
 }
 
-static void *SEGMENT_D_FN_(PersistNewEmpty_)(void) {
-    return SEGMENT_D_FN_(New)(SEGMENT_OP_SUM);
-}
-
 const persistOps SEGMENT_CAT(persistOpsSegment, SEGMENT_SUFFIX) = {
     .type = SEGMENT_PERSIST_TYPE,
     .name = "segment" SEGMENT_D_STR_(SEGMENT_SUFFIX),
@@ -391,7 +387,9 @@ const persistOps SEGMENT_CAT(persistOpsSegment, SEGMENT_SUFFIX) = {
     .minReadVersion = 1,
     .snapshot = SEGMENT_D_FN_(PersistSnapshot_),
     .restore = SEGMENT_D_FN_(PersistRestore_),
-    .newEmpty = SEGMENT_D_FN_(PersistNewEmpty_),
+    /* No newEmpty: a tree's operation is chosen at creation, and an
+     * empty tree of a guessed one would replay another tree's ops into
+     * the wrong folds */
     .count = SEGMENT_D_FN_(Count),
     .estimateSize = SEGMENT_D_FN_(Bytes),
     .encodeOp = SEGMENT_D_FN_(PersistEncodeOp_),

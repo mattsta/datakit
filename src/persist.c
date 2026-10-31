@@ -4122,11 +4122,6 @@ static void multiroarPersistFree(void *structure) {
     multiroarFree(structure);
 }
 
-static void *multiroarPersistNewEmpty(void) {
-    /* @own: caller; free=multiroarFree */
-    return multiroarBitNew();
-}
-
 const persistOps persistOpsMultiroar = {
     .type = PERSIST_TYPE_MULTIROAR,
     .name = "multiroar",
@@ -4135,7 +4130,9 @@ const persistOps persistOpsMultiroar = {
     .minReadVersion = MULTIROAR_FORMAT_VERSION,
     .snapshot = multiroarPersistSnapshot,
     .restore = multiroarPersistRestore,
-    .newEmpty = multiroarPersistNewEmpty,
+    /* No newEmpty: bit or value mode is chosen at creation, and an empty
+     * multiroar of a guessed mode would refuse or misread the other's
+     * ops */
     .count = multiroarPersistCount,
     .estimateSize = multiroarPersistEstimateSize,
     .encodeOp = multiroarPersistEncodeOp,
@@ -6390,7 +6387,8 @@ const persistOps persistOpsMultiLRU = {
 #include "multiFenwick.h"
 #include "multiFenwickFlat.h"
 #include "persist/persistTestCommon.h" /* PTEST_LOGGED */
-#include "str.h"                       /* splitmix64 */
+#include "segment/segmentPersist.h"
+#include "str.h" /* splitmix64 */
 
 /* Free a test multidict together with the default class it holds; the
  * class must outlive the dict because teardown runs class callbacks. */
@@ -6702,7 +6700,8 @@ static size_t persistTestWriteBudget = SIZE_MAX;
 static ssize_t (*persistTestMemWrite)(void *, const void *, size_t);
 
 /* A structure of `n` elements built through the descriptor's own encodeOp
- * and applyOp (multilru, which has no empty constructor, directly) */
+ * and applyOp (multilru, which has no empty constructor, directly; a type
+ * without newEmpty from its constructor) */
 static void *persistTestPopulate(const persistOps *ops, int n) {
     if (ops == &persistOpsMultiLRU) {
         /* @own: caller; free=multilruFree */
@@ -6713,7 +6712,9 @@ static void *persistTestPopulate(const persistOps *ops, int n) {
         return lru;
     }
 
-    void *s = ops->newEmpty(); /* the caller frees it with ops->free */
+    /* @own: caller; free=multiroarFree */
+    void *s = ops == &persistOpsMultiroar ? (void *)multiroarBitNew()
+                                          : ops->newEmpty();
     cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
     persistSetReplayState(state); /* multilist's apply needs one */
     char text[32];
@@ -11656,15 +11657,10 @@ int persistTest(int, char *[]) {
     TEST("decoders: any op with any payload: no crash, refusals change "
          "nothing") {
         static const persistOps *const tables[] = {
-            &persistOpsFlex,
-            &persistOpsIntset,
-            &persistOpsIntsetBig,
-            &persistOpsMultiroar,
-            &persistOpsHyperloglog,
-            &persistOpsMultilist,
-            &persistOpsMultimap,
-            &persistOpsMultidict,
-            &persistOpsMultiOrderedSet,
+            &persistOpsFlex,      &persistOpsIntset,
+            &persistOpsIntsetBig, &persistOpsHyperloglog,
+            &persistOpsMultilist, &persistOpsMultimap,
+            &persistOpsMultidict, &persistOpsMultiOrderedSet,
         };
         for (size_t t = 0; t < countof(tables); t++) {
             err += persistTestDecoderMatrix(tables[t], nullptr);
@@ -11677,6 +11673,9 @@ int persistTest(int, char *[]) {
         /* @own: container; free=multilruFree */
         multilru *lru = multilruNew();
         err += persistTestDecoderMatrix(&persistOpsMultiLRU, lru);
+        /* @own: container; free=multiroarFree */
+        multiroar *roar = multiroarBitNew();
+        err += persistTestDecoderMatrix(&persistOpsMultiroar, roar);
     }
 
     TEST("a multilru restore starts its counters at zero") {
@@ -11932,8 +11931,10 @@ int persistTest(int, char *[]) {
         if (!persistOpsHyperloglog.newEmpty) {
             ERR("persistOpsHyperloglog.newEmpty is NULL");
         }
-        if (!persistOpsMultiroar.newEmpty) {
-            ERR("persistOpsMultiroar.newEmpty is NULL");
+        /* Types whose empty state depends on how they were made (a
+         * multiroar's mode, a segment tree's operation) have none */
+        if (persistOpsMultiroar.newEmpty || persistOpsSegmentI64.newEmpty) {
+            ERR("%s", "a type configured at creation has a newEmpty");
         }
         if (!persistOpsMultimap.newEmpty) {
             ERR("persistOpsMultimap.newEmpty is NULL");
