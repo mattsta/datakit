@@ -102,7 +102,9 @@ typedef struct clusterFrame {
 /* Returns true if the frame was applied successfully. If the
  * callback returns false, the mailbox treats the frame as rejected
  * (its origin's last_applied_seq is NOT advanced) so a future retry
- * can re-deliver it. */
+ * can re-deliver it.  The callback must not ingest into or restore its
+ * own mailbox: while a frame is being applied clusterMailboxIngest
+ * returns CLUSTER_MAILBOX_ERR_PARAM and clusterMailboxRestore false. */
 typedef bool (*clusterApplyFn)(const clusterFrame *frame, void *ctx);
 
 /* @handle: fixed: its address holds from creation to free */

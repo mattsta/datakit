@@ -171,6 +171,7 @@ struct clusterMailbox {
     hmacKeyring *ring;
     clusterApplyFn on_apply;
     void *apply_ctx;
+    bool applying; /* inside on_apply: Ingest and Restore refuse re-entry */
     clusterMailboxCounters counters;
     /* defense-in-depth (key_id, nonce) reuse detector.
      *
@@ -772,8 +773,8 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
 static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
                                                const uint8_t *bytes, size_t len,
                                                hmacKeyId key_id) {
-    if (mb == nullptr || bytes == nullptr) {
-        return CLUSTER_MAILBOX_ERR_PARAM;
+    if (mb == nullptr || bytes == nullptr || mb->applying) {
+        return CLUSTER_MAILBOX_ERR_PARAM; /* applying: from inside on_apply */
     }
 
     /* Algorithm pinning: peek the framing FIRST so we can reject an
@@ -937,7 +938,10 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
         .msg_type = msg_type,
     };
     if (mb->on_apply != nullptr) {
-        if (!mb->on_apply(&frame, mb->apply_ctx)) {
+        mb->applying = true;
+        const bool applied = mb->on_apply(&frame, mb->apply_ctx);
+        mb->applying = false;
+        if (!applied) {
             /* Caller rejected — do NOT advance the watermark. This
              * lets the producer retransmit and get re-applied. */
             return CLUSTER_MAILBOX_ERR_APPLY_REJECTED;
@@ -975,7 +979,11 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
             const uint64_t age = cur - sequence;
             slot->window_bits |= ((uint64_t)1 << age);
         }
-    } else {
+    } else if (sequence > cur) {
+        /* Strict: every sequence at or below the watermark is closed, so
+         * the whole window reads as seen (a snapshot of this slot
+         * restored into a windowed mailbox must not reopen it) */
+        slot->window_bits = UINT64_MAX;
         /* @sync: release mailbox.watermark */
         atomic_store_explicit(&slot->last_applied, sequence,
                               memory_order_release);
@@ -1345,6 +1353,9 @@ static uint64_t cmReorientWindowBits(uint64_t bits, uint64_t from_last_applied,
 }
 
 bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
+    if (mb != nullptr && mb->applying) {
+        return false; /* from inside on_apply */
+    }
     /* Restore consumes a flex buffer from on-disk persistence.  Even
      * though the persistence layer wraps its writes in its own checksum,
      * this entry point can be called with arbitrary bytes during testing
@@ -1725,6 +1736,26 @@ typedef struct {
     size_t last_payload_len;
     uint8_t last_payload[256];
 } cmTestCtx;
+
+/* An on_apply that tries to ingest another frame, and to restore, into
+ * its own mailbox */
+typedef struct cmReentryCtx {
+    clusterMailbox *mb;
+    hmacKeyId key;
+    uint8_t *next;
+    size_t nextLen;
+    clusterMailboxIngestResult nested;
+    bool restored;
+} cmReentryCtx;
+
+static bool cmReentryApply(const clusterFrame *frame, void *ctx) {
+    (void)frame;
+    cmReentryCtx *re = ctx;
+    re->nested = clusterMailboxIngest(re->mb, re->next, re->nextLen, re->key);
+    const uint8_t empty[1] = {0};
+    re->restored = clusterMailboxRestore(re->mb, empty, sizeof(empty));
+    return true;
+}
 
 static bool cmRecordApply(const clusterFrame *frame, void *ctx) {
     cmTestCtx *t = (cmTestCtx *)ctx;
@@ -2965,6 +2996,97 @@ int clusterMailboxTest(int, char *[]) {
                 CLUSTER_MAILBOX_OK) {
             ERR("%s", "the id at the floor no longer seals and ingests");
         }
+        clusterMailboxFree(mb);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("a strict watermark restored into a windowed mailbox keeps every "
+         "applied frame closed") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        cmTestCtx ctx = {};
+        clusterMailbox *strict = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
+        const uint8_t payload[] = "w";
+        const size_t sz = clusterMailboxSealedSize(strict, sizeof(payload));
+        uint8_t *frames[11] = {};
+        size_t lens[11] = {};
+        for (uint64_t seq = 1; seq <= 10; seq++) {
+            /* @own: container; free=zfree */
+            frames[seq] = zmalloc(sz);
+            if (!clusterMailboxSeal(strict, 5u, seq, 0u, payload,
+                                    sizeof(payload), K1, frames[seq], sz,
+                                    &lens[seq]) ||
+                clusterMailboxIngest(strict, frames[seq], lens[seq], K1) !=
+                    CLUSTER_MAILBOX_OK) {
+                ERR("frame %" PRIu64 " did not apply", seq);
+            }
+        }
+        const size_t snapCap = clusterMailboxSnapshotSize(strict);
+        cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(snapCap);
+        size_t snapLen = 0;
+        if (!clusterMailboxSnapshot(strict, snap, snapCap, &snapLen)) {
+            ERR("%s", "the strict snapshot failed");
+        }
+
+        cmTestCtx wctx = {};
+        clusterMailbox *windowed = clusterMailboxCreateEx(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &wctx,
+            CLUSTER_MAILBOX_FLAG_REPLAY_WINDOW);
+        if (!clusterMailboxRestore(windowed, snap, snapLen)) {
+            ERR("%s", "the windowed restore failed");
+        }
+        for (uint64_t seq = 1; seq <= 10; seq++) {
+            const clusterMailboxIngestResult rc =
+                clusterMailboxIngest(windowed, frames[seq], lens[seq], K1);
+            if (rc != CLUSTER_MAILBOX_ERR_REPLAY) {
+                ERR("applied frame %" PRIu64 " ingested again: result %d", seq,
+                    (int32_t)rc);
+            }
+            zfree(frames[seq]);
+        }
+        if (wctx.apply_count) {
+            ERR("%u frames applied twice", (unsigned)wctx.apply_count);
+        }
+        clusterMailboxFree(windowed);
+        clusterMailboxFree(strict);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("on_apply cannot re-enter its mailbox: the watermark never moves "
+         "back") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        cmReentryCtx re = {.key = K1};
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmReentryApply, &re);
+        re.mb = mb;
+        const uint8_t payload[] = "r";
+        const size_t sz = clusterMailboxSealedSize(mb, sizeof(payload));
+        /* @own: container; free=zfree */
+        re.next = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *first = zmalloc(sz);
+        size_t firstLen = 0;
+        (void)clusterMailboxSeal(mb, 9u, 1u, 0u, payload, sizeof(payload), K1,
+                                 first, sz, &firstLen);
+        (void)clusterMailboxSeal(mb, 9u, 2u, 0u, payload, sizeof(payload), K1,
+                                 re.next, sz, &re.nextLen);
+        const clusterMailboxIngestResult rc =
+            clusterMailboxIngest(mb, first, firstLen, K1);
+        if (rc != CLUSTER_MAILBOX_OK ||
+            re.nested != CLUSTER_MAILBOX_ERR_PARAM || re.restored ||
+            clusterMailboxLastApplied(mb, 9u) != 1u) {
+            ERR("re-entry: outer %d, nested %d, restore %d, watermark %" PRIu64,
+                (int32_t)rc, (int32_t)re.nested, re.restored,
+                clusterMailboxLastApplied(mb, 9u));
+        }
+        if (clusterMailboxIngest(mb, re.next, re.nextLen, K1) !=
+            CLUSTER_MAILBOX_OK) {
+            ERR("%s", "the frame refused inside on_apply did not apply after");
+        }
+        zfree(re.next);
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
     }
