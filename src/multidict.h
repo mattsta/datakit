@@ -483,6 +483,9 @@ uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count);
  * another Next. */
 void multidictEmpty(multidict *d);
 void multidictPrintStats(multidict *d);
+/* This dict's automatic expand and shrink (and multidictResize) on or off;
+ * dicts sharing its class keep their own (the class's disableResize turns
+ * resizing off for all of them) */
 void multidictResizeEnable(multidict *d);
 void multidictResizeDisable(multidict *d);
 /* The count-based load factors, as entries per 100 slots: the table grows

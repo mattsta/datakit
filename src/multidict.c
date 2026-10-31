@@ -3507,16 +3507,14 @@ void multidictEmpty(multidict *d) {
     }
 }
 
+/* This dict's switch only: the class's disableResize (one switch for every
+ * dict sharing the class) is the class owner's to set */
 void multidictResizeEnable(multidict *d) {
     d->autoResize = true;
-    d->shared->disableResize =
-        false; /* Also update class for backwards compat */
 }
 
 void multidictResizeDisable(multidict *d) {
     d->autoResize = false;
-    d->shared->disableResize =
-        true; /* Also update class for backwards compat */
 }
 
 /* Load factors a dict may use: every resize leaves the load at about half
@@ -7219,7 +7217,7 @@ static int mdTestResizeAndEmptyStats_(multidictClass *qdc) {
             stats.slots, forBytes);
     }
 
-    /* A resize is refused with resizing off (a class-wide switch) */
+    /* A resize is refused with this dict's resizing off */
     multidictResizeDisable(d);
     if (multidictResize(d)) {
         ERR("a resize ran with resizing disabled");
@@ -9020,7 +9018,23 @@ int multidictTest(int, char *[]) {
         }
 
         multidictResizeDisable(d);
-        assert(qdc->disableResize == true);
+        /* The switch is this dict's: the class, and another dict sharing
+         * it, keep resizing */
+        assert(qdc->disableResize == false);
+        {
+            cleaner(multidictFree) multidict *other =
+                multidictNew(&multidictTypeExactKey, qdc, 31);
+            for (int64_t i = 0; i < 100; i++) {
+                const databox k = databoxNewSigned(i);
+                MULTIDICT_TEST_OK(multidictAdd(other, &k, &k));
+            }
+            multidictStats st = {};
+            multidictGetStats(other, &st);
+            if (st.slots < 16) {
+                ERR("a dict sharing the class kept %" PRIu64 " slots",
+                    st.slots);
+            }
+        }
 
         /* Operations should still work */
         databox key = databoxNewBytesString("resize50");
