@@ -2296,6 +2296,8 @@ bool persistCompact(persist *p, void *structure) {
     return true;
 }
 
+static void *persistRecoverReplaying_(persist *p);
+
 void *persistRecover(persist *p) {
     if (!p) {
         return nullptr;
@@ -2309,25 +2311,27 @@ void *persistRecover(persist *p) {
      * each tier requires the same thread-local mflexState during WAL replay.
      * Missing any tier here would re-introduce a per-tier replay deref of
      * NULL mflexState → segfault. */
+    /* Recovery's state is its own: a state the caller set (to apply ops
+     * outside a recovery) comes back when it ends, and is never freed */
+    mflexState *const outer = replayMflexState;
+    cleaner(mflexStateFree) mflexState *own = nullptr;
     if (p->ops->type == PERSIST_TYPE_MULTILIST ||
         p->ops->type == PERSIST_TYPE_MULTILIST_SMALL ||
         p->ops->type == PERSIST_TYPE_MULTILIST_MEDIUM ||
         p->ops->type == PERSIST_TYPE_MULTILIST_FULL) {
-        /* @own: static */
-        replayMflexState = mflexStateCreate();
-        if (!replayMflexState) {
-            return nullptr;
-        }
+        own = mflexStateCreate();
+        replayMflexState = own;
     }
+    void *structure = persistRecoverReplaying_(p);
+    replayMflexState = outer;
+    return structure;
+}
 
+/* persistRecover with its replay state in place */
+static void *persistRecoverReplaying_(persist *p) {
     /* Try to restore from snapshot */
     void *structure = persistRestore(p);
     if (!structure) {
-        /* No valid snapshot - structure operations should handle this case */
-        if (replayMflexState) {
-            mflexStateFree(replayMflexState);
-            replayMflexState = nullptr;
-        }
         return nullptr;
     }
 
@@ -2344,22 +2348,11 @@ void *persistRecover(persist *p) {
                 if (p->ops->free) {
                     p->ops->free(structure);
                 }
-                if (replayMflexState) {
-                    mflexStateFree(replayMflexState);
-                    replayMflexState = nullptr;
-                }
                 return nullptr;
             }
             /* Continue with partial recovery in lenient mode */
         }
     }
-
-    /* Clean up replay state */
-    if (replayMflexState) {
-        mflexStateFree(replayMflexState);
-        replayMflexState = nullptr;
-    }
-
     return structure;
 }
 
@@ -8359,6 +8352,39 @@ int persistTest(int, char *[]) {
         if (!mlr || multilistCount(mlr) != 1) {
             ERR("restored multilist lost the 128-bit element");
         }
+    }
+
+    TEST("recovery uses its own replay state and gives the caller's back") {
+        /* A caller that set a replay state (to apply ops outside a
+         * recovery) keeps it across a recovery of a multilist: recovery
+         * neither frees it nor leaves its own behind */
+        cleaner(mflexStateFree) mflexState *mine = mflexStateCreate();
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        cleaner(multilistFree) multilist *ml = multilistNew();
+        for (int i = 0; i < 20; i++) {
+            databox box = DATABOX_SIGNED(i);
+            multilistPushByTypeTail(&ml, state, &box);
+        }
+        persist *p = persistCreate(&persistOpsMultilist, nullptr);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        (void)persistSnapshot(p, ml);
+        const databox more = DATABOX_SIGNED(99);
+        PTEST_LOGGED(persistLogOp(p, PERSIST_OP_PUSH_TAIL, &more, 1));
+        persistSync(p);
+        persistSetReplayState(mine);
+        multilist *back = persistRecover(p);
+        if (persistGetReplayState() != mine || !back ||
+            multilistCount(back) != 21) {
+            ERR("after a recovery the replay state is %s, %zu elements",
+                persistGetReplayState() == mine ? "the caller's" : "another",
+                back ? multilistCount(back) : 0);
+        }
+        persistSetReplayState(nullptr);
+        if (back) {
+            multilistFree(back);
+        }
+        persistClose(p);
     }
 
     TEST("multilist snapshot and restore") {
