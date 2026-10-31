@@ -184,7 +184,8 @@
  * enters them, so timers at every level fire within one wheel-0 slot
  * (1ms) of their scheduled time - assuming processing is called at
  * least that often. Less frequent processing degrades precision to the
- * processing interval, never loses timers.
+ * processing interval, never loses timers: a pass over a lag fires them
+ * in expiry order, and a repeating timer once per interval it missed.
  *
  * ============================================================================
  * THREAD SAFETY

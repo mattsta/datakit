@@ -72,7 +72,8 @@ An entry is placed by its delay, measured from the wheel clock
 current time:
 
 - delay < 1ms (below wheel 0's resolution): the **pending** queue, which fires on
-  the next processing pass
+  the next processing pass (with the slot the wheel stands at, when that pass
+  catches up past it)
 - delay < the span of some wheel level: that level, at slot
   `(currentSlot + delay / levelResolution) mod levelSize`
 - delay >= the total wheel span: **overflow**
@@ -87,9 +88,9 @@ current, already-cascaded slot.
 
 Overflow entries move into the wheel once they are within range of the wheel
 clock. A processing pass pulls them before the catch-up, so they cascade in
-expiry order with the wheel's own entries, and once more after it, so an entry
-that comes due during a lag longer than the wheels' coverage is placed into
-pending and fires in the same pass.
+expiry order with the wheel's own entries, again each time wheel 3 advances
+during the catch-up, so a lag longer than the wheels' coverage brings them in
+well before they are due, and once more after it.
 
 Expiry arithmetic saturates rather than wraps: an absurd delay becomes
 "effectively never" (`UINT64_MAX`) and parks in overflow instead of silently
@@ -114,6 +115,13 @@ loop from being proportional to elapsed real time:
 - **Empty-wheel fast-forward**: when no timers are stored at all, the loop is
   skipped entirely and the clock plus all four slot indices jump straight to the
   current tick count.
+
+A pass that catches up over a lag fires everything in expiry order. Pending
+entries (a sub-resolution delay, or a re-placement or cascade landing within a
+slot of the wheel clock) are due by the end of the slot the wheel stands at, so
+they fire with that slot; the slot holding the current time leaves them to the
+pass's final pending drain. A repeating timer the wheel fell behind on fires once
+per interval it missed, each repeat counted from the slot that fired it.
 
 ### Cascading
 
@@ -324,9 +332,11 @@ timerWheelUs timerWheelNextTimerEventOffsetFromNowUs(timerWheel *tw);
 ```
 
 The returned absolute time shares the time base of `timeUtilMonotonicUs()`.
-The result is cached: a processing pass invalidates the cache, and a new
+The result is cached: a processing pass invalidates the cache, a new
 registration folds into it (a new timer can only move the next expiry earlier),
-so register-heavy workloads keep O(1) next-event queries. On a cache miss the
+and the cache remembers which timer it names, so only a cancel of that timer
+drops it. Register-heavy and cancel-heavy workloads keep O(1) next-event
+queries. On a cache miss the
 scan covers:
 
 - the pending queue;

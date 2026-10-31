@@ -242,12 +242,464 @@ static bool mtCountingCallback(multiTimer *, multiTimerId id,
     return state->shouldReschedule;
 }
 
+#include "dkRandom.h"
+
+/* ====================================================================
+ * The model test: every public call against a table of timers on the
+ * same clock (the real monotonic clock plus every advance), timers
+ * acting from their own callbacks, short and long delays through every
+ * wheel and the overflow.  A timer fires once its delay has passed (no
+ * earlier than one 1 ms slot before, no later than one slot after the
+ * pass that reaches it), and never after it is cancelled.
+ * ==================================================================== */
+typedef enum twAct_ {
+    TW_ACT_NONE = 0,
+    TW_ACT_CANCEL_OTHER,
+    TW_ACT_CANCEL_SELF,
+    TW_ACT_REGISTER,
+    TW_ACT_STOP_ALL,
+    TW_ACT_REENTER,
+    TW_ACT_COUNT_,
+} twAct_;
+
+typedef struct twTimer_ {
+    timerWheelId id;
+    int64_t dueLo; /* the model clock's span for the first expiry */
+    int64_t dueHi;
+    uint64_t interval; /* 0: one-shot */
+    uint32_t fires;
+    uint32_t maxFires; /* a repeating timer stops itself after these */
+    int64_t lastFire;
+    uint64_t delay;
+    bool inCallback; /* registered from a callback (deferred) */
+    bool live;       /* will fire again */
+    bool cancelled;
+    twAct_ act;
+} twTimer_;
+
+static constexpr uint32_t TW_CAP = 2048;
+static constexpr int64_t TW_SLOT = 1000; /* wheel 0's resolution, us */
+
+typedef struct twModel_ {
+    timerWheel *tw;
+    int64_t realStart; /* the wheel's clock: real since this, plus advanced */
+    int64_t advanced;
+    uint32_t n;
+    uint64_t registrations;
+    uint64_t expirations;
+    bool stale; /* an id that already fired was cancelled */
+    bool inCallback;
+    int64_t lastReached; /* the pass before this one */
+    bool failed;
+    const char *why;
+    uint64_t rng;
+    uint32_t acted[TW_ACT_COUNT_];
+    twTimer_ t[TW_CAP];
+} twModel_;
+
+defcleanerName(twModel_ *, zfree, TwModel);
+
+/* The callbacks' model (callbacks get only the timer's index) */
+static twModel_ *twModel_Live_;
+
+static int64_t twClock_(const twModel_ *M) {
+    return (int64_t)timeUtilMonotonicUs() - M->realStart + M->advanced;
+}
+
+static void twFail_(twModel_ *M, const char *why) {
+    if (!M->failed) {
+        M->failed = true;
+        M->why = why;
+    }
+}
+
+static bool twFire_(timerWheel *tw, timerWheelId id, void *clientData);
+
+/* @model: src/timerWheel.h */
+/* Register a timer of 'delay' (us), repeating every 'interval' (0: once) */
+static void twRegister_(twModel_ *M, uint64_t delay, uint64_t interval,
+                        twAct_ act) {
+    if (M->n >= TW_CAP) {
+        return;
+    }
+    twTimer_ *t = &M->t[M->n];
+    *t = (twTimer_){.interval = interval,
+                    .delay = delay,
+                    .inCallback = M->inCallback,
+                    .maxFires = interval ? 1 + (uint32_t)(M->rng % 4) : 1,
+                    .live = true,
+                    .act = act};
+    M->rng = dkSplitmix64Next(&M->rng) | 1;
+    const int64_t before = twClock_(M);
+    t->id = timerWheelRegister(M->tw, delay, interval, twFire_,
+                               (void *)(uintptr_t)M->n);
+    t->dueLo = before + (int64_t)delay;
+    t->dueHi = twClock_(M) + (int64_t)delay;
+    M->n++;
+    M->registrations++;
+    if (t->id == 0 || (M->n > 1 && t->id <= M->t[M->n - 2].id)) {
+        twFail_(M, "an id is 0 or not above the last");
+    }
+}
+
+static void twCancel_(twModel_ *M, uint32_t at) {
+    twTimer_ *t = &M->t[at];
+    if (!timerWheelUnregister(M->tw, t->id)) {
+        twFail_(M, "an issued id was not known");
+    }
+    if (!t->live) {
+        M->stale = true;
+    }
+    t->live = false;
+    t->cancelled = true;
+}
+
+/* @model: src/timerWheel.h */
+static bool twFireBody_(timerWheel *tw, timerWheelId id, void *clientData) {
+    twModel_ *M = twModel_Live_;
+    const uint32_t at = (uint32_t)(uintptr_t)clientData;
+    twTimer_ *t = &M->t[at];
+    const int64_t now = twClock_(M);
+    if (tw != M->tw || id != t->id) {
+        twFail_(M, "a callback got another wheel or id");
+        return false;
+    }
+    if (!t->live || t->cancelled) {
+        twFail_(M, "a cancelled or finished timer fired");
+        return false;
+    }
+    /* The first expiry no earlier than one slot before it (a repeat
+     * catching up fires its intervals in one pass) */
+    if (t->fires == 0 && now < t->dueLo - TW_SLOT) {
+        twFail_(M, "a timer fired early");
+    }
+    t->fires++;
+    t->lastFire = now;
+    M->expirations++;
+    M->inCallback = true;
+    const bool again = t->interval && t->fires < t->maxFires;
+    t->live = again;
+    /* What this timer does from its callback */
+    M->acted[t->act]++;
+    switch (t->act) {
+    case TW_ACT_CANCEL_OTHER: {
+        const uint32_t other = (uint32_t)(dkSplitmix64Next(&M->rng) % M->n);
+        if (other != at) {
+            twCancel_(M, other);
+        }
+        break;
+    }
+    case TW_ACT_CANCEL_SELF:
+        /* Cancelled in its own callback: it does not repeat, and
+         * nothing is left behind to make the count stale */
+        if (!timerWheelUnregister(tw, id)) {
+            twFail_(M, "the firing timer's id was not known");
+        }
+        t->live = false;
+        t->cancelled = true;
+        return again;
+    case TW_ACT_REGISTER: /* deferred until the callback returns */
+        twRegister_(M, dkSplitmix64Next(&M->rng) % 3000, 0, TW_ACT_NONE);
+        break;
+    case TW_ACT_STOP_ALL:
+        /* every timer registered so far stops; later ones survive */
+        if (!timerWheelStopAll(tw)) {
+            twFail_(M, "StopAll failed in a callback");
+        }
+        for (uint32_t i = 0; i < M->n; i++) {
+            M->t[i].live = false;
+            M->t[i].cancelled = M->t[i].cancelled || i != at || again;
+        }
+        twRegister_(M, 500, 0, TW_ACT_NONE);
+        return again;
+    case TW_ACT_REENTER: /* a no-op for processing, reported */
+        timerWheelProcessTimerEvents(tw);
+        timerWheelAdvanceTime(tw, 0);
+        if (!timerWheelReconcileCancellations(tw)) {
+            /* refused mid-callback, as documented */
+        } else {
+            twFail_(M, "a reconcile ran inside a callback");
+        }
+        break;
+    default:
+        break;
+    }
+    return again;
+}
+
+/* Every timer's callback: the body, with registrations from it marked */
+static bool twFire_(timerWheel *tw, timerWheelId id, void *clientData) {
+    const bool again = twFireBody_(tw, id, clientData);
+    twModel_Live_->inCallback = false;
+    return again;
+}
+
+/* @model: src/timerWheel.h */
+/* After a processing pass reaching 'reached' (model clock): every timer
+ * whose expiry is a slot behind it has fired, and repeats have caught up */
+static void twCheckFired_(twModel_ *M, int64_t reached) {
+    for (uint32_t i = 0; i < M->n; i++) {
+        const twTimer_ *t = &M->t[i];
+        if (!t->live || t->cancelled) {
+            continue;
+        }
+        /* Each repeat may lag a slot behind the last */
+        const int64_t lastDue =
+            t->dueHi + TW_SLOT +
+            (int64_t)(t->maxFires - 1) * ((int64_t)t->interval + TW_SLOT);
+        if (t->fires == 0 && t->dueHi + TW_SLOT <= reached) {
+            twFail_(M, "a timer past its expiry did not fire");
+        } else if (t->interval && lastDue <= reached) {
+            static char why[200];
+            snprintf(why, sizeof(why),
+                     "a repeating timer fell behind: fired %" PRIu32
+                     " of %" PRIu32 ", every %" PRIu64 " from %" PRId64
+                     " (delay %" PRIu64 "%s), last at %" PRId64
+                     ", reached %" PRId64 " (the pass before: %" PRId64 ")",
+                     t->fires, t->maxFires, t->interval, t->dueHi, t->delay,
+                     t->inCallback ? ", from a callback" : "", t->lastFire,
+                     reached, M->lastReached);
+            twFail_(M, why);
+        }
+    }
+}
+
+/* @model: src/timerWheel.h */
+/* The count, next event and statistics agree with the model */
+static void twCheckState_(twModel_ *M) {
+    size_t live = 0;
+    for (uint32_t i = 0; i < M->n; i++) {
+        live += M->t[i].live && !M->t[i].cancelled;
+    }
+    if (M->stale) {
+        if (!timerWheelReconcileCancellations(M->tw)) {
+            twFail_(M, "a reconcile outside callbacks was refused");
+        }
+        M->stale = false;
+    }
+    if (timerWheelCount(M->tw) != live) {
+        twFail_(M, "the count");
+    }
+    /* The next event is the oracle's, and none for an empty wheel */
+    const timerWheelSystemMonotonicUs next =
+        timerWheelNextTimerEventStartUs(M->tw);
+    const timerWheelSystemMonotonicUs oracle =
+        timerWheelTestNextEventOracle(M->tw);
+    if (next != oracle || (live == 0) != (next == 0)) {
+        static char why[160];
+        snprintf(why, sizeof(why),
+                 "the next event: %" PRId64 ", the oracle's %" PRId64
+                 ", %zu live, count %zu",
+                 next, oracle, live, timerWheelCount(M->tw));
+        twFail_(M, why);
+    }
+    const timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(M->tw);
+    if (live == 0
+            ? offset != 0
+            : offset > next -
+                           (timerWheelSystemMonotonicUs)timeUtilMonotonicUs() +
+                           1000) {
+        twFail_(M, "the next event's offset");
+    }
+    timerWheelStats st = {};
+    timerWheelGetStats(M->tw, &st);
+    if (st.totalRegistrations != M->registrations ||
+        st.totalExpirations != M->expirations || st.memoryBytes == 0 ||
+        timerWheelCount(M->tw) != live) {
+        twFail_(M, "the statistics");
+    }
+}
+
+/* A repeating timer that stops itself after four fires */
+static bool twCatchUp_(timerWheel *, timerWheelId, void *clientData) {
+    uint32_t *fires = clientData;
+    return ++*fires < 4;
+}
+
+/* @model: src/timerWheel.h */
+static int timerWheelTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, TwModel) twModel_ *M = zcalloc(1, sizeof(*M));
+    twModel_Live_ = M;
+    /* @own: container; free=timerWheelFree */
+    M->tw = timerWheelNew();
+    M->realStart = (int64_t)timeUtilMonotonicUs();
+    M->rng = seed;
+    uint64_t rng = seed * 7919;
+    for (uint32_t step = 0; step < 3000 && !err && !M->failed; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const uint32_t op = (uint32_t)(r % 12);
+        switch (op) {
+        case 0:
+        case 1:
+        case 2: { /* a timer: short, across the wheels, or past them */
+            const uint64_t span = (r >> 8) % 20;
+            const uint64_t delay =
+                span < 12   ? (r >> 16) % 3000
+                : span < 17 ? (r >> 16) % 20000000
+                : span < 19 ? (r >> 16) % UINT64_C(4000000000)
+                            : UINT64_C(70000000000) + (r >> 16) % 1000000;
+            const uint64_t interval =
+                (r >> 40) % 4 == 0 ? 1000 + (r >> 44) % 5000 : 0;
+            const uint64_t pick = (r >> 50) % 40;
+            const twAct_ act = pick < 28   ? TW_ACT_NONE
+                               : pick < 32 ? TW_ACT_CANCEL_OTHER
+                               : pick < 35 ? TW_ACT_CANCEL_SELF
+                               : pick < 38 ? TW_ACT_REGISTER
+                               : pick < 39 ? TW_ACT_REENTER
+                                           : TW_ACT_STOP_ALL;
+            twRegister_(M, delay, interval, act);
+            break;
+        }
+        case 3: /* a timer cancelled, fired or not */
+            if (M->n) {
+                twCancel_(M, (uint32_t)((r >> 8) % M->n));
+            }
+            break;
+        case 4: /* an id the wheel never issued */
+            if (timerWheelUnregister(M->tw,
+                                     M->n ? M->t[M->n - 1].id + 1000 : 1) ||
+                timerWheelUnregister(M->tw, 0)) {
+                twFail_(M, "an unissued id was known");
+            }
+            break;
+        case 5:
+        case 6:
+        case 7:
+        case 8: { /* time passes: a little, a slot or two, or a lot */
+            const uint64_t span = (r >> 8) % 20;
+            const uint64_t by = span < 14   ? (r >> 16) % 2500
+                                : span < 18 ? (r >> 16) % 2000000
+                                : span < 19 ? (r >> 16) % UINT64_C(4000000000)
+                                            : UINT64_C(80000000000);
+            const int64_t before = twClock_(M);
+            M->advanced += (int64_t)by;
+            timerWheelAdvanceTime(M->tw, by);
+            twCheckFired_(M, before + (int64_t)by);
+            M->lastReached = before + (int64_t)by;
+            break;
+        }
+        case 9: { /* the wheel's own pass on the real clock */
+            const int64_t before = twClock_(M);
+            timerWheelProcessTimerEvents(M->tw);
+            twCheckFired_(M, before);
+            M->lastReached = before;
+            break;
+        }
+        case 10: /* everything stops */
+            if ((r >> 8) % 8 == 0) {
+                if (!timerWheelStopAll(M->tw)) {
+                    twFail_(M, "StopAll failed");
+                }
+                for (uint32_t i = 0; i < M->n; i++) {
+                    M->t[i].cancelled = M->t[i].cancelled || M->t[i].live;
+                    M->t[i].live = false;
+                }
+            }
+            break;
+        default: /* counters reset; now and then the wheel made anew */
+            if ((r >> 8) % 16 == 0) {
+                timerWheelResetStats(M->tw);
+                M->registrations = 0;
+                M->expirations = 0;
+            } else if ((r >> 8) % 16 == 1) {
+                timerWheelDeinit(M->tw);
+                if (!timerWheelInit(M->tw)) {
+                    twFail_(M, "Init failed");
+                }
+                M->realStart = (int64_t)timeUtilMonotonicUs();
+                M->advanced = 0;
+                M->n = 0;
+                M->registrations = 0;
+                M->expirations = 0;
+                M->stale = false;
+            }
+            break;
+        }
+        if (M->n >= TW_CAP - 8) { /* the table full: a fresh wheel */
+            timerWheelFree(M->tw);
+            /* @own: container; free=timerWheelFree */
+            M->tw = timerWheelNew();
+            M->realStart = (int64_t)timeUtilMonotonicUs();
+            M->advanced = 0;
+            M->n = 0;
+            M->registrations = 0;
+            M->expirations = 0;
+            M->stale = false;
+        }
+        if (!M->failed && step % 10 == 9) {
+            twCheckState_(M);
+        }
+        if (M->failed) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 ": %s (%" PRIu32
+                " timers, seed %" PRIu64 ")",
+                step, op, M->why, M->n, seed);
+        }
+    }
+    for (uint32_t a = 0; a < TW_ACT_COUNT_ && !err; a++) {
+        if (!M->acted[a]) {
+            ERR("callback action %" PRIu32 " never ran", a);
+        }
+    }
+    timerWheelFree(M->tw);
+    twModel_Live_ = nullptr;
+    return err;
+}
+
 int timerWheelTest(int, char *[]) {
     int32_t err = 0;
 
     /* ================================================================
      * Basic Lifecycle Tests
      * ================================================================ */
+
+    TEST("cancelling the next timer moves the next event to the one after") {
+        timerWheel *tw = timerWheelNew();
+        uint32_t fires = 0;
+        const timerWheelId first =
+            timerWheelRegister(tw, 2000, 0, twCatchUp_, &fires);
+        (void)timerWheelRegister(tw, 9000, 0, twCatchUp_, &fires);
+        const timerWheelSystemMonotonicUs before =
+            timerWheelNextTimerEventStartUs(tw); /* cached: the first */
+        (void)timerWheelUnregister(tw, first);
+        const timerWheelSystemMonotonicUs after =
+            timerWheelNextTimerEventStartUs(tw);
+        if (after != timerWheelTestNextEventOracle(tw) ||
+            after < before + 6000) {
+            ERR("the next event after the cancel is %" PRId64 " (was %" PRId64
+                ", the oracle's %" PRId64 ")",
+                after, before, timerWheelTestNextEventOracle(tw));
+        }
+        timerWheelFree(tw);
+    }
+
+    TEST("a lagging wheel fires each interval of a repeating timer") {
+        /* One advance far past a repeating timer's first expiry: the
+         * catch-up fires it each interval, not once, whether it waits
+         * in pending (under a slot), a wheel, or the overflow (an
+         * advance past the wheels' span) */
+        static const uint64_t delays[] = {15, 2223, 300000, 20000000,
+                                          UINT64_C(70000000000)};
+        for (size_t d = 0; d < countof(delays); d++) {
+            timerWheel *tw = timerWheelNew();
+            uint32_t fires = 0;
+            (void)timerWheelRegister(tw, delays[d], 4900, twCatchUp_, &fires);
+            timerWheelAdvanceTime(tw, delays[d] + 523000);
+            if (fires != 4) {
+                ERR("a %" PRIu64
+                    " us timer repeating every 4900 us fired %" PRIu32
+                    " times in one 523 ms catch-up, not 4",
+                    delays[d], fires);
+            }
+            timerWheelFree(tw);
+        }
+    }
+
+    TEST("model: every public call against a table of timers") {
+        for (uint64_t seed = 1; seed <= 4; seed++) {
+            err += timerWheelTestModel_(seed);
+        }
+    }
 
     TEST("timerWheel: create and free") {
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();

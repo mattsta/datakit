@@ -105,8 +105,10 @@ struct timerWheel {
      * is no id index, so Unregister cannot detect the case inline. */
     size_t cancelledPending;
 
-    /* Cached next expiry (for fast lookup) */
+    /* Cached next expiry (for fast lookup), and the timer it is: a
+     * cancel of that timer drops the cache */
     timerWheelAdjustedUs cachedNextExpiry;
+    timerWheelId cachedNextId;
 
     /* Pending timers (scheduled from within callbacks) */
     flex *pendingTimers;
@@ -556,6 +558,7 @@ timerWheelId timerWheelRegister(timerWheel *tw,
      * workloads keep O(1) next-event queries. */
     if (tw->nextExpiryCacheValid && expireTimeUs < tw->cachedNextExpiry) {
         tw->cachedNextExpiry = expireTimeUs;
+        tw->cachedNextId = id;
     }
 
     const timerWheelEntry e = {.expireTimeUs = expireTimeUs,
@@ -592,6 +595,11 @@ bool timerWheelUnregister(timerWheel *tw, timerWheelId id) {
         tw->stats.totalCancellations++;
         tw->cancelledPending++;
         tw->cancelsMaybeStale = true;
+
+        /* The cached next event is this timer's: it no longer fires */
+        if (tw->nextExpiryCacheValid && id == tw->cachedNextId) {
+            tw->nextExpiryCacheValid = false;
+        }
 
         /* Update bounds for efficient range checking */
         if (intsetCount(tw->cancelledTimers) == 1) {
@@ -1072,6 +1080,10 @@ static void advanceUpperWheels(timerWheel *tw) {
 
         if (tw->slotIndex[2] == 0) {
             tw->slotIndex[3] = (tw->slotIndex[3] + 1) & WHEEL3_MASK;
+            /* A catch-up longer than the wheels' span brings overflow
+             * timers into range as it goes: they enter the wheel now,
+             * well before they are due, and fire in expiry order */
+            processOverflow(tw);
             cascadeWheel(tw, 3);
         }
 
@@ -1133,6 +1145,23 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
 
     /* Advance wheel0 to current time, cascading as needed */
     while (tw->currentTimeUs < now) {
+        /* Pending entries (a sub-slot delay, a re-placement or cascade
+         * landing within a slot of the wheel clock) are due by the end
+         * of the slot the wheel stands at.  While the wheel catches up
+         * past that slot they fire with it, in expiry order with the
+         * rest of the catch-up, and a repeat counts from the slot as
+         * processSlot's do; entries due later (a callback's
+         * registrations, made at the target time) go to their slots.
+         * The slot holding 'now' leaves them to processPending. */
+        const timerWheelAdjustedUs slotLast =
+            tw->currentTimeUs + WHEEL0_RESOLUTION_US - 1;
+        if (slotLast < now && flexCount(tw->pendingTimers) > 0) {
+            flex *due = tw->pendingTimers;
+            /* @own: container; free=flexFree */
+            tw->pendingTimers = flexNew();
+            processSlot(tw, &due, slotLast);
+        }
+
         const uint32_t slot0Idx = tw->slotIndex[0];
 
         if (tw->wheel0[slot0Idx] == nullptr) {
@@ -1221,7 +1250,8 @@ void timerWheelAdvanceTime(timerWheel *tw, timerWheelDurationUs microseconds) {
  * (cancelled-but-unreclaimed) entries are skipped so the reported next
  * event is a time at which something actually fires; the id check only
  * runs while cancellations are pending. */
-static timerWheelAdjustedUs flexMinExpiry(const timerWheel *tw, const flex *f) {
+static timerWheelAdjustedUs flexMinExpiry(const timerWheel *tw, const flex *f,
+                                          timerWheelId *earliestId) {
     timerWheelAdjustedUs earliest = UINT64_MAX;
     const bool checkCancelled = tw->cancelledPending > 0;
 
@@ -1234,6 +1264,7 @@ static timerWheelAdjustedUs flexMinExpiry(const timerWheel *tw, const flex *f) {
 
         if (e.expireTimeUs < earliest) {
             earliest = e.expireTimeUs;
+            *earliestId = e.id;
         }
     }
 
@@ -1247,8 +1278,9 @@ static timerWheelAdjustedUs flexMinExpiry(const timerWheel *tw, const flex *f) {
  * walk visits at most cancelledPending + 1 entries.  The iterator fills
  * every element of an entry, so the out array is full width even though
  * only the expiry and id are read. */
-static timerWheelAdjustedUs
-overflowMinLiveExpiry(const timerWheel *tw, timerWheelAdjustedUs earliest) {
+static timerWheelAdjustedUs overflowMinLiveExpiry(const timerWheel *tw,
+                                                  timerWheelAdjustedUs earliest,
+                                                  timerWheelId *earliestId) {
     if (multimapCount(tw->overflow) == 0) {
         return earliest;
     }
@@ -1266,6 +1298,7 @@ overflowMinLiveExpiry(const timerWheel *tw, timerWheelAdjustedUs earliest) {
             continue;
         }
 
+        *earliestId = boxes[3].data.u64;
         return expireTimeUs;
     }
 
@@ -1279,11 +1312,12 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
     }
 
     timerWheelAdjustedUs earliest = UINT64_MAX;
+    timerWheelId earliestId = 0;
 
     /* Pending is unsorted and may hold anything from overdue timers to
      * far-future ones registered inside callbacks - scan all of it */
     if (tw->pendingTimers && flexCount(tw->pendingTimers) > 0) {
-        earliest = flexMinExpiry(tw, tw->pendingTimers);
+        earliest = flexMinExpiry(tw, tw->pendingTimers, &earliestId);
     }
 
     /* Wheel 0: the first slot in ring order from the current slot that
@@ -1318,11 +1352,13 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
                 continue;
             }
 
+            timerWheelId slotId = 0;
             const timerWheelAdjustedUs slotMin =
-                flexMinExpiry(tw, tw->wheel0[idx]);
+                flexMinExpiry(tw, tw->wheel0[idx], &slotId);
             if (slotMin != UINT64_MAX) {
                 if (slotMin < earliest) {
                     earliest = slotMin;
+                    earliestId = slotId;
                 }
                 break;
             }
@@ -1368,21 +1404,27 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
                 continue;
             }
 
-            const timerWheelAdjustedUs slotMin = flexMinExpiry(tw, *slot);
+            timerWheelId slotId = 0;
+            const timerWheelAdjustedUs slotMin =
+                flexMinExpiry(tw, *slot, &slotId);
             if (slotMin == UINT64_MAX) {
                 continue;
             }
 
             if (slotMin < earliest) {
                 earliest = slotMin;
+                earliestId = slotId;
             }
 
             flex **next = getSlot(tw, level, (idx + 1) & (size - 1));
             if (*next && flexCount(*next) > 0 &&
                 (base + i + 1) * resolution < earliest) {
-                const timerWheelAdjustedUs nextMin = flexMinExpiry(tw, *next);
+                timerWheelId nextId = 0;
+                const timerWheelAdjustedUs nextMin =
+                    flexMinExpiry(tw, *next, &nextId);
                 if (nextMin < earliest) {
                     earliest = nextMin;
+                    earliestId = nextId;
                 }
             }
             break;
@@ -1393,7 +1435,7 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
      * earliest.  Cancelled entries stay stored until processing pulls
      * them into range, so skip tombstones from the head; the walk is
      * bounded by the number of pending cancellations. */
-    earliest = overflowMinLiveExpiry(tw, earliest);
+    earliest = overflowMinLiveExpiry(tw, earliest, &earliestId);
 
     if (earliest == UINT64_MAX) {
         return 0;
@@ -1405,6 +1447,7 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
      * query made outside processing is cached. */
     if (tw->context != TIMER_WHEEL_CONTEXT_TIMER) {
         tw->cachedNextExpiry = earliest;
+        tw->cachedNextId = earliestId;
         tw->nextExpiryCacheValid = true;
     }
 
