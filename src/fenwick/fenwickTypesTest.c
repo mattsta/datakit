@@ -111,6 +111,23 @@ static constexpr int FWT_OPS = 2500;
                     fenwick##T##Count(fw), count);                             \
             }                                                                  \
                                                                                \
+            /* Every element copied out mid-run; now and then the tree is      \
+             * cleared and the run goes on from zeros */                       \
+            if (op % 128 == 127 && count) {                                    \
+                cleaner(zfree) void *copyMem = zmalloc(count * sizeof(VT));    \
+                VT *copy = copyMem;                                            \
+                fenwick##T##CopyTo(fw, copy);                                  \
+                for (size_t i = 0; i < count && !err; i++) {                   \
+                    if (copy[i] != elem[i]) {                                  \
+                        ERR(#T " op %zu: CopyTo[%zu] wrong", op, i);           \
+                    }                                                          \
+                }                                                              \
+                if (op % 1024 == 1023) {                                       \
+                    fenwick##T##Clear(fw);                                     \
+                    memset(elem, 0, count * sizeof(VT));                       \
+                }                                                              \
+            }                                                                  \
+                                                                               \
             /* Spot checks: element, prefix and range (the oracle's sums       \
              * are O(q), so they stay low except every 256th op) */            \
             for (int k = 0; k < 4 && count > 0 && !err; k++) {                 \

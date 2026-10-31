@@ -106,6 +106,35 @@ static constexpr int SGT_OPS = 1500;
                     segment##T##Count(seg), count);                            \
             }                                                                  \
                                                                                \
+            /* Every element copied out (range assignments still pending       \
+             * in Full included), and a tree rebuilt from them answering       \
+             * as this one does */                                             \
+            if (step % 128 == 127 && count) {                                  \
+                cleaner(zfree) void *copyMem = zmalloc(count * sizeof(VT));    \
+                VT *copy = copyMem;                                            \
+                segment##T##CopyTo(seg, copy);                                 \
+                for (size_t i = 0; i < count && !err; i++) {                   \
+                    if (copy[i] != elem[i]) {                                  \
+                        ERR(#T " op %d step %zu: CopyTo[%zu] wrong", (int)op,  \
+                            step, i);                                          \
+                    }                                                          \
+                }                                                              \
+                void *rebuilt = segment##T##NewFromArray(op, copy, count);     \
+                for (int k = 0; k < 8 && !err; k++) {                          \
+                    const size_t r =                                           \
+                        (size_t)(dkSplitmix64Next(&seed) % count);             \
+                    const size_t l =                                           \
+                        (size_t)(dkSplitmix64Next(&seed) % (r + 1));           \
+                    if (segment##T##Query(rebuilt, l, r) !=                    \
+                        segment##T##Query(seg, l, r)) {                        \
+                        ERR(#T " op %d step %zu: the rebuilt tree's "          \
+                               "Query(%zu, %zu) differs",                      \
+                            (int)op, step, l, r);                              \
+                    }                                                          \
+                }                                                              \
+                segment##T##Free(rebuilt);                                     \
+            }                                                                  \
+                                                                               \
             for (int k = 0; k < 3 && !err; k++) {                              \
                 const size_t span = count < 1024 ? count : 1024;               \
                 const size_t r =                                               \
