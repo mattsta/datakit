@@ -12,3 +12,4 @@ src/multidict.h multidictOpRepr prints only
 src/multidict.h multidictPrintStats prints only
 src/multidict.h multidictRepr prints only
 src/hmacKeyring.h hmacKeyringReserveThroughPersist is the reservation function for a keyring in a persist; the model drives reservation through its own function, and the persist-backed reservation tests run this one
+src/clusterRing.h clusterRebalancePlanAddMove is a CUSTOM strategy's planRebalance hook; the model's strategies plan themselves, and the CUSTOM strategy tests call it

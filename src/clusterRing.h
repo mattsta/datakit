@@ -647,7 +647,9 @@ typedef struct clusterRebalanceInfo {
 } clusterRebalanceInfo;
 
 /* A copy of the ring's topology, configuration and keyspaces (as a
- * snapshot round trip would give); NULL on allocation failure */
+ * snapshot round trip would give), planning for the same coordinator:
+ * the local datacenter and each node's health and load reports come
+ * along too.  NULL on allocation failure */
 [[nodiscard]] clusterRing *clusterRingCopy(const clusterRing *ring);
 
 /* Plan the moves from `from`'s placement to `ring`'s, replacing any plan.

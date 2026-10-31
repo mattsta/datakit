@@ -3128,10 +3128,24 @@ clusterRing *clusterRingCopy(const clusterRing *ring) {
         copy->sharesCustomStrategy = true;
     }
 
-    /* The copy plans for the same coordinator */
+    /* The copy plans for the same coordinator: its local datacenter, and
+     * each node's health and load reports (a snapshot carries neither;
+     * the copy holds the nodes in the ring's order) */
     if (copy) {
         copy->localDcId = ring->localDcId;
         copy->hasLocalDc = ring->hasLocalDc;
+        for (uint32_t i = 0; i < ring->nodeCount && i < copy->nodeCount; i++) {
+            const clusterNode *from = ring->nodeArray[i];
+            clusterNode *to = copy->nodeArray[i];
+            if (from && to && from->id == to->id) {
+                to->failureCount = from->failureCount;
+                to->lastHealth = from->lastHealth;
+                to->lastLoad = from->lastLoad;
+                to->lastHealthCheck = from->lastHealthCheck;
+                to->lastLoadCheck = from->lastLoadCheck;
+                to->loadReported = from->loadReported;
+            }
+        }
     }
     return copy;
 }
@@ -7666,6 +7680,896 @@ static int testAffinityOracleAndKeyTypes(void) {
     return err;
 }
 
+/* ====================================================================
+ * The model test: every public call on a ring under churn, against a
+ * table of nodes and keyspaces.  Placement is the strategy's, so its
+ * oracle is a ring built fresh from the model (the same nodes in the
+ * same order, the same keyspaces): the churned ring, its Copy and its
+ * Serialize/Deserialize round trip must place every key, plan every
+ * write and read and judge every quorum exactly as the fresh one does.
+ * ==================================================================== */
+#include "dkRandom.h"
+
+static constexpr uint32_t CR_IDS = 32;
+static constexpr uint32_t CR_KEYSPACES = 4;
+static constexpr uint32_t CR_KEYS = 48;
+
+typedef struct crNode_ {
+    bool in;
+    uint32_t weight;
+    clusterNodeState state;
+    uint64_t capacity;
+    uint64_t used;
+    uint32_t rack;
+    uint32_t dc;
+    uint32_t unreachable; /* consecutive unreachable health reports */
+    bool hasLoad;
+    float cpu;
+} crNode_;
+
+typedef struct crKs_ {
+    bool in;
+    clusterStrategyType strategy;
+    uint8_t replicas;
+    bool rackRule;
+} crKs_;
+
+typedef struct crModel_ {
+    clusterRingConfig config;
+    clusterAffinityRule rule;
+    uint64_t order[CR_IDS]; /* node ids in ring order */
+    uint32_t n;
+    crNode_ node[CR_IDS + 1];
+    crKs_ ks[CR_KEYSPACES];
+    uint32_t ksOrder[CR_KEYSPACES]; /* keyspaces in the order added */
+    uint32_t ksN;
+    bool hasLocalDc;
+    uint32_t localDc;
+    /* the state callback's last report */
+    uint32_t stateCalls;
+    uint64_t cbId;
+    clusterNodeState cbOld;
+    clusterNodeState cbNew;
+    uint32_t rebalanceCalls;
+    bool hasProvider;
+    uint32_t providerFrees;
+    const char *why;
+} crModel_;
+
+defcleanerName(crModel_ *, zfree, CrModel);
+
+static void crStateCb_(clusterRing *, uint64_t nodeId,
+                       clusterNodeState oldState, clusterNodeState newState,
+                       void *userData) {
+    crModel_ *M = userData;
+    M->stateCalls++;
+    M->cbId = nodeId;
+    M->cbOld = oldState;
+    M->cbNew = newState;
+}
+
+static void crRebalanceCb_(clusterRing *, const clusterRebalancePlan *,
+                           void *userData) {
+    ((crModel_ *)userData)->rebalanceCalls++;
+}
+
+/* The health provider's answers: one pick for the whole poll */
+typedef struct crProvider_ {
+    bool reachable;
+    float cpu;
+    uint32_t *frees;
+} crProvider_;
+
+static clusterNodeHealth crCheckHealth_(void *data, uint64_t) {
+    const crProvider_ *p = data;
+    return (clusterNodeHealth){.reachable = p->reachable, .latencyMs = 3};
+}
+
+static clusterNodeLoad crGetLoad_(void *data, uint64_t) {
+    const crProvider_ *p = data;
+    return (clusterNodeLoad){.cpuUsage = p->cpu};
+}
+
+static void crFreeProvider_(void *data) {
+    crProvider_ *p = data;
+    (*p->frees)++;
+    zfree(p);
+}
+
+static void crKsName_(uint32_t k, char name[8]) {
+    snprintf(name, 8, "ks%" PRIu32, k);
+}
+
+static clusterNodeConfig crNodeConfig_(const crModel_ *M, uint64_t id,
+                                       char name[16]) {
+    const crNode_ *x = &M->node[id];
+    snprintf(name, 16, "n%" PRIu64, id);
+    return (clusterNodeConfig){
+        .id = id,
+        .name = name,
+        .address = name,
+        .location = {.nodeId = id, .rackId = x->rack, .dcId = x->dc},
+        .weight = x->weight,
+        .capacityBytes = x->capacity,
+        .initialState = x->state,
+    };
+}
+
+static clusterKeySpaceConfig crKsConfig_(crModel_ *M, uint32_t k,
+                                         char name[8]) {
+    crKsName_(k, name);
+    clusterQuorum q = CLUSTER_QUORUM_EVENTUAL;
+    q.replicaCount = M->ks[k].replicas;
+    q.writeQuorum = q.replicaCount ? 1 : 0;
+    q.writeSync = q.writeQuorum;
+    q.readQuorum = q.writeQuorum;
+    return (clusterKeySpaceConfig){
+        .name = name,
+        .quorum = q,
+        .rules = M->ks[k].rackRule ? &M->rule : nullptr,
+        .ruleCount = M->ks[k].rackRule ? 1 : 0,
+        .strategy = M->ks[k].strategy,
+    };
+}
+
+/* A ring built fresh from the model */
+static clusterRing *crFresh_(crModel_ *M) {
+    clusterRing *ring = clusterRingNew(&M->config);
+    for (uint32_t i = 0; i < M->n; i++) {
+        const uint64_t id = M->order[i];
+        char name[16];
+        const clusterNodeConfig c = crNodeConfig_(M, id, name);
+        if (clusterRingAddNode(ring, &c) != CLUSTER_OK ||
+            clusterRingSetNodeUsedBytes(ring, id, M->node[id].used) !=
+                CLUSTER_OK) {
+            clusterRingFree(ring);
+            return nullptr;
+        }
+        if (M->node[id].hasLoad) {
+            const clusterNodeLoad load = {.cpuUsage = M->node[id].cpu};
+            (void)clusterRingUpdateNodeLoad(ring, id, &load);
+        }
+    }
+    for (uint32_t i = 0; i < M->ksN; i++) {
+        char name[8];
+        const clusterKeySpaceConfig kc = crKsConfig_(M, M->ksOrder[i], name);
+        if (clusterRingAddKeySpace(ring, &kc, nullptr) != CLUSTER_OK) {
+            clusterRingFree(ring);
+            return nullptr;
+        }
+    }
+    if (M->hasLocalDc) {
+        clusterRingSetLocalDatacenter(ring, M->localDc);
+    }
+    return ring;
+}
+
+/* @model: src/clusterRing.h */
+/* A read set's candidates, through its accessors, are 'l' */
+static bool crSameCandidates_(const clusterReadSet *rs,
+                              const clusterNodeList *l) {
+    if (clusterReadSetCandidateCount(rs) != l->count) {
+        return false;
+    }
+    for (uint32_t i = 0; i < l->count; i++) {
+        if (clusterReadSetGetCandidate(rs, i) != l->nodes[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Two node lists name the same nodes in the same order */
+static bool crSameIds_(const clusterNodeList *a, const clusterNodeList *b) {
+    if (a->count != b->count) {
+        return false;
+    }
+    for (uint32_t i = 0; i < a->count; i++) {
+        if (clusterNodeGetId(a->nodes[i]) != clusterNodeGetId(b->nodes[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* A placement's replicas are distinct UP nodes, primary first */
+static bool crPlacementSane_(const crModel_ *M, const clusterPlacement *p) {
+    for (size_t i = 0; i < clusterPlacementReplicaCount(p); i++) {
+        const uint64_t id = clusterNodeGetId(clusterPlacementGetReplica(p, i));
+        if (id == 0 || id > CR_IDS || !M->node[id].in ||
+            M->node[id].state != CLUSTER_NODE_UP) {
+            return false;
+        }
+        for (size_t j = 0; j < i; j++) {
+            if (clusterNodeGetId(clusterPlacementGetReplica(p, j)) == id) {
+                return false;
+            }
+        }
+    }
+    return clusterPlacementReplicaCount(p) == 0 ||
+           p->primary == clusterPlacementGetReplica(p, 0);
+}
+
+/* The ids of a node list, for a report */
+static void crIds_(const clusterNodeList *l, char *out, size_t cap) {
+    size_t used = 0;
+    out[0] = 0;
+    for (uint32_t i = 0; i < l->count && used + 8 < cap; i++) {
+        used += (size_t)snprintf(out + used, cap - used, "%s%" PRIu64,
+                                 i ? "," : "", clusterNodeGetId(l->nodes[i]));
+    }
+}
+
+/* @model: src/clusterRing.h */
+/* Ring 'a' places, plans and judges every key as ring 'b' does */
+static bool crSame_(crModel_ *M, const clusterRing *a, const clusterRing *b,
+                    const char *which) {
+    for (uint32_t k = 0; k < CR_KEYS; k++) {
+        char key[16];
+        const int len = snprintf(key, sizeof(key), "key-%" PRIu32, k);
+        clusterPlacement pa;
+        clusterPlacement pb;
+        const clusterResult ra = clusterRingLocate(a, key, (uint32_t)len, &pa);
+        const clusterResult rb = clusterRingLocate(b, key, (uint32_t)len, &pb);
+        bool ok = ra == rb && crSameIds_(&pa.replicas, &pb.replicas) &&
+                  pa.hashValue == pb.hashValue &&
+                  pa.spreadMet == pb.spreadMet && crPlacementSane_(M, &pa);
+        /* By box: the same placement as by bytes */
+        const databox box = databoxNewBytes(key, (size_t)len);
+        clusterPlacement px;
+        clusterPlacementInit(&px);
+        ok = ok && clusterRingLocateBox(a, &box, &px) == ra &&
+             crSameIds_(&px.replicas, &pa.replicas);
+        if (!ok) {
+            static char why[200];
+            char ia[64];
+            char ib[64];
+            crIds_(&pa.replicas, ia, sizeof(ia));
+            crIds_(&pb.replicas, ib, sizeof(ib));
+            snprintf(why, sizeof(why),
+                     "%s: key %" PRIu32 " places on %s (%d, spread %d), the "
+                     "fresh ring on %s (%d, spread %d)",
+                     which, k, ia, (int)ra, (int)pa.spreadMet, ib, (int)rb,
+                     (int)pb.spreadMet);
+            M->why = why;
+        }
+        clusterPlacementFree(&px);
+        clusterPlacementFree(&pa);
+        clusterPlacementFree(&pb);
+        if (!ok) {
+            return false;
+        }
+        /* Under each keyspace */
+        for (uint32_t i = 0; i < M->ksN; i++) {
+            char name[8];
+            crKsName_(M->ksOrder[i], name);
+            const clusterKeySpace *ka = clusterRingGetKeySpace(a, name);
+            const clusterKeySpace *kb = clusterRingGetKeySpace(b, name);
+            if (!ka || !kb) {
+                M->why = "a keyspace is missing";
+                return false;
+            }
+            const clusterResult xa =
+                clusterRingLocateKeyspace(a, ka, key, (uint32_t)len, &pa);
+            const clusterResult xb =
+                clusterRingLocateKeyspace(b, kb, key, (uint32_t)len, &pb);
+            ok = xa == xb && crSameIds_(&pa.replicas, &pb.replicas) &&
+                 crPlacementSane_(M, &pa);
+            clusterPlacementFree(&pa);
+            clusterPlacementFree(&pb);
+            if (!ok) {
+                M->why = "a keyspace's placement";
+                return false;
+            }
+        }
+        /* The plans, each consistency level, and a quorum's judgment */
+        static const clusterConsistencyLevel levels[] = {
+            CLUSTER_CONSISTENCY_ONE,         CLUSTER_CONSISTENCY_QUORUM,
+            CLUSTER_CONSISTENCY_ALL,         CLUSTER_CONSISTENCY_LOCAL_QUORUM,
+            CLUSTER_CONSISTENCY_EACH_QUORUM, CLUSTER_CONSISTENCY_LOCAL_ONE};
+        clusterQuorum q = {.replicaCount = 3,
+                           .consistency = levels[k % countof(levels)]};
+        clusterWriteSet wa;
+        clusterWriteSet wb;
+        clusterReadSet sa;
+        clusterReadSet sb;
+        clusterWriteSetInit(&wa);
+        clusterWriteSetInit(&wb);
+        clusterReadSetInit(&sa);
+        clusterReadSetInit(&sb);
+        const clusterResult wra =
+            clusterRingPlanWrite(a, key, (uint32_t)len, &q, &wa);
+        const clusterResult wrb =
+            clusterRingPlanWrite(b, key, (uint32_t)len, &q, &wb);
+        const clusterResult sra = clusterRingPlanRead(
+            a, key, (uint32_t)len, k % 2 ? &q : nullptr, &sa);
+        const clusterResult srb = clusterRingPlanRead(
+            b, key, (uint32_t)len, k % 2 ? &q : nullptr, &sb);
+        const char *bad = wra != wrb || !crSameIds_(&wa.targets, &wb.targets) ||
+                                  wa.syncRequired != wb.syncRequired
+                              ? "write plan"
+                          : sra != srb ||
+                                  !crSameIds_(&sa.candidates, &sb.candidates) ||
+                                  !crSameCandidates_(&sa, &sa.candidates) ||
+                                  sa.requiredResponses != sb.requiredResponses
+                              ? "read plan"
+                              : nullptr;
+        ok = !bad;
+        /* A quorum met by the first replicas to answer */
+        uint64_t responded[4] = {};
+        size_t respondedN = 0;
+        for (size_t i = 0;
+             i < clusterWriteSetTargetCount(&wa) && respondedN < 2; i++) {
+            responded[respondedN++] =
+                clusterNodeGetId(clusterWriteSetGetTarget(&wa, i));
+        }
+        bool metA = false;
+        bool metB = false;
+        const clusterResult qa = clusterRingQuorumMet(
+            a, key, (uint32_t)len, &q, true, responded, respondedN, &metA);
+        const clusterResult qb = clusterRingQuorumMet(
+            b, key, (uint32_t)len, &q, true, responded, respondedN, &metB);
+        if (ok && (qa != qb || metA != metB)) {
+            bad = "quorum judgment";
+            ok = false;
+        }
+        /* The read node: the same, and one of the replicas */
+        if (ok && clusterRingLocate(a, key, (uint32_t)len, &pa) == CLUSTER_OK &&
+            clusterRingLocate(b, key, (uint32_t)len, &pb) == CLUSTER_OK) {
+            const clusterNode *na = nullptr;
+            const clusterNode *nb = nullptr;
+            const clusterResult ea = clusterRingSelectReadNode(a, &pa, &na);
+            const clusterResult eb = clusterRingSelectReadNode(b, &pb, &nb);
+            ok = ea == eb && (ea != CLUSTER_OK ||
+                              clusterNodeGetId(na) == clusterNodeGetId(nb));
+            bad = ok ? nullptr : "read node";
+            clusterPlacementFree(&pa);
+            clusterPlacementFree(&pb);
+        }
+        if (!ok) {
+            static char why[160];
+            snprintf(why, sizeof(why),
+                     "%s for key %" PRIu32 " at level %d (results %d/%d, "
+                     "%d/%d; targets %" PRIu32 "/%" PRIu32 ", sync %d/%d)",
+                     bad, k, (int)q.consistency, (int)wra, (int)wrb, (int)sra,
+                     (int)srb, wa.targets.count, wb.targets.count,
+                     (int)wa.syncRequired, (int)wb.syncRequired);
+            M->why = why;
+            clusterWriteSetFree(&wa);
+            clusterWriteSetFree(&wb);
+            clusterReadSetFree(&sa);
+            clusterReadSetFree(&sb);
+            return false;
+        }
+        clusterWriteSetFree(&wa);
+        clusterWriteSetFree(&wb);
+        clusterReadSetFree(&sa);
+        clusterReadSetFree(&sb);
+    }
+    /* Bulk placement is each key's placement */
+    databox keys[4];
+    char buf[4][16];
+    for (uint32_t i = 0; i < 4; i++) {
+        const int len = snprintf(buf[i], sizeof(buf[i]), "key-%" PRIu32, i);
+        keys[i] = databoxNewBytes(buf[i], (size_t)len);
+    }
+    clusterPlacement bulk[4];
+    const clusterResult rbulk = clusterRingLocateBulk(a, keys, 4, bulk);
+    bool ok = true;
+    for (uint32_t i = 0; i < 4; i++) {
+        clusterPlacement one;
+        const clusterResult r1 = clusterRingLocateBox(b, &keys[i], &one);
+        ok = ok && (rbulk != CLUSTER_OK || r1 == CLUSTER_OK) &&
+             (r1 != CLUSTER_OK || crSameIds_(&bulk[i].replicas, &one.replicas));
+        clusterPlacementFree(&one);
+        clusterPlacementFree(&bulk[i]);
+    }
+    if (!ok) {
+        M->why = "a bulk placement";
+        return false;
+    }
+    return true;
+}
+
+static bool crCountFn_(const clusterNode *, void *userData) {
+    (*(uint32_t *)userData)++;
+    return true;
+}
+
+/* Iteration visits the nodes in ring order: the model's */
+typedef struct crOrder_ {
+    const crModel_ *M;
+    uint32_t at;
+    bool same;
+} crOrder_;
+
+static bool crOrderFn_(const clusterNode *node, void *userData) {
+    crOrder_ *o = userData;
+    o->same = o->same && o->at < o->M->n &&
+              clusterNodeGetId(node) == o->M->order[o->at];
+    o->at++;
+    return true;
+}
+
+/* @model: src/clusterRing.h */
+/* The ring's nodes, counts, iterations and stats are the model's */
+static bool crNodes_(crModel_ *M, const clusterRing *ring) {
+    uint32_t healthy = 0;
+    uint32_t byState[8] = {};
+    uint32_t byDc[4] = {};
+    for (uint32_t i = 0; i < M->n; i++) {
+        const uint64_t id = M->order[i];
+        const crNode_ *x = &M->node[id];
+        const clusterNode *node = clusterRingGetNode(ring, id);
+        char name[16];
+        snprintf(name, sizeof(name), "n%" PRIu64, id);
+        const uint32_t weight = x->weight ? x->weight : 100;
+        const char *bad =
+            !node || clusterNodeGetId(node) != id             ? "id"
+            : strcmp(clusterNodeGetName(node), name) != 0     ? "name"
+            : strcmp(clusterNodeGetAddress(node), name) != 0  ? "address"
+            : clusterNodeGetState(node) != x->state           ? "state"
+            : clusterNodeGetWeight(node) != weight            ? "weight"
+            : clusterNodeGetCapacity(node) != x->capacity     ? "capacity"
+            : clusterNodeGetUsedBytes(node) != x->used        ? "used bytes"
+            : clusterNodeGetLocation(node)->rackId != x->rack ? "rack"
+            : clusterNodeGetLocation(node)->dcId != x->dc     ? "datacenter"
+            : x->hasLoad && clusterNodeGetLoad(node)->cpuUsage != x->cpu
+                ? "load"
+            : !clusterNodeGetHealth(node) ? "health"
+                                          : nullptr;
+        if (bad) {
+            static char why[96];
+            snprintf(
+                why, sizeof(why),
+                "node %" PRIu64 "'s %s (state %d, model %d; weight %" PRIu32
+                ", model %" PRIu32 ")",
+                id, bad, node ? (int)clusterNodeGetState(node) : -1,
+                (int)x->state, node ? clusterNodeGetWeight(node) : 0, weight);
+            M->why = why;
+            return false;
+        }
+        healthy += x->state == CLUSTER_NODE_UP;
+        byState[x->state]++;
+        byDc[x->dc]++;
+    }
+    for (uint64_t id = 1; id <= CR_IDS; id++) {
+        if (!M->node[id].in && clusterRingGetNode(ring, id)) {
+            M->why = "a removed node is still found";
+            return false;
+        }
+    }
+    uint32_t all = 0;
+    clusterRingIterateNodes(ring, crCountFn_, &all);
+    crOrder_ order = {.M = M, .same = true};
+    clusterRingIterateNodes(ring, crOrderFn_, &order);
+    if (!order.same) {
+        M->why = "the node order";
+        return false;
+    }
+    bool ok = all == M->n && clusterRingNodeCount(ring) == M->n &&
+              clusterRingHealthyNodeCount(ring) == healthy;
+    for (uint32_t s = 0; s <= CLUSTER_NODE_MAINTENANCE && ok; s++) {
+        uint32_t got = 0;
+        clusterRingIterateNodesByState(ring, (clusterNodeState)s, crCountFn_,
+                                       &got);
+        ok = got == byState[s];
+    }
+    for (uint32_t dc = 0; dc < 4 && ok; dc++) {
+        uint32_t got = 0;
+        clusterRingIterateNodesByLocation(ring, CLUSTER_LEVEL_DATACENTER, dc,
+                                          crCountFn_, &got);
+        ok = got == byDc[dc];
+    }
+    clusterRingStats st = {};
+    clusterRingGetStats(ring, &st);
+    uint32_t dcWant = 0;
+    const bool hasDc = clusterRingGetLocalDatacenter(ring, &dcWant);
+    ok = ok && st.nodeCount == M->n && st.healthyNodes == healthy &&
+         st.keySpaceCount == M->ksN && st.memoryBytes > 0 &&
+         hasDc == M->hasLocalDc && (!hasDc || dcWant == M->localDc);
+    if (!ok) {
+        M->why = "the counts, iterations or stats";
+    }
+    return ok;
+}
+
+/* @model: src/clusterRing.h */
+/* A rebalance plan (Ketama) from a settled copy covers every key whose
+ * replicas moved: each new replica has a move whose range holds the
+ * key's hash and whose target is that node; then every move is run */
+static bool crRebalance_(crModel_ *M, clusterRing *ring,
+                         const clusterRing *settled, uint64_t r) {
+    if (clusterRingPlanRebalance(ring, settled) != CLUSTER_OK) {
+        M->why = "a Ketama plan was refused";
+        return false;
+    }
+    const clusterRebalancePlan *plan = clusterRingGetRebalancePlan(ring);
+    const uint32_t moves = clusterRebalancePlanMoveCount(plan);
+    for (uint32_t k = 0; k < CR_KEYS; k++) {
+        char key[16];
+        const int len = snprintf(key, sizeof(key), "key-%" PRIu32, k);
+        clusterPlacement now;
+        clusterPlacement was;
+        const bool placed =
+            clusterRingLocate(ring, key, (uint32_t)len, &now) == CLUSTER_OK &&
+            clusterRingLocate(settled, key, (uint32_t)len, &was) == CLUSTER_OK;
+        for (size_t i = 0; placed && i < clusterPlacementReplicaCount(&now);
+             i++) {
+            const uint64_t id =
+                clusterNodeGetId(clusterPlacementGetReplica(&now, i));
+            bool held = false;
+            for (size_t j = 0; j < clusterPlacementReplicaCount(&was); j++) {
+                held = held || clusterNodeGetId(
+                                   clusterPlacementGetReplica(&was, j)) == id;
+            }
+            bool moved = held;
+            for (uint32_t m = 0; !moved && m < moves; m++) {
+                const clusterRebalanceMove *mv =
+                    clusterRebalancePlanGetMove(plan, m);
+                moved = mv->targetNodeId == id &&
+                        mv->rangeStart <= now.hashValue &&
+                        now.hashValue <= mv->rangeEnd;
+            }
+            if (!moved) {
+                clusterPlacementFree(&now);
+                clusterPlacementFree(&was);
+                M->why = "a moved replica has no move";
+                return false;
+            }
+        }
+        clusterPlacementFree(&now);
+        if (placed) {
+            clusterPlacementFree(&was);
+        }
+    }
+    /* Run the moves: each starts, some fail and start again, all end */
+    const uint32_t callsBefore = M->rebalanceCalls;
+    uint32_t ends = 0;
+    for (uint32_t m = 0; m < moves; m++) {
+        if (clusterRingCompleteMove(ring, m) != CLUSTER_ERR_INVALID_STATE ||
+            clusterRingStartMove(ring, m) != CLUSTER_OK) {
+            M->why = "a move's transitions";
+            return false;
+        }
+        if ((r >> (m % 60)) % 3 == 0) {
+            if (clusterRingFailMove(ring, m) != CLUSTER_OK ||
+                clusterRingStartMove(ring, m) != CLUSTER_OK) {
+                M->why = "a failed move's restart";
+                return false;
+            }
+            ends++;
+        }
+        if (clusterRingCompleteMove(ring, m) != CLUSTER_OK) {
+            M->why = "a move's completion";
+            return false;
+        }
+        ends++;
+    }
+    clusterRebalanceInfo info = {};
+    clusterRebalancePlanGetInfo(plan, &info);
+    const bool ok =
+        info.moveCount == moves && info.completedCount == moves &&
+        info.failedCount == 0 && clusterRebalancePlanProgress(plan) == 1.0f &&
+        M->rebalanceCalls == callsBefore + ends &&
+        clusterRingStartMove(ring, moves) == CLUSTER_ERR_NOT_FOUND &&
+        clusterRingCancelRebalance(ring) == CLUSTER_OK &&
+        clusterRingCancelRebalance(ring) == CLUSTER_ERR &&
+        !clusterRingGetRebalancePlan(ring);
+    if (!ok) {
+        M->why = "a plan's progress";
+    }
+    return ok;
+}
+
+/* @model: src/clusterRing.h */
+static int clusterRingTestModel_(uint64_t seed) {
+    int err = 0;
+    static const clusterStrategyType strategies[] = {
+        CLUSTER_STRATEGY_KETAMA, CLUSTER_STRATEGY_JUMP,
+        CLUSTER_STRATEGY_RENDEZVOUS, CLUSTER_STRATEGY_MAGLEV,
+        CLUSTER_STRATEGY_BOUNDED};
+    cleanerName(zfree, CrModel) crModel_ *M = zcalloc(1, sizeof(*M));
+    {
+        /* The defaults: an empty ring that places nothing */
+        cleaner(clusterRingFree) clusterRing *plain = clusterRingNewDefault();
+        clusterPlacement p;
+        if (!plain || clusterRingNodeCount(plain) != 0 ||
+            clusterRingLocate(plain, "k", 1, &p) == CLUSTER_OK) {
+            ERR("%s", "the default ring");
+        }
+        clusterPlacementFree(&p);
+    }
+    M->rule = CLUSTER_AFFINITY_RACK_SPREAD;
+    M->rule.required = seed % 4 == 1;
+    M->config = (clusterRingConfig){
+        .name = "model",
+        .strategyType = strategies[seed % countof(strategies)],
+        .defaultQuorum = CLUSTER_QUORUM_BALANCED,
+        .affinityRules = seed >= 5 ? &M->rule : nullptr,
+        .affinityRuleCount = seed >= 5 ? 1 : 0,
+        .hashSeed = (uint32_t)(seed * 31),
+    };
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&M->config);
+    cleaner(clusterRingFree) clusterRing *settled = nullptr;
+    clusterRingSetNodeStateCallback(ring, crStateCb_, M);
+    clusterRingSetRebalanceCallback(ring, crRebalanceCb_, M);
+    uint64_t rng = seed + 1;
+    for (uint32_t step = 0; step < 1500 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const uint64_t id = 1 + r % CR_IDS;
+        crNode_ *x = &M->node[id];
+        const uint32_t op = (uint32_t)((r >> 8) % 14);
+        bool ok = true;
+        M->why = "the call's result";
+        switch (op) {
+        case 0:
+        case 1: { /* a node joins (now and then, a batch of them) */
+            const uint32_t batch = (r >> 16) % 4 == 0 ? 3 : 1;
+            clusterNodeConfig configs[3];
+            char names[3][16];
+            uint64_t ids[3];
+            bool anyIn = false;
+            for (uint32_t b = 0; b < batch; b++) {
+                ids[b] = 1 + (id + b * 7) % CR_IDS;
+                anyIn = anyIn || M->node[ids[b]].in;
+                for (uint32_t c = 0; c < b; c++) {
+                    anyIn = anyIn || ids[c] == ids[b];
+                }
+            }
+            if (anyIn) {
+                char name[16];
+                const clusterNodeConfig c = crNodeConfig_(M, ids[0], name);
+                ok = !M->node[ids[0]].in ||
+                     clusterRingAddNode(ring, &c) == CLUSTER_ERR_EXISTS;
+                break;
+            }
+            for (uint32_t b = 0; b < batch; b++) {
+                crNode_ *y = &M->node[ids[b]];
+                const uint64_t q = dkSplitmix64Next(&rng);
+                *y = (crNode_){.in = true,
+                               .weight = (uint32_t)(q % 4) * 50,
+                               .state = q % 5 ? CLUSTER_NODE_UP
+                                              : CLUSTER_NODE_JOINING,
+                               .capacity = 1000 + q % 9000,
+                               .rack = (uint32_t)((q >> 16) % 3),
+                               .dc = (uint32_t)((q >> 20) % 3)};
+                configs[b] = crNodeConfig_(M, ids[b], names[b]);
+                M->order[M->n++] = ids[b];
+            }
+            ok = batch == 1
+                     ? clusterRingAddNode(ring, &configs[0]) == CLUSTER_OK
+                     : clusterRingAddNodes(ring, configs, batch) == CLUSTER_OK;
+            break;
+        }
+        case 2: { /* a node leaves */
+            const clusterResult got = clusterRingRemoveNode(ring, id);
+            ok = got == (x->in ? CLUSTER_OK : CLUSTER_ERR_NOT_FOUND);
+            if (x->in) {
+                uint32_t w = 0;
+                for (uint32_t i = 0; i < M->n; i++) {
+                    if (M->order[i] != id) {
+                        M->order[w++] = M->order[i];
+                    }
+                }
+                M->n = w;
+                x->in = false;
+            }
+            break;
+        }
+        case 3: { /* a state, reported to the callback */
+            static const clusterNodeState states[] = {
+                CLUSTER_NODE_UP,        CLUSTER_NODE_UP,
+                CLUSTER_NODE_DOWN,      CLUSTER_NODE_LEAVING,
+                CLUSTER_NODE_SUSPECT,   CLUSTER_NODE_MAINTENANCE,
+                CLUSTER_NODE_RECOVERING};
+            const clusterNodeState to = states[(r >> 16) % countof(states)];
+            const uint32_t calls = M->stateCalls;
+            ok = clusterRingSetNodeState(ring, id, to) ==
+                 (x->in ? CLUSTER_OK : CLUSTER_ERR_NOT_FOUND);
+            if (x->in && to != x->state) {
+                ok = ok && M->stateCalls == calls + 1 && M->cbId == id &&
+                     M->cbOld == x->state && M->cbNew == to;
+            }
+            if (x->in) {
+                /* (the run of unreachable reports goes on: they are
+                 * consecutive whatever the state) */
+                x->state = to;
+            }
+            break;
+        }
+        case 4: { /* weight; 0 is the default */
+            const uint32_t w = (uint32_t)((r >> 16) % 5) * 40;
+            ok = clusterRingSetNodeWeight(ring, id, w) ==
+                 (x->in ? CLUSTER_OK : CLUSTER_ERR_NOT_FOUND);
+            if (x->in) {
+                x->weight = w;
+            }
+            break;
+        }
+        case 5: {
+            const uint64_t used = (r >> 16) % 12000;
+            ok = clusterRingSetNodeUsedBytes(ring, id, used) ==
+                 (x->in ? CLUSTER_OK : CLUSTER_ERR_NOT_FOUND);
+            if (x->in) {
+                x->used = used;
+            }
+            break;
+        }
+        case 6: { /* health: three misses take an UP node out; a hit back */
+            const clusterNodeHealth h = {.reachable = (r >> 16) % 3 == 0,
+                                         .latencyMs = 5,
+                                         .lastCheckTime = step};
+            ok = clusterRingUpdateNodeHealth(ring, id, &h) ==
+                 (x->in ? CLUSTER_OK : CLUSTER_ERR_NOT_FOUND);
+            if (x->in) {
+                if (h.reachable) {
+                    x->unreachable = 0;
+                    if (x->state == CLUSTER_NODE_SUSPECT) {
+                        x->state = CLUSTER_NODE_UP;
+                    }
+                } else if (++x->unreachable >= 3 &&
+                           x->state == CLUSTER_NODE_UP) {
+                    x->state = CLUSTER_NODE_SUSPECT;
+                }
+                ok = ok && clusterNodeGetHealth(clusterRingGetNode(ring, id))
+                                   ->lastCheckTime == step;
+            }
+            break;
+        }
+        case 7: {
+            const clusterNodeLoad load = {.cpuUsage =
+                                              (float)((r >> 16) % 100) / 100};
+            ok = clusterRingUpdateNodeLoad(ring, id, &load) ==
+                 (x->in ? CLUSTER_OK : CLUSTER_ERR_NOT_FOUND);
+            if (x->in) {
+                x->hasLoad = true;
+                x->cpu = load.cpuUsage;
+            }
+            break;
+        }
+        case 8: { /* a keyspace added with its own strategy, or removed */
+            const uint32_t k = (uint32_t)((r >> 16) % CR_KEYSPACES);
+            char name[8];
+            crKsName_(k, name);
+            if (M->ks[k].in) {
+                ok = clusterRingRemoveKeySpace(ring, name) == CLUSTER_OK &&
+                     !clusterRingGetKeySpace(ring, name);
+                M->ks[k].in = false;
+                uint32_t w = 0;
+                for (uint32_t i = 0; i < M->ksN; i++) {
+                    if (M->ksOrder[i] != k) {
+                        M->ksOrder[w++] = M->ksOrder[i];
+                    }
+                }
+                M->ksN = w;
+            } else {
+                static const clusterStrategyType ksStrategies[] = {
+                    CLUSTER_STRATEGY_DEFAULT, CLUSTER_STRATEGY_KETAMA,
+                    CLUSTER_STRATEGY_JUMP,    CLUSTER_STRATEGY_RENDEZVOUS,
+                    CLUSTER_STRATEGY_MAGLEV,  CLUSTER_STRATEGY_BOUNDED};
+                M->ks[k] = (crKs_){
+                    .in = true,
+                    .strategy = ksStrategies[(r >> 20) % countof(ksStrategies)],
+                    .replicas = (uint8_t)((r >> 24) % 4),
+                    .rackRule = (r >> 28) % 3 == 0};
+                const clusterKeySpaceConfig kc = crKsConfig_(M, k, name);
+                clusterKeySpace *got = nullptr;
+                ok = clusterRingAddKeySpace(ring, &kc, &got) == CLUSTER_OK &&
+                     got && clusterRingGetKeySpace(ring, name) == got &&
+                     clusterRingAddKeySpace(ring, &kc, nullptr) ==
+                         CLUSTER_ERR_EXISTS;
+                M->ksOrder[M->ksN++] = k;
+            }
+            break;
+        }
+        case 9: /* the local datacenter */
+            M->hasLocalDc = true;
+            M->localDc = (uint32_t)((r >> 16) % 3);
+            clusterRingSetLocalDatacenter(ring, M->localDc);
+            break;
+        case 10:
+        case 11: { /* the oracles: fresh, copied, round-tripped */
+            if (step % 4) {
+                break;
+            }
+            cleaner(clusterRingFree) clusterRing *fresh = crFresh_(M);
+            cleaner(clusterRingFree) clusterRing *copy = clusterRingCopy(ring);
+            const size_t need = clusterRingSerializeSize(ring);
+            cleaner(zfree) void *bytes = zmalloc(need);
+            const size_t wrote = clusterRingSerialize(ring, bytes, need);
+            cleaner(clusterRingFree) clusterRing *back =
+                wrote ? clusterRingDeserialize(bytes, wrote) : nullptr;
+            if (back && M->hasLocalDc) { /* runtime state: not persisted */
+                clusterRingSetLocalDatacenter(back, M->localDc);
+            }
+            if (back) { /* nor are load reports */
+                for (uint32_t i = 0; i < M->n; i++) {
+                    const crNode_ *y = &M->node[M->order[i]];
+                    if (y->hasLoad) {
+                        const clusterNodeLoad load = {.cpuUsage = y->cpu};
+                        (void)clusterRingUpdateNodeLoad(back, M->order[i],
+                                                        &load);
+                    }
+                }
+            }
+            ok = fresh && copy && back && wrote == need;
+            if (!ok) {
+                M->why = "a fresh ring, copy or round trip was not made";
+                break;
+            }
+            ok = crNodes_(M, ring) && crNodes_(M, copy) && crNodes_(M, fresh) &&
+                 crSame_(M, ring, fresh, "the ring") &&
+                 crSame_(M, copy, fresh, "its copy") &&
+                 crSame_(M, back, fresh, "its round trip");
+            break;
+        }
+        case 12: { /* a health provider polled: every node at once */
+            if ((r >> 16) % 2) {
+                ok = clusterRingGetVersion(ring) > 0 || M->n == 0;
+                break;
+            }
+            /* @own: container; free=crFreeProvider_ */
+            crProvider_ *p = zmalloc(sizeof(*p));
+            *p = (crProvider_){.reachable = (r >> 20) % 3 == 0,
+                               .cpu = (float)((r >> 24) % 100) / 100,
+                               .frees = &M->providerFrees};
+            const uint32_t freesBefore = M->providerFrees;
+            const bool replacing = M->hasProvider;
+            const clusterHealthProvider hp = {.checkHealth = crCheckHealth_,
+                                              .getLoad = crGetLoad_,
+                                              .providerData = p,
+                                              .freeProvider = crFreeProvider_};
+            clusterRingSetHealthProvider(ring, &hp);
+            M->hasProvider = true;
+            ok = M->providerFrees == freesBefore + (replacing ? 1 : 0) &&
+                 clusterRingPollHealth(ring) == CLUSTER_OK;
+            for (uint32_t i = 0; i < M->n; i++) {
+                crNode_ *y = &M->node[M->order[i]];
+                y->hasLoad = true;
+                y->cpu = p->cpu;
+                if (p->reachable) {
+                    y->unreachable = 0;
+                    if (y->state == CLUSTER_NODE_SUSPECT) {
+                        y->state = CLUSTER_NODE_UP;
+                    }
+                } else if (++y->unreachable >= 3 &&
+                           y->state == CLUSTER_NODE_UP) {
+                    y->state = CLUSTER_NODE_SUSPECT;
+                }
+            }
+            if ((r >> 30) % 4 == 0) { /* removed: freed, and nothing polls */
+                clusterRingSetHealthProvider(ring, nullptr);
+                M->hasProvider = false;
+                ok = ok && clusterRingPollHealth(ring) == CLUSTER_ERR;
+            }
+            break;
+        }
+        default: { /* Ketama: a plan from the settled copy, run whole */
+            if (M->config.strategyType != CLUSTER_STRATEGY_KETAMA) {
+                cleaner(clusterRingFree) clusterRing *copy =
+                    clusterRingCopy(ring);
+                ok = clusterRingPlanRebalance(ring, copy) ==
+                     CLUSTER_ERR_UNSUPPORTED;
+                break;
+            }
+            if (settled && M->n) {
+                ok = crRebalance_(M, ring, settled, r);
+            }
+            clusterRingFree(settled);
+            settled = clusterRingCopy(ring);
+            break;
+        }
+        }
+        if (!ok) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " on node %" PRIu64
+                ": %s (%" PRIu32 " nodes, strategy %d, seed %" PRIu64 ")",
+                step, op, id, M->why, M->n, (int)M->config.strategyType, seed);
+        }
+    }
+    return err;
+}
+
 int clusterRingTest(int, char *[]) {
     int err = 0;
 
@@ -7694,6 +8598,12 @@ int clusterRingTest(int, char *[]) {
 
     /* persistOps descriptor round-trip — proves the same ring shape
      * survives through the standard persist pipeline. */
+    TEST("model: every call under churn agrees with a fresh ring") {
+        for (uint64_t seed = 0; seed < 10; seed++) {
+            err += clusterRingTestModel_(seed);
+        }
+    }
+
     TEST("persistOps round-trip via persistOpsClusterRing") {
         clusterRingConfig config = {
             .name = "persistops-roundtrip",
