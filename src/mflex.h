@@ -117,10 +117,14 @@ const flex *mflexOpenReadOnly(const mflex *m, mflexState *state);
  * it is: its bytes are a flex the caller checked on arrival. */
 const flex *mflexOpenChecked(const mflex *m, mflexState *state);
 
-/* mflex re-compression */
+/* mflex re-compression: 'f' is the flex mflexOpen returned for '*mm',
+ * changed or not, and the close takes it back (Grow after it grew, Shrink
+ * after it shrank; NoCompress keeps it plain, as '*mm' itself).  A flex
+ * from anywhere else is not a close: start a new block with
+ * mflexConvertFromFlex. */
 void mflexCloseGrow(mflex **mm, mflexState *state, flex *f);
 void mflexCloseShrink(mflex **mm, mflexState *state, flex *f);
-void mflexCloseNoCompress(mflex **mm, mflexState *state, const flex *f);
+void mflexCloseNoCompress(mflex **mm, mflexState *state, flex *f);
 
 /* mflex type options */
 void mflexSetCompressNever(mflex **mm, mflexState *state);

@@ -294,7 +294,9 @@ compression state; no state buffer is involved.
 
 ## Open/Close Pattern
 
-For advanced operations, use **Open/Close**:
+For advanced operations, use **Open/Close**. A close takes back the flex
+`mflexOpen` returned for that mflex, changed or not; a flex from anywhere else
+starts a new block with `mflexConvertFromFlex`:
 
 ```c
 /* Open for reading/writing (may decompress) */
@@ -309,8 +311,8 @@ void mflexCloseGrow(mflex **mm, mflexState *state, flex *f);
 /* Close after shrinking (delete operations) */
 void mflexCloseShrink(mflex **mm, mflexState *state, flex *f);
 
-/* Close without compression attempt */
-void mflexCloseNoCompress(mflex **mm, mflexState *state, const flex *f);
+/* Close without compression attempt (kept plain, as '*mm' itself) */
+void mflexCloseNoCompress(mflex **mm, mflexState *state, flex *f);
 
 /* A read-only open for compressed blocks from outside the process
  * (restored, received): NULL when the stated size is past what LZ4 can

@@ -557,7 +557,7 @@ void mflexCloseShrink(mflex **mm, mflexState *const state, flex *const f) {
 }
 
 /* Attach 'f' back to '*mm' and perform all accounting required. */
-void mflexCloseNoCompress(mflex **mm, mflexState *state, const flex *f) {
+void mflexCloseNoCompress(mflex **mm, mflexState *state, flex *f) {
     /* If flex is the current mflex, everything is already set. */
     if (f == mff(*mm)) {
         return;
@@ -662,6 +662,211 @@ mflex *mflexNewFromStored(const void *bytes, size_t len, bool compressed) {
         fflush(stdout);                                                        \
     } while (0)
 
+/* ====================================================================
+ * The model test: every public call against a plain flex given the same
+ * operations, the mflex's contents compared after each, through
+ * compressed and plain blocks, every close, every way to rebuild one
+ * ==================================================================== */
+static uint64_t mfModelRng_;
+
+/* @model: src/mflex.h */
+/* The mflex holds the model's flex, and its sizes say so */
+static bool mfModelSame_(const mflex *m, mflexState *state, const flex *f) {
+    const flex *open = mflexOpenReadOnly(m, state);
+    const size_t actual = mflexBytesActual(m);
+    return flexEqual(open, f) && mflexCount(m) == flexCount(f) &&
+           mflexIsEmpty(m) == (flexCount(f) == 0) &&
+           mflexBytesUncompressed(m) == flexBytes(f) &&
+           actual == (mflexIsCompressed(m) ? mflexBytesCompressed(m)
+                                           : mflexBytesUncompressed(m));
+}
+
+/* @model: src/mflex.h */
+static int mflexTestModel_(uint64_t seed) {
+    int err = 0;
+    cleaner(mflexStateFree) mflexState *state =
+        seed % 2 ? mflexStateCreate() : mflexStateNew(4096);
+    cleaner(flexFree) flex *f = flexNew();
+    cleaner(mflexFree) mflex *m = seed % 3 ? mflexNew() : mflexNewNoCompress();
+    mfModelRng_ = seed;
+    mflexStateStats last = {};
+    for (uint32_t step = 0; step < 4000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&mfModelRng_);
+        const flexEndpoint where =
+            (r >> 8) % 2 ? FLEX_ENDPOINT_TAIL : FLEX_ENDPOINT_HEAD;
+        /* Repetitive bytes compress; the rest do not */
+        uint8_t buf[200];
+        const size_t len = (size_t)((r >> 12) % 180);
+        for (size_t i = 0; i < len; i++) {
+            buf[i] = (uint8_t)((r >> 20) % 3 ? 'a' + i % 4 : (r >> (i % 50)));
+        }
+        const uint32_t op = (uint32_t)(r % 16);
+        bool ok = true;
+        switch (op) {
+        case 0:
+            mflexPushBytes(&m, state, buf, len, where);
+            flexPushBytes(&f, buf, len, where);
+            break;
+        case 1:
+            mflexPushSigned(&m, state, (int64_t)(r >> 24) - (INT64_C(1) << 39),
+                            where);
+            flexPushSigned(&f, (int64_t)(r >> 24) - (INT64_C(1) << 39), where);
+            break;
+        case 2:
+            mflexPushUnsigned(&m, state, r, where);
+            flexPushUnsigned(&f, r, where);
+            break;
+        case 3: {
+            const float x = (float)(r % 1000) / 8.0f;
+            if ((r >> 30) % 2) {
+                mflexPushFloat16(&m, state, x, where);
+                flexPushFloat16(&f, x, where);
+            } else {
+                mflexPushFloat(&m, state, x, where);
+                flexPushFloat(&f, x, where);
+            }
+            break;
+        }
+        case 4:
+            mflexPushDouble(&m, state, (double)r / 3.0, where);
+            flexPushDouble(&f, (double)r / 3.0, where);
+            break;
+        case 5: { /* boxes, converted or exact (numeral bytes included) */
+            const databox box = (r >> 30) % 2 ? databoxNewBytesString("4096")
+                                              : databoxNewBytes(buf, len);
+            if ((r >> 31) % 2) {
+                mflexPushByTypeExact(&m, state, &box, where);
+                flexPushByTypeExact(&f, &box, where);
+            } else {
+                mflexPushByType(&m, state, &box, where);
+                flexPushByType(&f, &box, where);
+            }
+            break;
+        }
+        case 6: { /* a run of elements appended at once */
+            cleaner(flexFree) flex *more = flexNew();
+            for (uint32_t i = 0; i < 1 + (r >> 30) % 12; i++) {
+                flexPushSigned(&more, (int64_t)i * 1000, FLEX_ENDPOINT_TAIL);
+            }
+            mflexBulkAppendFlex(&m, state, more);
+            flexBulkAppendFlex(&f, more);
+            break;
+        }
+        case 7: { /* a range deleted, from either end */
+            const uint32_t n = (uint32_t)flexCount(f);
+            if (!n) {
+                break;
+            }
+            const int32_t at = (r >> 30) % 2 ? (int32_t)((r >> 32) % n)
+                                             : -(int32_t)(1 + (r >> 32) % n);
+            const uint32_t count = 1 + (uint32_t)(r >> 50) % 6;
+            mflexDeleteOffsetCount(&m, state, at, count);
+            flexDeleteOffsetCount(&f, at, count);
+            break;
+        }
+        case 8: { /* opened, changed, closed: grown or shrunk */
+            flex *open = mflexOpen(m, state);
+            if ((r >> 30) % 2 || !flexCount(open)) {
+                flexPushBytes(&open, buf, len, where);
+                flexPushBytes(&f, buf, len, where);
+                mflexCloseGrow(&m, state, open);
+            } else {
+                flexDeleteOffsetCount(&open, 0, 1);
+                flexDeleteOffsetCount(&f, 0, 1);
+                mflexCloseShrink(&m, state, open);
+            }
+            break;
+        }
+        case 9: { /* opened, changed, closed plain */
+            flex *open = mflexOpen(m, state);
+            flexPushSigned(&open, (int64_t)len, where);
+            flexPushSigned(&f, (int64_t)len, where);
+            mflexCloseNoCompress(&m, state, open);
+            ok = !mflexIsCompressed(m);
+            break;
+        }
+        case 10: { /* compression off and back to automatic */
+            if ((r >> 30) % 2) {
+                mflexSetCompressNever(&m, state);
+                ok = !mflexIsCompressed(m);
+            } else {
+                mflexSetCompressAuto(&m, state);
+            }
+            break;
+        }
+        case 11: { /* rebuilt: a duplicate, from a flex, from stored bytes */
+            cleaner(mflexFree) mflex *dup = mflexDuplicate(m);
+            size_t storedLen = 0;
+            const void *stored = mflexStoredBytes(m, &storedLen);
+            cleaner(mflexFree) mflex *back =
+                mflexNewFromStored(stored, storedLen, mflexIsCompressed(m));
+            cleaner(mflexFree) mflex *conv =
+                (r >> 30) % 2
+                    ? mflexConvertFromFlex(flexDuplicate(f), state)
+                    : mflexConvertFromFlexNoCompress(flexDuplicate(f));
+            const flex *checked =
+                back ? mflexOpenChecked(back, state) : nullptr;
+            ok = mfModelSame_(dup, state, f) && back &&
+                 mfModelSame_(back, state, f) && checked &&
+                 flexEqual(checked, f) && mfModelSame_(conv, state, f);
+            break;
+        }
+        case 12: { /* the state's policy, refused out of range */
+            const uint8_t pct = (uint8_t)((r >> 30) % 120);
+            const cflexLevel level =
+                (cflexLevel)((r >> 40) % (CFLEX_LEVEL_MAX + 3));
+            uint8_t gotPct = 0;
+            cflexLevel gotLevel = 0;
+            mflexStateGetPolicy(state, &gotPct, &gotLevel);
+            const bool fits =
+                pct <= MFLEX_SAVING_PERCENT_MAX && level <= CFLEX_LEVEL_MAX;
+            ok = mflexStateSetPolicy(state, pct, level) == fits;
+            uint8_t nowPct = 0;
+            cflexLevel nowLevel = 0;
+            mflexStateGetPolicy(state, &nowPct, &nowLevel);
+            ok = ok && (fits ? nowPct == pct && nowLevel == level
+                             : nowPct == gotPct && nowLevel == gotLevel);
+            break;
+        }
+        case 13: { /* the state's scratch: sized, reset, preferred length */
+            mflexStatePreferredLenUpdate(state, 512 + (r >> 30) % 4096);
+            ok =
+                mflexStatePreferredLen(state) > 0 && mflexStateBytes(state) > 0;
+            if ((r >> 40) % 8 == 0) {
+                mflexStateReset(state);
+            }
+            break;
+        }
+        case 14:
+            if ((r >> 30) % 40 == 0) {
+                mflexReset(&m);
+                flexReset(&f);
+            }
+            break;
+        default:
+            break;
+        }
+        /* The counters only grow */
+        mflexStateStats st = {};
+        mflexStateGetStats(state, &st);
+        ok = ok && st.decompressions >= last.decompressions &&
+             st.closesCompressed >= last.closesCompressed &&
+             st.bytesIn >= last.bytesIn;
+        last = st;
+        if (!ok || !mfModelSame_(m, state, f)) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " disagreed (%zu "
+                "elements, compressed %d, seed %" PRIu64 ")",
+                step, op, flexCount(f), mflexIsCompressed(m), seed);
+            break;
+        }
+        if (flexBytes(f) > 60000) { /* stay in one block's range */
+            mflexReset(&m);
+            flexReset(&f);
+        }
+    }
+    return err;
+}
+
 int mflexTest(int, char *[]) {
     int err = 0;
     int dotIncr = 0;
@@ -670,6 +875,12 @@ int mflexTest(int, char *[]) {
     static constexpr size_t MANYDO = 8192;
 
     cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+
+    TEST("model: every public call against a plain flex") {
+        for (uint64_t seed = 1; seed <= 6; seed++) {
+            err += mflexTestModel_(seed);
+        }
+    }
 
     TEST("create") {
         cleaner(mflexFree) mflex *m = mflexNew();
