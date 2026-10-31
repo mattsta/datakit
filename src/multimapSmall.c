@@ -57,12 +57,16 @@ void multimapSmallInsertWithSurrogateKey(
     multimapSmall *m, const databox *elements[], const databox *insertKey,
     const struct multimapAtom *referenceContainer) {
     flexEntry *middle = GET_MIDDLE(m);
-    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
-     * For sets (mapIsSet), compare all elements to check for full-width dups.
-     */
-    flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
-        &m->map, m->elementsPerEntry, elements, insertKey, &middle,
-        !m->mapIsSet, referenceContainer);
+    /* A map replaces the key's row; a set adds the row when absent */
+    if (m->mapIsSet) {
+        flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
+            &m->map, m->elementsPerEntry, elements, insertKey, &middle,
+            referenceContainer);
+    } else {
+        flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+            &m->map, m->elementsPerEntry, elements, insertKey, &middle, true,
+            referenceContainer);
+    }
     SET_MIDDLE(m, middle);
 }
 

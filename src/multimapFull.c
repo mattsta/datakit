@@ -1072,8 +1072,44 @@ multimapFullFindKeyInMap_(const multimapFull *m, const flex *map,
                                                 middle);
 }
 
+/* A map's first row against 'elements', every element compared, stored
+ * references resolved through 'referenceContainer' when given */
+DK_INLINE_ALWAYS int
+multimapFullCompareHead_(const flex *map, const databox *elements[],
+                         const multimapElements elementsPerEntry,
+                         const multimapAtom *referenceContainer) {
+    if (!referenceContainer) {
+        return flexCompareEntries(map, elements, elementsPerEntry, 0);
+    }
+
+    const flexEntry *fe = flexHead(map);
+    for (multimapElements i = 0;; i++) {
+        databox got;
+        databoxWide gotWide;
+        multimapGetByTypeInto_(fe, &got, &gotWide, referenceContainer);
+        const int compared = databoxCompare(&got, elements[i]);
+        if (compared != 0 || i + 1 == elementsPerEntry) {
+            return compared;
+        }
+        fe = flexNext(map, (flexEntry *)fe);
+    }
+}
+
+DK_STATIC multimapFullIdx
+multimapFullBinarySearchFullWidth_(multimapFull *m, const databox *elements[],
+                                   const multimapAtom *referenceContainer);
+
 DK_STATIC multimapFullIdx
 multimapFullBinarySearchFullWidth(multimapFull *m, const databox *elements[]) {
+    return multimapFullBinarySearchFullWidth_(m, elements, nullptr);
+}
+
+/* The map a whole row belongs in (a set's rows at one key can span
+ * maps), stored references resolved through 'referenceContainer' when
+ * given */
+DK_STATIC multimapFullIdx
+multimapFullBinarySearchFullWidth_(multimapFull *m, const databox *elements[],
+                                   const multimapAtom *referenceContainer) {
     multimapFullIdx min = 0;
 
     /* 'count - 1' because we always want 'current + 1' to be a valid map.
@@ -1091,8 +1127,8 @@ multimapFullBinarySearchFullWidth(multimapFull *m, const databox *elements[]) {
         /* Prefetch the map data for comparison */
         __builtin_prefetch(map, 0, 1);
 
-        const int compared =
-            flexCompareEntries(map, elements, m->elementsPerEntry, 0);
+        const int compared = multimapFullCompareHead_(
+            map, elements, m->elementsPerEntry, referenceContainer);
         if (compared < 0) {
             /* Need to test for:
              *  [MID, SEARCH, NEXT).
@@ -1105,8 +1141,8 @@ multimapFullBinarySearchFullWidth(multimapFull *m, const databox *elements[]) {
              * again real soon now. */
             const flex *nextMap = getMap(m, mid + 1);
             __builtin_prefetch(nextMap, 0, 1);
-            const int nextHeadCompared =
-                flexCompareEntries(nextMap, elements, m->elementsPerEntry, 0);
+            const int nextHeadCompared = multimapFullCompareHead_(
+                nextMap, elements, m->elementsPerEntry, referenceContainer);
             if (nextHeadCompared > 0) {
                 /* (LOW, ELEMENT[i], HIGH) */
                 /* Found map containing this element range */
@@ -1152,10 +1188,15 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
         assert(!keysCanBecomePointers);
         /* No replacing entry point reaches the surrogate-key insert. */
         assert(!replacedOut);
+        /* A set adds the row only when absent */
         found =
-            flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
-                map, m->elementsPerEntry, elements, insertKey, &middle,
-                compareUsingKeyElementOnly, referenceContainer);
+            m->mapIsSet && !forceFullWidthComparison
+                ? flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
+                      map, m->elementsPerEntry, elements, insertKey, &middle,
+                      referenceContainer)
+                : flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+                      map, m->elementsPerEntry, elements, insertKey, &middle,
+                      compareUsingKeyElementOnly, referenceContainer);
 
         updateRangeBoxForIdxWithReference(m, mapIdx, *map, referenceContainer);
     } else {
@@ -1642,8 +1683,15 @@ abstractInsert(multimapFull *m, const databox *elements[],
 
             /* If our multimapFull _only_ has one map (or if we
              * are insert-testing against map 0), we can't use
-             * a range box, so special case this. */
-            if (m->count == 1 || mapIdx == 0) {
+             * a range box, so special case this.  A set compares the
+             * whole row with the map's one row: a key's rows can span
+             * maps. */
+            if (m->mapIsSet) {
+                currentPositionLargerThanNewKey =
+                    multimapFullCompareHead_(
+                        *map, elements, m->elementsPerEntry,
+                        useSurrogateKey ? referenceContainer : nullptr) > 0;
+            } else if (m->count == 1 || mapIdx == 0) {
 #if NOISY_MAPPING
                 printf("USING EXTANT BOX!\n");
 #endif
@@ -1742,8 +1790,15 @@ abstractInsert(multimapFull *m, const databox *elements[],
             databoxReprSay("Of value: ", getRangeBox(m, mapIdxHigh - 1));
 #endif
 
+            /* A set compares the whole row with the high half's first row
+             * (a key's rows can span the halves) */
             currentPositionLargerThanNewKey =
-                databoxCompare(getRangeBox(m, mapIdxHigh - 1), elements[0]) > 0;
+                m->mapIsSet
+                    ? multimapFullCompareHead_(
+                          getMap(m, mapIdxHigh), elements, m->elementsPerEntry,
+                          useSurrogateKey ? referenceContainer : nullptr) > 0
+                    : databoxCompare(getRangeBox(m, mapIdxHigh - 1),
+                                     elements[0]) > 0;
         }
 
         /* Step 3b2: Now all accounting is done and we can actually insert the
@@ -1844,7 +1899,11 @@ DK_STATIC bool multimapFullInsertWithSurrogateKey_(
 bool multimapFullInsertWithSurrogateKey(
     multimapFull *m, const databox *elements[], const databox *insertKey,
     const multimapAtom *referenceContainer) {
-    const multimapFullIdx mapIdx = multimapFullBinarySearch(m, elements[0]);
+    /* A set's row goes by the whole row (see multimapFullInsertReplacing) */
+    const multimapFullIdx mapIdx =
+        m->mapIsSet ? multimapFullBinarySearchFullWidth_(m, elements,
+                                                         referenceContainer)
+                    : multimapFullBinarySearch(m, elements[0]);
     return multimapFullInsertWithSurrogateKey_(m, elements, insertKey, mapIdx,
                                                referenceContainer);
 }

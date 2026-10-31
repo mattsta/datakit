@@ -131,68 +131,57 @@ DK_STATIC size_t multimapMediumBinarySearchWithReference(
     return multimapMediumBinarySearch_(m, key, true, referenceContainer);
 }
 
-DK_STATIC size_t multimapMediumBinarySearchFullWidth(
-    multimapMedium *m, const databox *elements[]) {
-    /* We split the search space based on the head element of map[1],
-     * so if we're < element[x], use map[0], else use map[1] */
-    databox got;
-    databoxWide gotWide;
-    flexEntry *start = flexHead(m->map[1]);
-    size_t mapIdx = 1;
-
-    /* if head == tail, then map[1] has no elements and we use
-     * map[0] for insert / search. */
-    if (start == flexTail(m->map[1])) {
+/* The map a whole row belongs in: map 1 when its first row is at or
+ * below the row (every element compared, references resolved through
+ * 'referenceContainer' when given), else map 0.  A set routes its rows
+ * by this: its rows at one key can span both maps. */
+DK_INLINE_ALWAYS size_t multimapMediumBinarySearchFullWidth_(
+    multimapMedium *m, const databox *elements[],
+    const multimapAtom *referenceContainer) {
+    if (flexCount(m->map[1]) == 0) {
         return 0;
     }
 
-    flexGetByTypeInto(start, &got, &gotWide);
-
+    const flexEntry *at = flexHead(m->map[1]);
     for (size_t i = 0; i < m->elementsPerEntry; i++) {
+        databox got;
+        databoxWide gotWide;
+        multimapGetByTypeInto_(at, &got, &gotWide, referenceContainer);
         const int compared = databoxCompare(&got, elements[i]);
-
-        if (compared < 0) {
-            /* head of map 1 is < key, so insert into [1] */
-            /* [MAP 1 HEAD, NEW VALUE] */
-            mapIdx = 1;
-            break;
-        } else if (compared > 0) {
-            /* else, element of map 1 is > lookup key, so insert into [0] */
-            /* [NEW VALUE, MAP 1 HEAD] */
-            mapIdx = 0;
-            break;
-        } else { /* (compared == 0) */
-            if (i == (size_t)m->elementsPerEntry - 1) {
-                /* We found equal at max extent, so we are done. */
-                break;
-            }
-
-            start = flexNext(m->map[1], start);
-            assert(start);
-            flexGetByTypeInto(start, &got, &gotWide);
-            /* if same, loop again and check next element pair */
-            /* If this is the last loop, we were equal against every
-             * compare element, and we return mapIdx==1 as mapIdx
-             * is initialized to 1 above. */
+        if (compared != 0) {
+            return compared < 0 ? 1 : 0;
         }
+        at = flexNext(m->map[1], (flexEntry *)at);
     }
 
-    return mapIdx;
+    /* Equal to map 1's first row */
+    return 1;
+}
+
+DK_STATIC size_t multimapMediumBinarySearchFullWidth(
+    multimapMedium *m, const databox *elements[]) {
+    return multimapMediumBinarySearchFullWidth_(m, elements, nullptr);
 }
 
 void multimapMediumInsertWithSurrogateKey(
     multimapMedium *m, const databox *elements[], const databox *insertKey,
     const multimapAtom *referenceContainer) {
-    const size_t mapIdx = multimapMediumBinarySearchWithReference(
-        m, elements[0], referenceContainer);
+    const size_t mapIdx = m->mapIsSet ? multimapMediumBinarySearchFullWidth_(
+                                            m, elements, referenceContainer)
+                                      : multimapMediumBinarySearchWithReference(
+                                            m, elements[0], referenceContainer);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
-    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
-     * For sets (mapIsSet), compare all elements to check for full-width dups.
-     */
-    flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
-        &m->map[mapIdx], m->elementsPerEntry, elements, insertKey, &middle,
-        !m->mapIsSet, referenceContainer);
+    /* A map replaces the key's row; a set adds the row when absent */
+    if (m->mapIsSet) {
+        flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
+            &m->map[mapIdx], m->elementsPerEntry, elements, insertKey, &middle,
+            referenceContainer);
+    } else {
+        flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+            &m->map[mapIdx], m->elementsPerEntry, elements, insertKey, &middle,
+            true, referenceContainer);
+    }
     SET_MIDDLE(m, mapIdx, middle);
 }
 
@@ -225,7 +214,11 @@ bool multimapMediumInsert(multimapMedium *m, const databox *elements[]) {
  * overwritten value entries, a set (which never overwrites) reports VOID. */
 bool multimapMediumInsertReplacing(multimapMedium *m, const databox *elements[],
                                    databox *replacedOut) {
-    size_t mapIdx = multimapMediumBinarySearch(m, elements[0]);
+    /* A set's rows at one key can span both maps: a set row goes to the
+     * map its whole row belongs in */
+    const size_t mapIdx = m->mapIsSet
+                              ? multimapMediumBinarySearchFullWidth(m, elements)
+                              : multimapMediumBinarySearch(m, elements[0]);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
     /* Maps: key-only compare, found => replace values.  Sets: the
@@ -286,25 +279,30 @@ void multimapMediumInsertFullWidth(multimapMedium *m,
 DK_INLINE_ALWAYS void multimapMediumConform_(multimapMedium *m, size_t mapIdx);
 
 /* Whether 'key' sorts at or after the last row of the non-empty 'map' */
-static bool multimapMediumAtOrPastLast_(const flex *map,
-                                        multimapElements elementsPerEntry,
-                                        const databox *key) {
+/* Whether 'key' goes straight into 'map' as its last row: at or past
+ * its last key, or for a set strictly past it (a set's rows at the last
+ * key can reach back into map 0, so such a row goes where an insert puts
+ * it, which dedupes across both maps) */
+static bool multimapMediumAppendsLast_(const flex *map,
+                                       multimapElements elementsPerEntry,
+                                       const databox *key, const bool isSet) {
     if (flexCount(map) == 0) {
         return false;
     }
     databox last;
     databoxWide wide;
     flexGetByTypeInto(flexIndex(map, -(int32_t)elementsPerEntry), &last, &wide);
-    return databoxCompare(key, &last) >= 0;
+    const int vsLast = databoxCompare(key, &last);
+    return isSet ? vsLast > 0 : vsLast >= 0;
 }
 
 void multimapMediumAppend(multimapMedium *m, const databox *elements[]) {
     static constexpr size_t mapIdx = 1; /* always insert into highest map! */
 
-    /* The fast path is for a row at or past the last key; any other row
-     * goes where an insert puts it, so the maps stay ordered */
-    if (!multimapMediumAtOrPastLast_(m->map[mapIdx], m->elementsPerEntry,
-                                     elements[0])) {
+    /* The fast path is for a row past the last key; any other row goes
+     * where an insert puts it, so the maps stay ordered */
+    if (!multimapMediumAppendsLast_(m->map[mapIdx], m->elementsPerEntry,
+                                    elements[0], m->mapIsSet)) {
         multimapMediumInsert(m, elements);
         return;
     }

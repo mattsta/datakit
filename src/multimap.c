@@ -4770,6 +4770,16 @@ static int mmModelVerify_(const multimap *m, const mmModel_ *M, uint32_t step) {
     bool same = true;
     while (multimapIteratorNext(&it, got)) {
         if (i >= M->n || !mmModelRowIs_(M, &M->r[i], got)) {
+            if (same && i < M->n) { /* the first row that differs */
+                int64_t k = 0;
+                int64_t a = 0;
+                const bool kOk = mmModelInt_(got[0], &k);
+                const bool aOk = mmModelInt_(got[M->set ? 1 : 2], &a);
+                printf("  row %" PRIu32 ": the model's key %" PRId64
+                       " a %" PRId64 ", the multimap's key %" PRId64
+                       " (%d) a %" PRId64 " (%d)\n",
+                       i, M->r[i].k, M->r[i].a, k, kOk, a, aOk);
+            }
             same = false;
         }
         i++;
@@ -5299,10 +5309,22 @@ static int multimapTestModel_(bool set, flexCapSizeLimit limit, uint32_t seed) {
     cleanerName(zfree, MmModel) mmModel_ *M = zcalloc(1, sizeof(*M));
     M->set = set;
     const uint32_t epe = set ? 2 : 3;
+    /* SetNew takes the process default: made at the run's limit, which
+     * applies to the multimaps made after it */
+    const flexCapSizeLimit priorDefault = dkTierDefaultLimit(DK_TIER_MULTIMAP);
+    if (dkTierSetDefaultLimit(DK_TIER_MULTIMAP, limit) != DK_TIER_LIMIT_SET) {
+        ERR("%s", "the default limit was refused");
+    }
     multimap *m = seed % 2 ? multimapNewConfigure(epe, set, limit)
                   : set    ? multimapSetNew(epe)
                            : multimapNewLimit(epe, limit);
+    if (dkTierSetDefaultLimit(DK_TIER_MULTIMAP, priorDefault) !=
+        DK_TIER_LIMIT_SET) {
+        ERR("%s", "the default limit was not restored");
+    }
     mmModelRng_ = seed;
+    /* The random picks repeat with the run */
+    dkRandomTestReplay(seed);
     uint32_t tiers = 0;
     const uint32_t steps = 6000;
     for (uint32_t step = 0; step < steps && !err; step++) {
@@ -5371,8 +5393,7 @@ static int multimapTestModel_(bool set, flexCapSizeLimit limit, uint32_t seed) {
             }
             break;
         default:
-            if (multimapLimit(m) != limit &&
-                (seed % 2 || !set)) { /* SetNew takes the default limit */
+            if (multimapLimit(m) != limit) {
                 ERR("step %" PRIu32 ": the limit is %d, made with %d", step,
                     (int)multimapLimit(m), (int)limit);
             }
@@ -5382,19 +5403,18 @@ static int multimapTestModel_(bool set, flexCapSizeLimit limit, uint32_t seed) {
     }
     err += mmModelVerify_(m, M, steps);
     multimapFree(m);
-    /* A SetNew set has the default limit: Medium, then, is as far as the
-     * model's rows reach */
-    const multimapType top =
-        seed % 2 || !set ? MULTIMAP_TYPE_FULL : MULTIMAP_TYPE_MEDIUM;
-    if (!(tiers & (1u << top)) || !(tiers & (1u << MULTIMAP_TYPE_SMALL))) {
-        ERR("the %s model did not run through every tier (seen %#x)",
-            set ? "set" : "map", tiers);
+    if (!(tiers & (1u << MULTIMAP_TYPE_FULL)) ||
+        !(tiers & (1u << MULTIMAP_TYPE_SMALL))) {
+        ERR("the %s model did not run through every tier (seen %#x, seed "
+            "%" PRIu32 ")",
+            set ? "set" : "map", tiers, seed);
     }
     for (size_t e = 0; e < countof(M->events); e++) {
         if (!M->events[e]) {
             ERR("configuration event %zu never ran", e);
         }
     }
+    dkRandomTestLive();
     return err;
 }
 
@@ -5518,6 +5538,7 @@ static int multimapTestModelRef_(uint32_t seed) {
     cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
     multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
     mmModelRng_ = seed;
+    dkRandomTestReplay(seed);
     uint32_t tiers = 0;
     const uint32_t steps = 4000;
     for (uint32_t step = 0; step < steps && !err; step++) {
@@ -5649,6 +5670,7 @@ static int multimapTestModelRef_(uint32_t seed) {
             ERR("reference event %zu never ran", e);
         }
     }
+    dkRandomTestLive();
     return err;
 }
 
@@ -10739,6 +10761,70 @@ int multimapTest(int, char *[]) {
         }
     }
 
+    TEST("a set of atom references holds each row once, in order, every "
+         "tier") {
+        /* Rows [word, n] stored as [reference, n], a word's rows spanning
+         * the inner maps: each inserted several times */
+        constexpr uint32_t words = 40;
+        constexpr uint32_t values = 6;
+        char word[words][8] = {};
+        databox ref[words];
+        bool held[words][values] = {};
+        cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+        for (uint32_t i = 0; i < words; i++) {
+            for (uint32_t j = 0; j < 1 + (i * 7) % 5; j++) {
+                word[i][j] = (char)('a' + (i * 11 + j * 5) % 26);
+            }
+            ref[i] = databoxNewBytesString(word[i]);
+            multimapAtomInsertConvert(atoms, &ref[i]);
+        }
+        cleaner(multimapFree) multimap *m =
+            multimapNewConfigure(2, true, FLEX_CAP_LEVEL_256);
+        uint64_t rng = 5;
+        uint32_t distinct = 0;
+        uint32_t tiers = 0;
+        for (uint32_t step = 0; step < 3000; step++) {
+            const uint64_t r = dkSplitmix64Next(&rng);
+            const uint32_t w = (uint32_t)(r % words);
+            const uint32_t v = (uint32_t)((r >> 16) % values);
+            const databox key = databoxNewBytesString(word[w]);
+            const databox val = databoxNewUnsigned(v);
+            const databox *row[2] = {&key, &val};
+            multimapInsertWithSurrogateKey(&m, row, &ref[w], atoms);
+            distinct += !held[w][v];
+            held[w][v] = true;
+            tiers |= 1u << multimapGetType(m);
+        }
+        if (!(tiers & (1u << MULTIMAP_TYPE_FULL)) ||
+            multimapCount(m) != distinct) {
+            ERR("the set holds %zu rows of %" PRIu32 " (tiers %#x)",
+                multimapCount(m), distinct, tiers);
+        }
+        multimapIterator it;
+        multimapIteratorInit(m, &it, true);
+        databox got[2] = {};
+        databox *gotp[2] = {&got[0], &got[1]};
+        databox prevKey = {};
+        uint64_t prevV = 0;
+        uint32_t rows = 0;
+        while (multimapIteratorNext(&it, gotp)) {
+            databox resolved = {};
+            const bool known = multimapAtomLookup(atoms, &got[0], &resolved);
+            const int vsPrev = rows ? databoxCompare(&resolved, &prevKey) : 1;
+            if (!known || vsPrev < 0 ||
+                (vsPrev == 0 && got[1].data.u64 <= prevV)) {
+                ERR("row %" PRIu32 " is out of order or repeated", rows);
+                break;
+            }
+            prevKey = resolved;
+            prevV = got[1].data.u64;
+            rows++;
+        }
+        if (rows != distinct) {
+            ERR("iteration gave %" PRIu32 " rows of %" PRIu32, rows, distinct);
+        }
+    }
+
     TEST("model: every public call against a sorted array, maps and sets, "
          "every tier") {
         for (uint32_t seed = 1; seed <= 4; seed++) {
@@ -10747,6 +10833,9 @@ int multimapTest(int, char *[]) {
             err += multimapTestModel_(true, FLEX_CAP_LEVEL_256, seed + 10);
         }
         err += multimapTestModel_(false, FLEX_CAP_LEVEL_2048, 21);
+        /* A Medium set appended a row at its last key while that key's
+         * rows reached back into map 0 */
+        err += multimapTestModel_(true, FLEX_CAP_LEVEL_512, 153);
         /* A map of atom references, through its WithReference calls */
         for (uint32_t seed = 31; seed <= 33; seed++) {
             err += multimapTestModelRef_(seed);

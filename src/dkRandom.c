@@ -53,9 +53,26 @@ typedef struct dkRandomThread {
 static thread_local dkRandomThread dkRandomTls = {.blockUsed =
                                                       DK_RANDOM_BLOCK_WORDS};
 
+#ifdef DATAKIT_TEST
+/* dkRandomTestReplay's stream, read only by a refill */
+static thread_local bool dkRandomReplaying_;
+static thread_local uint64_t dkRandomReplayState_;
+#endif
+
 /* Out of line so the draw path stays a load, a compare and a return. */
 [[gnu::noinline]] static void dkRandomRefill(dkRandomThread *const t,
                                              const uint64_t generation) {
+#ifdef DATAKIT_TEST
+    if (dkRandomReplaying_) {
+        for (uint32_t i = 0; i < DK_RANDOM_BLOCK_WORDS; i++) {
+            t->block[i] = dkSplitmix64Next(&dkRandomReplayState_);
+        }
+        t->blockUsed = 0;
+        t->blockGeneration = generation;
+        return;
+    }
+#endif
+
     if (!t->seeded) {
         /* Seed with the real pid, never -1: portableRandom skips its
          * fork check for a state initialised with -1, and that check is
@@ -226,8 +243,45 @@ static bool dkRandomTestForkedNextWord(uint64_t *childWord,
     return true;
 }
 
+/* A replay or its end takes effect at the next draw: the block is
+ * refilled */
+void dkRandomTestReplay(const uint64_t seed) {
+    dkRandomReplaying_ = true;
+    dkRandomReplayState_ = seed;
+    dkRandomTls.blockUsed = DK_RANDOM_BLOCK_WORDS;
+}
+
+void dkRandomTestLive(void) {
+    dkRandomReplaying_ = false;
+    dkRandomTls.blockUsed = DK_RANDOM_BLOCK_WORDS;
+}
+
 int dkRandomTest(int, char *[]) {
     int err = 0;
+
+    TEST("dkRandomTestReplay repeats a run's draws; Live ends it") {
+        uint64_t first[DK_RANDOM_BLOCK_WORDS + 3];
+        uint64_t again[DK_RANDOM_BLOCK_WORDS + 3];
+        uint64_t state = 99;
+        dkRandomTestReplay(99);
+        for (size_t i = 0; i < countof(first); i++) {
+            first[i] = dkRandom64();
+        }
+        dkRandomTestReplay(99);
+        for (size_t i = 0; i < countof(again); i++) {
+            again[i] = dkRandom64();
+        }
+        dkRandomTestLive();
+        for (size_t i = 0; i < countof(first); i++) {
+            if (first[i] != again[i] || first[i] != dkSplitmix64Next(&state)) {
+                ERR("replayed draw %zu differs", i);
+            }
+        }
+        /* Live again: not the replay's next value */
+        if (dkRandom64() == dkSplitmix64Next(&state)) {
+            ERR("%s", "the live generator gave the replay's next draw");
+        }
+    }
 
     TEST("dkXorshift64Next / dkXorshift32Next replay Marsaglia's xorshift") {
         /* From 1, worked by hand: 1 ^ 1<<13 = 8193; ^ >>7 = 8257;

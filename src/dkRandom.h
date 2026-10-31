@@ -143,4 +143,10 @@ uint64_t dkSplitmix64Bounded(uint64_t *state, uint64_t bound);
 
 #ifdef DATAKIT_TEST
 int dkRandomTest(int argc, char *argv[]);
+/* For a test run that must repeat (a model test that takes whatever row
+ * a random pick gives): this thread's draws come from the replayable
+ * stream dkSplitmix64Next from 'seed', from the next draw on, until
+ * dkRandomTestLive returns them to the thread's generator */
+void dkRandomTestReplay(uint64_t seed);
+void dkRandomTestLive(void);
 #endif
