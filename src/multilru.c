@@ -2029,6 +2029,608 @@ static void mlruAgeOnEvict_(multilruPtr evicted, void *userData) {
     }
 }
 
+/* ====================================================================
+ * The model test: random sequences of every public call against a plain
+ * model of the levels (each a list, oldest first), the shares, the
+ * strategies, the free handles and the counters; after each step the
+ * whole state is compared
+ * ==================================================================== */
+static constexpr uint32_t LM_CAP = 2048; /* handles the model keeps */
+static constexpr uint32_t LM_LEVELS_MAX = 8;
+
+typedef struct lmModel_ {
+    uint32_t levels;
+    bool weightsOn;
+    bool unbounded;
+    bool autoEvict;
+    multilruPolicy policy;
+    multilruEvictStrategy strategy;
+    uint64_t maxCount;
+    uint64_t maxWeight;
+    uint64_t count;
+    uint64_t totalWeight;
+    uint64_t nextFresh;
+    uint32_t freeTop;
+    uint64_t inserts, evictions, demotions, promotions, deletes;
+    int32_t level[LM_CAP]; /* -1: not an entry */
+    uint64_t weight[LM_CAP];
+    uint32_t free[LM_CAP]; /* free[freeTop - 1] is reused first */
+    uint32_t n[LM_LEVELS_MAX];
+    uint64_t levelWeight[LM_LEVELS_MAX];
+    uint32_t list[LM_LEVELS_MAX][LM_CAP]; /* oldest first */
+    /* Evictions the model made and the callback reported, in order */
+    uint32_t evicted[64];
+    uint32_t evictedN;
+    uint32_t told[64];
+    uint32_t toldN;
+    bool callbackOn;
+    uint32_t events[10];
+} lmModel_;
+
+defcleanerName(lmModel_ *, zfree, LmModel);
+typedef struct lmMoves_ lmMoves_;
+defcleanerName(lmMoves_ *, zfree, LmMoves);
+
+static uint64_t lmRng_;
+static uint32_t lmRand_(void) {
+    return (uint32_t)splitmix64(&lmRng_);
+}
+
+static bool lmValid_(const lmModel_ *M, uint64_t h) {
+    return h > M->levels && h < M->nextFresh && h < LM_CAP && M->level[h] >= 0;
+}
+
+static void lmRemove_(lmModel_ *M, uint32_t h) {
+    const int32_t l = M->level[h];
+    uint32_t *list = M->list[l];
+    uint32_t i = 0;
+    while (list[i] != h) {
+        i++;
+    }
+    memmove(&list[i], &list[i + 1], (M->n[l] - i - 1) * sizeof(list[0]));
+    M->n[l]--;
+    if (M->weightsOn) {
+        M->levelWeight[l] -= M->weight[h];
+    }
+}
+
+static void lmInsertHead_(lmModel_ *M, uint32_t h, uint32_t l) {
+    M->list[l][M->n[l]++] = h;
+    M->level[h] = (int32_t)l;
+    if (M->weightsOn) {
+        M->levelWeight[l] += M->weight[h];
+    }
+}
+
+static bool lmOverShare_(const lmModel_ *M, uint32_t l) {
+    if (M->weightsOn && M->policy != MLRU_POLICY_COUNT) {
+        uint64_t scaled;
+        return M->n[l] > 1 && M->levelWeight[l] > 0 &&
+               (ckd_mul(&scaled, M->levelWeight[l] - 1, (uint64_t)M->levels) ||
+                scaled >= M->totalWeight);
+    }
+    return M->n[l] > 0 && (uint64_t)(M->n[l] - 1) * M->levels >= M->count;
+}
+
+static void lmBalanceDown_(lmModel_ *M, uint32_t l) {
+    if (M->unbounded) {
+        return;
+    }
+    while (l > 0 && lmOverShare_(M, l)) {
+        const uint32_t oldest = M->list[l][0];
+        lmRemove_(M, oldest);
+        lmInsertHead_(M, oldest, l - 1);
+        M->demotions++;
+        l--;
+    }
+}
+
+static uint32_t lmVictim_(const lmModel_ *M) {
+    uint32_t l = 0;
+    while (l < M->levels && M->n[l] == 0) {
+        l++;
+    }
+    if (l == M->levels) {
+        return 0;
+    }
+    const uint32_t coldest = M->list[l][0];
+    if (!M->weightsOn || (M->strategy != MLRU_EVICT_SIZE_WEIGHTED &&
+                          M->strategy != MLRU_EVICT_SIZE_LRU)) {
+        return coldest;
+    }
+    const uint64_t excess = M->maxWeight && M->totalWeight > M->maxWeight
+                                ? M->totalWeight - M->maxWeight
+                                : 0;
+    if (M->strategy == MLRU_EVICT_SIZE_LRU && !excess) {
+        return coldest;
+    }
+    uint32_t heaviest = coldest;
+    for (uint32_t i = 0; i < 8 && i < M->n[l]; i++) {
+        const uint32_t h = M->list[l][i];
+        if (M->strategy == MLRU_EVICT_SIZE_LRU && M->weight[h] >= excess) {
+            return h;
+        }
+        if (M->weight[h] > M->weight[heaviest]) {
+            heaviest = h;
+        }
+    }
+    return heaviest;
+}
+
+static void lmDecrease_(lmModel_ *M, uint32_t h) {
+    const int32_t l = M->level[h];
+    if (l <= 0) {
+        return;
+    }
+    lmRemove_(M, h);
+    lmInsertHead_(M, h, (uint32_t)l - 1);
+    M->demotions++;
+    lmBalanceDown_(M, (uint32_t)l - 1);
+}
+
+/* Free 'h': gone from its level, its weight and its count */
+static void lmRelease_(lmModel_ *M, uint32_t h) {
+    lmRemove_(M, h);
+    if (M->weightsOn) {
+        M->totalWeight -= M->weight[h];
+    }
+    M->weight[h] = 0;
+    M->level[h] = -1;
+    M->count--;
+    M->free[M->freeTop++] = h;
+}
+
+static bool lmRemoveMinimum_(lmModel_ *M, uint32_t *out) {
+    const uint32_t v = lmVictim_(M);
+    if (!v) {
+        return false;
+    }
+    *out = v;
+    if (M->level[v] > 0) {
+        lmDecrease_(M, v);
+        return true;
+    }
+    lmRelease_(M, v);
+    M->evictions++;
+    if (M->callbackOn && M->evictedN < countof(M->evicted)) {
+        M->evicted[M->evictedN++] = v;
+    }
+    return true;
+}
+
+static bool lmNeedsEviction_(const lmModel_ *M) {
+    const bool overCount = M->maxCount > 0 && M->count > M->maxCount;
+    const bool overWeight = M->maxWeight > 0 && M->totalWeight > M->maxWeight;
+    return M->policy == MLRU_POLICY_COUNT  ? overCount
+           : M->policy == MLRU_POLICY_SIZE ? overWeight
+                                           : overCount || overWeight;
+}
+
+static uint32_t lmInsert_(lmModel_ *M, uint64_t weight) {
+    const uint32_t h =
+        M->freeTop ? M->free[--M->freeTop] : (uint32_t)M->nextFresh++;
+    M->weight[h] = M->weightsOn ? weight : 0;
+    M->totalWeight += M->weight[h];
+    lmInsertHead_(M, h, 0);
+    M->count++;
+    M->inserts++;
+    while (M->autoEvict && lmNeedsEviction_(M) && M->count > 0) {
+        uint32_t out;
+        if (!lmRemoveMinimum_(M, &out)) {
+            break;
+        }
+    }
+    return M->level[h] >= 0 ? h : 0;
+}
+
+/* The eviction callback: what the multilru reports, in order */
+static void lmTold_(multilruPtr evicted, void *ctx) {
+    lmModel_ *M = ctx;
+    if (M->toldN < countof(M->told)) {
+        M->told[M->toldN++] = (uint32_t)evicted;
+    }
+}
+
+/* A repack's moves, applied to the model all at once */
+struct lmMoves_ {
+    uint32_t to[LM_CAP]; /* 0: not moved */
+    bool bad;
+};
+
+static void lmMoved_(multilruPtr from, multilruPtr to, void *ctx) {
+    lmMoves_ *mv = ctx;
+    if (from >= LM_CAP || to >= LM_CAP) {
+        mv->bad = true;
+        return;
+    }
+    mv->to[from] = (uint32_t)to;
+}
+
+/* @model: src/multilru.h */
+/* The multilru's whole state is the model's */
+static int lmVerify_(const multilru *lru, const lmModel_ *M, uint32_t step) {
+    int err = 0;
+    static multilruPtr got[LM_CAP];
+    uint32_t want[LM_CAP];
+    uint32_t w = 0;
+    for (uint32_t l = 0; l < M->levels; l++) {
+        for (uint32_t i = 0; i < M->n[l]; i++) {
+            want[w++] = M->list[l][i];
+        }
+    }
+    bool same = multilruCollectLowest(lru, got, LM_CAP) == w;
+    for (uint32_t i = 0; same && i < w; i++) {
+        same = got[i] == want[i];
+    }
+    /* Highest: the top level newest first, then down */
+    uint32_t hw = 0;
+    for (uint32_t l = M->levels; same && l-- > 0;) {
+        for (uint32_t i = M->n[l]; i-- > 0;) {
+            want[hw++] = M->list[l][i];
+        }
+    }
+    same = same && multilruCollectHighest(lru, got, LM_CAP) == hw;
+    for (uint32_t i = 0; same && i < hw; i++) {
+        same = got[i] == want[i];
+    }
+    for (uint32_t l = 0; same && l < M->levels; l++) {
+        same =
+            multilruLevelCount(lru, l) == M->n[l] &&
+            (!M->weightsOn || multilruLevelWeight(lru, l) == M->levelWeight[l]);
+    }
+    for (uint32_t h = M->levels + 1; same && h < M->nextFresh; h++) {
+        const bool live = M->level[h] >= 0;
+        same = multilruIsPopulated(lru, h) == live &&
+               (!live ||
+                (multilruGetLevel(lru, h) == (size_t)M->level[h] &&
+                 (!M->weightsOn || multilruGetWeight(lru, h) == M->weight[h])));
+    }
+    multilruPtr freed[LM_CAP];
+    const size_t frees = multilruFreeHandles(lru, freed, LM_CAP);
+    same = same && frees == M->freeTop;
+    for (uint32_t i = 0; same && i < frees; i++) {
+        same = freed[i] == M->free[M->freeTop - 1 - i];
+    }
+    multilruStats st = {};
+    multilruGetStats(lru, &st);
+    const bool checks[] = {
+        same,
+        st.count == M->count && multilruCount(lru) == M->count,
+        multilruTotalWeight(lru) == M->totalWeight,
+        st.nextFresh == M->nextFresh,
+        st.inserts == M->inserts && st.evictions == M->evictions,
+        st.demotions == M->demotions,
+        st.promotions == M->promotions && st.deletes == M->deletes,
+        multilruPeekMinimum(lru) == lmVictim_(M),
+        multilruPeekNextHandle(lru) ==
+            (M->freeTop ? M->free[M->freeTop - 1] : M->nextFresh),
+        multilruNeedsEviction(lru) == lmNeedsEviction_(M),
+        multilruHasWeights(lru) == M->weightsOn &&
+            multilruMaxLevels(lru) == M->levels,
+        multilruCapacity(lru) >= M->nextFresh && multilruBytes(lru) > 0 &&
+            (int)multilruGetEntryWidth(lru) >= 5,
+        M->toldN == M->evictedN &&
+            memcmp(M->told, M->evicted, M->toldN * sizeof(M->told[0])) == 0};
+    for (size_t c = 0; c < countof(checks); c++) {
+        if (!checks[c]) {
+            ERR("model step %" PRIu32 ": state check %zu disagrees (%" PRIu64
+                " entries; demotions %" PRIu64 "/%" PRIu64
+                ", evictions %" PRIu64 "/%" PRIu64 ", told %" PRIu32 "/%" PRIu32
+                ")",
+                step, c, M->count, st.demotions, M->demotions, st.evictions,
+                M->evictions, M->toldN, M->evictedN);
+        }
+    }
+    return err;
+}
+
+/* A live handle at random (0 when none), or now and then a stale one */
+static uint32_t lmPick_(const lmModel_ *M, uint32_t r) {
+    if (r % 16 == 0 && M->freeTop) {
+        return M->free[r % M->freeTop]; /* freed: every call a no-op */
+    }
+    uint32_t l = r % M->levels;
+    for (uint32_t k = 0; k < M->levels; k++, l = (l + 1) % M->levels) {
+        if (M->n[l]) {
+            return M->list[l][(r >> 8) % M->n[l]];
+        }
+    }
+    return 0;
+}
+
+/* @model: src/multilru.h */
+/* One random call against the model; true when it agreed */
+static bool lmStep_(multilru *lru, lmModel_ *M, uint32_t op) {
+    const uint32_t r = lmRand_();
+    const uint32_t h = lmPick_(M, r);
+    const bool valid = lmValid_(M, h);
+    bool ok = true;
+    switch (op) {
+    case 0:
+    case 1:
+    case 2: {
+        const uint64_t weight = 1 + (r >> 4) % 100;
+        const multilruPtr p =
+            op == 0 ? multilruInsert(lru) : multilruInsertWeighted(lru, weight);
+        ok = p == lmInsert_(M, op == 0 ? 0 : weight);
+        break;
+    }
+    case 3:
+    case 4:
+        multilruIncrease(lru, h);
+        if (valid) {
+            const uint32_t cur = (uint32_t)M->level[h];
+            const uint32_t target = cur + 1 < M->levels ? cur + 1 : cur;
+            M->promotions += target > cur;
+            lmRemove_(M, h);
+            lmInsertHead_(M, h, target);
+            lmBalanceDown_(M, target);
+        }
+        break;
+    case 5:
+        multilruDecrease(lru, h);
+        if (valid) {
+            lmDecrease_(M, h);
+        }
+        break;
+    case 6: {
+        const uint32_t level = (r >> 4) % (M->levels + 1); /* one past: no */
+        const bool can = valid && level < M->levels;
+        ok = multilruPlace(lru, h, level) == can;
+        if (can) {
+            lmRemove_(M, h);
+            lmInsertHead_(M, h, level);
+        }
+        break;
+    }
+    case 7:
+        multilruDelete(lru, h);
+        if (valid) {
+            lmRelease_(M, h);
+            M->deletes++;
+        }
+        break;
+    case 8: {
+        multilruPtr out = 0;
+        uint32_t want = 0;
+        const bool took = multilruRemoveMinimum(lru, &out);
+        ok = took == lmRemoveMinimum_(M, &want) && (!took || out == want);
+        break;
+    }
+    case 9:
+        multilruUpdateWeight(lru, h, (r >> 4) % 200);
+        if (valid && M->weightsOn) {
+            const uint64_t nw = (r >> 4) % 200;
+            M->totalWeight = M->totalWeight - M->weight[h] + nw;
+            M->levelWeight[M->level[h]] =
+                M->levelWeight[M->level[h]] - M->weight[h] + nw;
+            M->weight[h] = nw;
+        }
+        break;
+    case 10: { /* a few true evictions, demotions on the way */
+        multilruPtr out[4];
+        const size_t want = 1 + (r >> 4) % 4;
+        const size_t got = multilruEvictN(lru, out, want);
+        size_t n = 0;
+        while (n < want && M->count > 0) {
+            uint32_t p;
+            if (!lmRemoveMinimum_(M, &p)) {
+                break;
+            }
+            if (M->level[p] < 0) {
+                ok = ok && n < got && out[n] == p;
+                n++;
+            }
+        }
+        ok = ok && got == n;
+        break;
+    }
+    case 11: { /* down to a weight */
+        multilruPtr out[4];
+        const uint64_t target = M->totalWeight * ((r >> 4) % 8) / 10;
+        const size_t got = multilruEvictToSize(lru, target, out, 4);
+        size_t n = 0;
+        while (M->weightsOn && n < 4 && M->totalWeight > target &&
+               M->count > 0) {
+            uint32_t p;
+            if (!lmRemoveMinimum_(M, &p)) {
+                break;
+            }
+            if (M->level[p] < 0) {
+                ok = ok && n < got && out[n] == p;
+                n++;
+            }
+        }
+        ok = ok && got == n;
+        break;
+    }
+    default:
+        break;
+    }
+    return ok;
+}
+
+/* @model: src/multilru.h */
+/* A setting changed under the entries, or the handles repacked */
+static bool lmConfigure_(multilru *lru, lmModel_ *M, uint32_t event) {
+    const uint32_t r = lmRand_();
+    bool ok = true;
+    switch (event) {
+    case 0: { /* a policy; a size policy turns weights on (all weigh 0) */
+        static const multilruPolicy policies[] = {
+            MLRU_POLICY_COUNT, MLRU_POLICY_SIZE, MLRU_POLICY_HYBRID};
+        const multilruPolicy p = policies[r % countof(policies)];
+        multilruSetPolicy(lru, p);
+        if (p != MLRU_POLICY_COUNT && !M->weightsOn) {
+            M->weightsOn = true;
+            memset(M->weight, 0, sizeof(M->weight));
+            memset(M->levelWeight, 0, sizeof(M->levelWeight));
+            M->totalWeight = 0;
+        }
+        M->policy = p;
+        ok = multilruGetPolicy(lru) == p;
+        break;
+    }
+    case 1: {
+        static const multilruEvictStrategy strategies[] = {
+            MLRU_EVICT_LRU, MLRU_EVICT_SIZE_WEIGHTED, MLRU_EVICT_SIZE_LRU};
+        const multilruEvictStrategy s = strategies[r % countof(strategies)];
+        multilruSetEvictStrategy(lru, s);
+        if (s != MLRU_EVICT_LRU && !M->weightsOn) {
+            M->weightsOn = true;
+            memset(M->weight, 0, sizeof(M->weight));
+            memset(M->levelWeight, 0, sizeof(M->levelWeight));
+            M->totalWeight = 0;
+        }
+        M->strategy = s;
+        ok = multilruGetEvictStrategy(lru) == s;
+        break;
+    }
+    case 2: /* a count limit, or none */
+        M->maxCount = r % 3 ? 100 + (r >> 4) % 400 : 0;
+        multilruSetMaxCount(lru, M->maxCount);
+        ok = multilruGetMaxCount(lru) == M->maxCount;
+        break;
+    case 3:
+        M->maxWeight = r % 3 ? 2000 + (r >> 4) % 8000 : 0;
+        multilruSetMaxWeight(lru, M->maxWeight);
+        ok = multilruGetMaxWeight(lru) == M->maxWeight;
+        break;
+    case 4:
+        M->autoEvict = r % 4 != 0;
+        multilruSetAutoEvict(lru, M->autoEvict);
+        ok = multilruGetAutoEvict(lru) == M->autoEvict;
+        break;
+    case 5:
+        M->unbounded = r % 3 == 0;
+        multilruSetUnboundedLevels(lru, M->unbounded);
+        ok = multilruGetUnboundedLevels(lru) == M->unbounded;
+        break;
+    case 6: { /* repacked: the moved handles renamed in the model */
+        cleanerName(zfree, LmMoves) lmMoves_ *mv = zcalloc(1, sizeof(*mv));
+        (void)multilruRepack(lru, lmMoved_, mv);
+        ok = !mv->bad;
+        static lmModel_ old;
+        old = *M;
+        for (uint32_t h = 0; h < LM_CAP; h++) {
+            M->level[h] = -1;
+            M->weight[h] = 0;
+        }
+        for (uint32_t l = 0; l < M->levels; l++) {
+            for (uint32_t i = 0; i < M->n[l]; i++) {
+                const uint32_t from = old.list[l][i];
+                const uint32_t to = mv->to[from] ? mv->to[from] : from;
+                M->list[l][i] = to;
+                M->level[to] = (int32_t)l;
+                M->weight[to] = old.weight[from];
+            }
+        }
+        M->freeTop = 0;
+        M->nextFresh = M->levels + 1 + M->count;
+        break;
+    }
+    case 7:
+        multilruResetCounters(lru);
+        M->inserts = M->evictions = M->demotions = M->promotions = M->deletes =
+            0;
+        break;
+    case 8: /* the eviction callback on or off */
+        M->callbackOn = r % 2;
+        if (M->callbackOn) {
+            multilruSetEvictCallback(lru, lmTold_, M);
+        } else {
+            multilruSetEvictCallback(lru, nullptr, nullptr);
+        }
+        M->evictedN = M->toldN = 0;
+        M->events[9] += r % 2; /* on, at least once */
+        break;
+    default:
+        break;
+    }
+    return ok;
+}
+
+/* @model: src/multilru.h */
+/* A multilru of 'levels', made by each constructor in turn (seed % 4 ==
+ * 3: weights on from the start) */
+static multilru *lmNew_(uint32_t levels, uint64_t seed) {
+    switch (seed % 4) {
+    case 0:
+        /* @own: caller; free=multilruFree */
+        return levels == 7 ? multilruNew() : multilruNewWithLevels(levels);
+    case 1:
+        /* @own: caller; free=multilruFree */
+        return multilruNewWithLevelsCapacity(levels, 64);
+    default: {
+        const multilruConfig config = {.maxLevels = levels,
+                                       .enableWeights = seed % 4 == 3};
+        /* @own: caller; free=multilruFree */
+        return multilruNewWithConfig(&config);
+    }
+    }
+}
+
+/* @model: src/multilru.h */
+static int multilruTestModel_(uint32_t levels, uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, LmModel) lmModel_ *M = zcalloc(1, sizeof(*M));
+    M->levels = levels;
+    M->autoEvict = true;
+    M->nextFresh = levels + 1;
+    for (uint32_t h = 0; h < LM_CAP; h++) {
+        M->level[h] = -1;
+    }
+    lmRng_ = seed;
+    cleaner(multilruFree) multilru *lru = lmNew_(levels, seed);
+    M->weightsOn = seed % 4 == 3;
+    /* The callback compares with the model's own evictions */
+    multilruSetEvictCallback(lru, lmTold_, M);
+    M->callbackOn = true;
+    const uint32_t steps = 5000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        uint32_t op = lmRand_() % 13;
+        if (M->nextFresh + 4 >= LM_CAP && op <= 2) {
+            op = 7; /* a delete: the model's handles stay in range */
+        }
+        if (!lmStep_(lru, M, op)) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " disagreed (%" PRIu64
+                " entries, seed %" PRIu64 ")",
+                step, op, M->count, seed);
+            break;
+        }
+        if (step % 50 == 49 || op == 8 || op == 10) {
+            if (lmVerify_(lru, M, step)) {
+                ERR("model step %" PRIu32 ": after op %" PRIu32
+                    " (seed %" PRIu64 ")",
+                    step, op, seed);
+                break;
+            }
+        }
+        if (M->evictedN > 48 || M->toldN > 48) {
+            M->evictedN = M->toldN = 0; /* compared above, start over */
+        }
+        if (step % 41 != 40) {
+            continue;
+        }
+        const uint32_t event = lmRand_() % 9;
+        M->events[event]++;
+        if (!lmConfigure_(lru, M, event)) {
+            ERR("model step %" PRIu32 ": configuration event %" PRIu32
+                " disagreed (seed %" PRIu64 ")",
+                step, event, seed);
+            break;
+        }
+        err += lmVerify_(lru, M, step);
+    }
+    err += lmVerify_(lru, M, steps);
+    for (size_t e = 0; e < 9; e++) {
+        if (!M->events[e]) {
+            ERR("configuration event %zu never ran", e);
+        }
+    }
+    return err;
+}
+
 int multilruTest(int, char *[]) {
     int err = 0;
 
@@ -4682,6 +5284,15 @@ int multilruTest(int, char *[]) {
     /* ----------------------------------------------------------------
      * Production Eviction Workflow Tests
      * ---------------------------------------------------------------- */
+
+    TEST("model: every public call against a model of the levels") {
+        static const uint32_t levelCounts[] = {1, 3, 7};
+        for (size_t i = 0; i < countof(levelCounts); i++) {
+            for (uint64_t seed = 0; seed < 4; seed++) {
+                err += multilruTestModel_(levelCounts[i], 40 + 4 * i + seed);
+            }
+        }
+    }
 
     TEST("an eviction callback that calls into the multilru keeps it "
          "consistent") {
