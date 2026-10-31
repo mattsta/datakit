@@ -502,7 +502,9 @@ its wide capability.
 ## Copy and Merge
 
 ```c
-/* Deep copy, including the dictionary's configuration */
+/* Deep copy, including the dictionary's configuration: load factors,
+ * byte-based expansion, the resize switch, the memory limit, eviction
+ * policy and callback, and LRU tracking with its order and levels */
 multidict *multidictCopy(const multidict *src);
 
 typedef enum {
@@ -697,11 +699,11 @@ slot count. A false return is a normal outcome, not an error to abort on.
 ### Resize Control
 
 ```c
-/* Enable automatic resizing */
+/* This dict's automatic resizing on or off (dicts sharing its class keep
+ * their own; the class's disableResize turns it off for all of them) */
 void multidictResizeEnable(multidict *d);
-
-/* Disable automatic resizing */
 void multidictResizeDisable(multidict *d);
+bool multidictResizeEnabled(const multidict *d);
 
 /* Example: Disable resizing during bulk operations */
 multidictResizeDisable(d);

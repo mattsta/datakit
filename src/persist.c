@@ -5036,6 +5036,7 @@ typedef enum mdPersistSetting {
     MD_PS_BYTE_TARGET,
     MD_PS_BYTE_MAX,
     MD_PS_LRU_LEVELS, /* 0: no LRU tracking */
+    MD_PS_AUTO_RESIZE,
     MD_PERSIST_SETTINGS
 } mdPersistSetting;
 
@@ -5138,6 +5139,7 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
         [MD_PS_BYTE_TARGET] = byteTarget,
         [MD_PS_BYTE_MAX] = byteMax,
         [MD_PS_LRU_LEVELS] = multidictLRULevels(d),
+        [MD_PS_AUTO_RESIZE] = multidictResizeEnabled(d),
     };
     flexRow row = FLEX_ROW_INIT;
     for (size_t i = 0; i < MD_PERSIST_SETTINGS; i++) {
@@ -5252,7 +5254,8 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         }
     }
     if (s[MD_PS_EVICT_POLICY] > MULTIDICT_EVICT_SIZE_LRU ||
-        s[MD_PS_BY_BYTES] > 1 || s[MD_PS_LRU_LEVELS] > MULTILRU_LEVELS_MAX) {
+        s[MD_PS_BY_BYTES] > 1 || s[MD_PS_LRU_LEVELS] > MULTILRU_LEVELS_MAX ||
+        s[MD_PS_AUTO_RESIZE] > 1) {
         return nullptr;
     }
     count -= 2 + MD_PERSIST_SETTINGS;
@@ -5365,6 +5368,9 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
 
     multidictSetMaxMemory(d, s[MD_PS_MAX_MEMORY]);
     multidictSetEvictPolicy(d, (multidictEvictPolicy)s[MD_PS_EVICT_POLICY]);
+    if (!s[MD_PS_AUTO_RESIZE]) {
+        multidictResizeDisable(d); /* after the pairs, which it sized for */
+    }
     return d;
 }
 

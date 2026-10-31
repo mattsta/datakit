@@ -488,6 +488,7 @@ void multidictPrintStats(multidict *d);
  * resizing off for all of them) */
 void multidictResizeEnable(multidict *d);
 void multidictResizeDisable(multidict *d);
+bool multidictResizeEnabled(const multidict *d);
 /* The count-based load factors, as entries per 100 slots: the table grows
  * once it holds 'expandPercent' (50 to 65535) and shrinks below
  * 'shrinkPercent' (at most 255, and at most a quarter of expandPercent);

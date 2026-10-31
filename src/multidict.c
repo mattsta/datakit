@@ -3037,6 +3037,12 @@ static bool multidictLRUSelectVictimBySize(multidict *d, mdLRUCandidates *cands,
  * ==================================================================== */
 
 /* Deep copy entire dictionary */
+/* multidictLRUWalk visit placing each key in the dict 'ctx' */
+static bool mdCopyPlace_(void *ctx, const databox *key, size_t level) {
+    (void)multidictLRUPlace(ctx, key, level);
+    return true;
+}
+
 multidict *multidictCopy(const multidict *src) {
     if (unlikely(!src)) {
         return nullptr;
@@ -3049,13 +3055,20 @@ multidict *multidictCopy(const multidict *src) {
         return nullptr;
     }
 
-    /* Copy settings */
+    /* Copy settings: LRU tracking goes on while the copy is empty */
     dst->expandLoadFactor = src->expandLoadFactor;
     dst->shrinkLoadFactor = src->shrinkLoadFactor;
     dst->compress = src->compress;
     dst->maxMemory = src->maxMemory;
     dst->evictionCb = src->evictionCb;
     dst->evictionPrivdata = src->evictionPrivdata;
+    dst->useByteBasedExpand = src->useByteBasedExpand;
+    dst->targetSlotBytes = src->targetSlotBytes;
+    dst->maxSlotBytes = src->maxSlotBytes;
+    if (src->lruEnabled) {
+        (void)multidictEnableLRU(dst, multidictLRULevels(src));
+    }
+    dst->evictPolicy = src->evictPolicy;
 
     /* Pre-expand to source size to avoid rehashing during copy */
     uint64_t totalCount = multidictCount(src);
@@ -3077,6 +3090,13 @@ multidict *multidictCopy(const multidict *src) {
         multidictFree(dst); /* the class refused an entry */
         return nullptr;
     }
+
+    /* The use history: each key placed coldest first, as a walk gives
+     * them, rebuilds the source's order and levels */
+    if (src->lruEnabled) {
+        (void)multidictLRUWalk((multidict *)src, mdCopyPlace_, dst);
+    }
+    dst->autoResize = src->autoResize;
     return dst;
 }
 
@@ -3517,6 +3537,10 @@ void multidictResizeEnable(multidict *d) {
 
 void multidictResizeDisable(multidict *d) {
     d->autoResize = false;
+}
+
+bool multidictResizeEnabled(const multidict *d) {
+    return d->autoResize;
 }
 
 /* Load factors a dict may use: every resize leaves the load at about half
@@ -5836,6 +5860,103 @@ static bool testRestoreIs_(const uint8_t *snap, size_t len, multidictType *as,
     return ok;
 }
 
+/* A dict's settings and use history, as a copy or restore must keep */
+typedef struct mdTestConfig_ {
+    multidictEvictPolicy policy;
+    size_t levels;
+    bool byBytes;
+    uint64_t byteTarget;
+    uint64_t byteMax;
+    bool resize;
+    uint64_t maxMemory;
+    size_t walked;
+    int64_t order[64];
+    size_t level[64];
+} mdTestConfig_;
+
+static bool mdTestConfigWalk_(void *ctx, const databox *key, size_t level) {
+    mdTestConfig_ *c = ctx;
+    if (c->walked < countof(c->order)) {
+        c->order[c->walked] = key->data.i;
+        c->level[c->walked] = level;
+    }
+    c->walked++;
+    return true;
+}
+
+static mdTestConfig_ mdTestConfigOf_(multidict *d) {
+    mdTestConfig_ c = {.policy = multidictGetEvictPolicy(d),
+                       .levels = multidictLRULevels(d),
+                       .resize = multidictResizeEnabled(d),
+                       .maxMemory = multidictGetMaxMemory(d)};
+    c.byBytes = multidictGetByteBasedExpansion(d, &c.byteTarget, &c.byteMax);
+    (void)multidictLRUWalk(d, mdTestConfigWalk_, &c);
+    return c;
+}
+
+static bool mdTestConfigSame_(const mdTestConfig_ *a, const mdTestConfig_ *b) {
+    if (a->policy != b->policy || a->levels != b->levels ||
+        a->byBytes != b->byBytes || a->byteTarget != b->byteTarget ||
+        a->byteMax != b->byteMax || a->resize != b->resize ||
+        a->maxMemory != b->maxMemory || a->walked != b->walked) {
+        return false;
+    }
+    for (size_t i = 0; i < a->walked && i < countof(a->order); i++) {
+        if (a->order[i] != b->order[i] || a->level[i] != b->level[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* A copy and a snapshot's restore keep every setting and the use history:
+ * the eviction policy, LRU levels and order, byte-based expansion, the
+ * resize switch and the memory limit */
+static int multidictTestConfigCarried_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 12);
+    (void)multidictEnableLRU(d, 3);
+    multidictSetEvictPolicy(d, MULTIDICT_EVICT_LFU);
+    multidictEnableByteBasedExpansion(d, 1024, 8192);
+    for (int64_t i = 0; i < 40; i++) {
+        const databox key = DATABOX_SIGNED(i);
+        MULTIDICT_TEST_OK(multidictAdd(d, &key, &key));
+    }
+    for (int64_t i = 0; i < 40; i += 3) {
+        const databox key = DATABOX_SIGNED(i);
+        multidictTouch(d, &key);
+    }
+    multidictResizeDisable(d);
+    multidictSetMaxMemory(d, UINT64_C(1) << 30);
+    const mdTestConfig_ want = mdTestConfigOf_(d);
+
+    cleaner(multidictFree) multidict *copy = multidictCopy(d);
+    size_t len = 0;
+    cleanerName(zfree, SeenBytes) uint8_t *snap = testSnapshot_(d, &len);
+    multidict *restored =
+        snap ? persistOpsMultidict.restore(snap, len) : nullptr;
+    multidict *const got[] = {copy, restored};
+    for (size_t g = 0; g < countof(got); g++) {
+        if (!got[g]) {
+            ERR("%s failed", g ? "the restore" : "the copy");
+            continue;
+        }
+        const mdTestConfig_ c = mdTestConfigOf_(got[g]);
+        if (!mdTestConfigSame_(&c, &want)) {
+            ERR("%s: policy %d levels %zu bytes %d/%" PRIu64 "/%" PRIu64
+                " resize %d walked %zu",
+                g ? "restore" : "copy", (int)c.policy, c.levels, c.byBytes,
+                c.byteTarget, c.byteMax, c.resize, c.walked);
+        }
+    }
+    if (restored) {
+        persistOpsMultidict.free(restored);
+    }
+    return err;
+}
+
 /* Persist snapshots record how keys match: case dicts restore as case
  * dicts, exact as exact, custom types only through
  * multidictPersistRestoreAs with a custom type, and every mismatch,
@@ -5870,11 +5991,11 @@ static int multidictTestPersistKeys_(void) {
     cleanerName(zfree, SeenBytes) uint8_t *customSnap =
         testSnapshot_(custom, &customLen);
 
-    /* The key record, the hash seed and the eight settings, then the
+    /* The key record, the hash seed and the nine settings, then the
      * pairs */
-    if (!exactSnap || flexCount((const flex *)exactSnap) != 14 || !ciSnap ||
-        flexCount((const flex *)ciSnap) != 14 || !ciEmptySnap ||
-        flexCount((const flex *)ciEmptySnap) != 10 || !customSnap) {
+    if (!exactSnap || flexCount((const flex *)exactSnap) != 15 || !ciSnap ||
+        flexCount((const flex *)ciSnap) != 15 || !ciEmptySnap ||
+        flexCount((const flex *)ciEmptySnap) != 11 || !customSnap) {
         ERR("multidict snapshot layout");
         return err;
     }
@@ -9160,6 +9281,10 @@ int multidictTest(int, char *[]) {
 
     TEST("9.7 persist snapshots record how keys match") {
         err += multidictTestPersistKeys_();
+    }
+
+    TEST("a copy and a restore keep every setting and the use history") {
+        err += multidictTestConfigCarried_();
     }
 
     TEST("9.8 every read while a rehash is part way") {
