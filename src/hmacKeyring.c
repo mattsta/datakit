@@ -1096,22 +1096,13 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
         undo.ids[undo.count++] = id;
         fe = flexNext(f, fe);
     }
-    /* Apply the parsed floor only after every slot has installed
-     * cleanly. Done under the write lock directly (not via
-     * hmacKeyringSetMinValidKeyId) because the latter refuses backward
-     * moves — but a fresh keyring's floor starts at zero so any non-zero
-     * persisted floor is by definition a forward move. Be explicit
-     * about that via the helper rather than a raw assignment so the
-     * monotonic invariant has a single owner. */
-    if (parsed_floor != HMAC_KEY_ID_INVALID) {
-        if (!hmacKeyringSetMinValidKeyId(ring, parsed_floor)) {
-            /* Only reachable if a concurrent caller already raised the
-             * floor above the persisted value — possible on a hot
-             * restore over a non-empty keyring. Treat as malformed
-             * restore: rollback so the keyring is left exactly as it
-             * was before this call. */
-            goto rollback;
-        }
+    /* The floor applies after every slot has installed cleanly, and only
+     * upward: a restore never re-permits an id the live keyring has
+     * since revoked (an older snapshot over a raised floor keeps the
+     * higher one).  hmacKeyringSetMinValidKeyId owns the monotonic
+     * rule, so a concurrent raise in between is kept too. */
+    if (parsed_floor > hmacKeyringMinValidKeyId(ring)) {
+        (void)hmacKeyringSetMinValidKeyId(ring, parsed_floor);
     }
     return true;
 
@@ -1349,6 +1340,29 @@ static bool hkrTestReserveFn(void *ctx, hmacKeyId id, uint64_t limit) {
 
 int hmacKeyringTest(int, char *[]) {
     int err = 0;
+
+    TEST("a restore never lowers a revoked-key floor the keyring raised") {
+        hmacKeyring *old = hmacKeyringCreate();
+        uint8_t key[32];
+        memset(key, 0x3e, sizeof(key));
+        (void)hmacKeyringInstallUnsalted(old, 5, &hmacAlgoSHA256, key,
+                                         sizeof(key));
+        uint8_t snap[1024];
+        size_t snapLen = 0;
+        (void)hmacKeyringSnapshot(old, snap, sizeof(snap), &snapLen);
+
+        hmacKeyring *live = hmacKeyringCreate();
+        (void)hmacKeyringInstallUnsalted(live, 9, &hmacAlgoSHA256, key,
+                                         sizeof(key));
+        (void)hmacKeyringSetMinValidKeyId(live, 9);
+        if (!hmacKeyringRestore(live, snap, snapLen) ||
+            hmacKeyringMinValidKeyId(live) != 9) {
+            ERR("the older snapshot's restore %s, floor %" PRIu32,
+                "failed or lowered the floor", hmacKeyringMinValidKeyId(live));
+        }
+        hmacKeyringFree(live);
+        hmacKeyringFree(old);
+    }
 
     TEST("a key reinstalled into another slot never repeats a generation") {
         /* A in slot 0 and B in slot 1; B retired and reinstalled (a

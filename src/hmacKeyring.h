@@ -615,7 +615,9 @@ bool hmacKeyringSnapshot(const hmacKeyring *ring, uint8_t *out, size_t out_cap,
  * is refused), unknown algo tag, or duplicate id collision with an
  * already-present entry. Successful restore installs
  * every record atomically — a mid-way failure rolls back so the
- * keyring is left exactly as it was. */
+ * keyring is left exactly as it was. The revoked-key floor becomes the
+ * higher of the keyring's and the snapshot's: a restore never lowers
+ * it. */
 bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len);
 
 /* persistOps descriptor for plugging hmacKeyring into the `persist`
