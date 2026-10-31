@@ -2865,15 +2865,14 @@ size_t multidictLRUWalk(multidict *d, multidictLRUVisitFn *visit, void *ctx) {
             continue;
         }
         visited++;
-        if (!visit(ctx, &keybox,
-                   (uint32_t)multilruGetLevel(d->lru, order[i]))) {
+        if (!visit(ctx, &keybox, multilruGetLevel(d->lru, order[i]))) {
             break;
         }
     }
     return visited;
 }
 
-bool multidictLRUPlace(multidict *d, const databox *keybox, uint32_t level) {
+bool multidictLRUPlace(multidict *d, const databox *keybox, size_t level) {
     if (!d || !d->lruEnabled || !keybox) {
         return false;
     }

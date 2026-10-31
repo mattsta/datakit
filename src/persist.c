@@ -4976,12 +4976,12 @@ typedef struct mdPersistLRU_ {
     size_t pairs;
     struct {
         uint64_t index;
-        uint32_t level;
+        size_t level;
     } *at;
     size_t count;
 } mdPersistLRU_;
 
-static bool mdPersistLRUVisit_(void *ctx, const databox *key, uint32_t level) {
+static bool mdPersistLRUVisit_(void *ctx, const databox *key, size_t level) {
     mdPersistLRU_ *lru = ctx;
     size_t lo = 0;
     size_t hi = lru->pairs;
@@ -5256,7 +5256,7 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
         }
         seen[index] = 1;
         flexGetByTypeBig(keyAt[index], &key);
-        multidictLRUPlace(d, (const databox *)&key, (uint32_t)level);
+        multidictLRUPlace(d, (const databox *)&key, (size_t)level);
     }
 
     multidictSetMaxMemory(d, s[MD_PS_MAX_MEMORY]);

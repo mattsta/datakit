@@ -349,7 +349,7 @@ typedef struct mdTestWalk_ {
     size_t count;
 } mdTestWalk_;
 
-static bool mdTestWalkVisit_(void *ctx, const databox *key, uint32_t level) {
+static bool mdTestWalkVisit_(void *ctx, const databox *key, size_t level) {
     mdTestWalk_ *w = ctx;
     uint64_t h = 1469598103934665603ULL ^ level;
     for (size_t i = 0; i < key->len; i++) {

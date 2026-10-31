@@ -254,7 +254,7 @@ typedef struct multilruConfig {
 /* Create with default settings (7 levels, count-only policy, no limits) */
 [[nodiscard]] multilru *multilruNew(void);
 
-/* Create with specified number of levels (1-64) */
+/* Create with specified number of levels (1 .. MULTILRU_LEVELS_MAX) */
 [[nodiscard]] multilru *multilruNewWithLevels(size_t maxLevels);
 
 /* Create with levels and pre-allocated capacity */

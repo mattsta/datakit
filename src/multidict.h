@@ -579,9 +579,9 @@ int multidictGetLRULevel(multidict *d, const databox *keybox);
  * tracked key the newest of 'level', moving no other key: placing keys
  * in a walk's order rebuilds that order exactly.  False when the key is
  * not tracked or the level is past the LRU's. */
-typedef bool multidictLRUVisitFn(void *ctx, const databox *key, uint32_t level);
+typedef bool multidictLRUVisitFn(void *ctx, const databox *key, size_t level);
 size_t multidictLRUWalk(multidict *d, multidictLRUVisitFn *visit, void *ctx);
-bool multidictLRUPlace(multidict *d, const databox *keybox, uint32_t level);
+bool multidictLRUPlace(multidict *d, const databox *keybox, size_t level);
 
 /* Whether 'keybox' is present, as an inspector: no LRU use (for a caller
  * that names the key in the operation it decides on) */
