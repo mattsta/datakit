@@ -24,10 +24,9 @@ bool boxPut(box *b, int key) { return key > 0; }
 #ifdef DATAKIT_TEST
 /* @model: src/box.h */
 static int boxModel_(void) {
-    box *b = boxNew();
+    cleaner(boxFree) box *b = boxNew();
     boxPut(b, 1);
     boxModelStep_(b);
-    boxFree(b);
     return 0;
 }
 
@@ -51,6 +50,14 @@ class CoverageTests(unittest.TestCase):
             models["src/box.h"].called >= {"boxNew", "boxPut", "boxFree"}, True
         )
         self.assertNotIn("boxSetSeed", models["src/box.h"].called)
+
+    def test_a_cleaner_scope_counts_as_a_call_of_its_function(self):
+        models = modelcover.models({"src/box.c": SOURCE})
+        self.assertIn("boxFree", models["src/box.h"].called)
+        named = SOURCE.replace("cleaner(boxFree)", "cleanerName(boxFree, Box)")
+        self.assertIn(
+            "boxFree", modelcover.models({"src/box.c": named})["src/box.h"].called
+        )
 
     def test_missing_calls_are_the_public_ones_no_model_makes(self):
         missing = modelcover.missing(

@@ -4170,6 +4170,7 @@ void multidictDefaultClassFree(multidictClass *qdc) {
  * BEFORE the dict cleaner that uses it. */
 defcleaner(multidict *, multidictFree);
 defcleaner(multidictClass *, multidictMmClassFree);
+defcleaner(multidictClass *, multidictDefaultClassFree);
 defcleaner(flex *, flexFree);
 
 /* A conditional add or replace applies exactly when 'applies' (read
@@ -6091,7 +6092,7 @@ typedef struct testCiOracle {
     bool fold; /* keys match ASCII case-insensitively */
     uint32_t count;
     uint32_t evictMismatch;  /* evicted entries the oracle did not hold */
-    uint32_t configured[11]; /* testCiConfigure_ events made, by kind */
+    uint32_t configured[13]; /* testCiConfigure_ events made, by kind */
     testCiEntry e[TEST_CI_BASES * 8];
 } testCiOracle;
 
@@ -6168,6 +6169,60 @@ static int32_t testCiFindExact_(const testCiOracle *o, const databox *key) {
 
 static void testCiRemove_(testCiOracle *o, int32_t at) {
     o->e[at] = o->e[--o->count];
+}
+
+/* Key 'at' in the oracle holds 'val' now: replaced, or added at the end */
+static void testCiSet_(testCiOracle *o, int32_t at, const uint8_t *key,
+                       uint32_t len, int64_t val) {
+    if (at >= 0) {
+        o->e[at].val = val;
+        return;
+    }
+    testCiEntry *ne = &o->e[o->count++];
+    memcpy(ne->key, key, len);
+    ne->len = len;
+    ne->val = val;
+}
+
+/* The update multidictUpdateValue runs: the value in ctx, or a refusal
+ * when ctx holds INT64_MIN */
+static bool testCiUpdate_(void *ctx, const databox *, databox *replacement) {
+    const int64_t want = *(const int64_t *)ctx;
+    if (want == INT64_MIN) {
+        return false;
+    }
+    *replacement = DATABOX_SIGNED(want);
+    return true;
+}
+
+/* The multidictGetAndDeleteIf gate: only even values go */
+static bool testCiEvenGate_(void *, const databox *value) {
+    return value->type == DATABOX_SIGNED_64 ? value->data.i64 % 2 == 0
+                                            : value->data.u64 % 2 == 0;
+}
+
+/* multidictScan and LRU walk visits: each key must be in the oracle */
+typedef struct testCiVisits {
+    const testCiOracle *o;
+    bool *seen;
+    uint32_t visits;
+    uint32_t strangers;
+} testCiVisits;
+
+static void testCiScanVisit_(void *ctx, const databox *key, const databox *) {
+    testCiVisits *v = ctx;
+    const int32_t at = testCiFindExact_(v->o, key);
+    v->visits++;
+    if (at < 0) {
+        v->strangers++;
+    } else {
+        v->seen[at] = true;
+    }
+}
+
+static bool testCiLruVisit_(void *ctx, const databox *key, size_t) {
+    testCiScanVisit_(ctx, key, nullptr);
+    return true;
 }
 
 /* The dict holds exactly the oracle: same count, every entry under the
@@ -6306,6 +6361,190 @@ static int multidictTestLRUEmptyFree_(void) {
         ERR("an LRU-tracked dict left %" PRId64 " bytes behind", left);
     }
     return err;
+}
+
+/* @model: src/multidict.h */
+/* One of the data calls the main steps do not make, on key 'key' ('at'
+ * in the oracle), checked against the oracle and applied to it */
+static bool testCiDataCall_(multidict *d, testCiOracle *o, uint32_t op,
+                            const uint8_t *key, uint32_t len, int32_t at,
+                            int64_t *nextVal, multidictType *type) {
+    const databox kb = databoxNewBytes(key, len);
+    const databox vb = DATABOX_SIGNED(*nextVal);
+    char str[TEST_CI_MAX_KEY + 1];
+    const bool plain = memchr(key, 0, len) == nullptr;
+    memcpy(str, key, len);
+    str[len] = 0;
+    bool ok = true;
+    switch (op - 100) {
+    case 0:
+    case 1:
+        ok = multidictAddXX(d, &kb, &vb) ==
+             (at >= 0 ? MULTIDICT_OK_REPLACED : MULTIDICT_ERR);
+        if (at >= 0) {
+            o->e[at].val = *nextVal;
+        }
+        (*nextVal)++;
+        break;
+    case 2:
+    case 3:
+        ok = multidictPut(d, &kb, &vb) == (at < 0);
+        testCiSet_(o, at, key, len, (*nextVal)++);
+        break;
+    case 4:
+        ok = multidictExists(d, &kb) == (at >= 0) &&
+             multidictExistsNoTouch(d, &kb) == (at >= 0);
+        break;
+    case 5: {
+        databox v = {};
+        const bool found = multidictFindNoTouch(d, &kb, &v);
+        ok = found == (at >= 0) && (!found || testBoxIsInt_(&v, o->e[at].val));
+        break;
+    }
+    case 6:
+        if (plain) {
+            /* The values are integers: FindByString finds no byte string */
+            uint8_t *bytes = nullptr;
+            ok = multidictExistsByString(d, str) == (at >= 0) &&
+                 !multidictFindByString(d, str, &bytes);
+        }
+        break;
+    case 7:
+    case 8: { /* rewritten, or refused one time in four */
+        int64_t want = testRand() % 4 ? *nextVal : INT64_MIN;
+        const multidictUpdateResult r =
+            multidictUpdateValue(d, &kb, testCiUpdate_, &want);
+        ok = r == (at < 0              ? MULTIDICT_UPDATE_ABSENT
+                   : want == INT64_MIN ? MULTIDICT_UPDATE_DECLINED
+                                       : MULTIDICT_UPDATE_REWRITTEN);
+        if (at >= 0 && want != INT64_MIN) {
+            o->e[at].val = want;
+        }
+        (*nextVal)++;
+        break;
+    }
+    case 9:
+    case 10: {
+        databox v = {};
+        const bool even = at >= 0 && o->e[at].val % 2 == 0;
+        const bool took =
+            multidictGetAndDeleteIf(d, &kb, &v, testCiEvenGate_, nullptr);
+        ok = took == even && (!took || testBoxIsInt_(&v, o->e[at].val));
+        if (took) {
+            databoxFreeData(&v);
+            testCiRemove_(o, at);
+        }
+        break;
+    }
+    case 11: { /* a float sum, then the integer back */
+        double sum = 0;
+        const int64_t before = at >= 0 ? o->e[at].val : 0;
+        ok = multidictIncrByFloat(d, &kb, 2.0, &sum) ==
+                 (at >= 0 ? MULTIDICT_OK_REPLACED : MULTIDICT_OK_INSERTED) &&
+             sum == (double)before + 2.0;
+        const databox back = DATABOX_SIGNED(before + 2);
+        ok = ok && multidictReplace(d, &kb, &back) == MULTIDICT_OK_REPLACED;
+        testCiSet_(o, at, key, len, before + 2);
+        break;
+    }
+    case 12:
+    case 13: { /* three keys of other bases at once */
+        databox keys[3];
+        databox vals[3];
+        uint8_t kbuf[3][TEST_CI_MAX_KEY];
+        uint32_t klen[3];
+        int32_t kat[3];
+        const uint32_t base = testRand() % (TEST_CI_BASES - 3);
+        uint32_t fresh = 0;
+        for (int i = 0; i < 3; i++) {
+            klen[i] = testCiKey_(base + (uint32_t)i, testRand() % 8, kbuf[i]);
+            keys[i] = databoxNewBytes(kbuf[i], klen[i]);
+            vals[i] = DATABOX_SIGNED((*nextVal)++);
+            kat[i] = testCiFind_(o, kbuf[i], klen[i]);
+            fresh += kat[i] < 0;
+        }
+        if (op - 100 == 12) {
+            ok = multidictAddMultiple(d, keys, vals, 3) == fresh;
+            for (int i = 0; i < 3; i++) {
+                testCiSet_(o, kat[i], kbuf[i], klen[i], vals[i].data.i64);
+            }
+        } else {
+            ok = multidictDeleteMultiple(d, keys, 3) == 3 - fresh;
+            /* Highest index first: a removal moves the last entry */
+            for (int pass = 0; pass < 3; pass++) {
+                int32_t top = -1;
+                int top_i = -1;
+                for (int i = 0; i < 3; i++) {
+                    if (kat[i] > top) {
+                        top = kat[i];
+                        top_i = i;
+                    }
+                }
+                if (top < 0) {
+                    break;
+                }
+                testCiRemove_(o, top);
+                kat[top_i] = -1;
+            }
+        }
+        break;
+    }
+    case 14: { /* a merge from a dict of the default class */
+        cleaner(multidictDefaultClassFree) multidictClass *dc =
+            multidictDefaultClassNew();
+        cleaner(multidictFree) multidict *src = multidictNew(type, dc, 5);
+        const uint32_t base = testRand() % (TEST_CI_BASES - 2);
+        const multidictMergeMode mode =
+            testRand() % 2 ? MULTIDICT_MERGE_REPLACE : MULTIDICT_MERGE_KEEP;
+        uint8_t kbuf[2][TEST_CI_MAX_KEY];
+        uint32_t klen[2];
+        int64_t vals[2];
+        uint64_t want = 0;
+        for (int i = 0; i < 2; i++) {
+            klen[i] = testCiKey_(base + (uint32_t)i, testRand() % 8, kbuf[i]);
+            vals[i] = (*nextVal)++;
+            const databox k = databoxNewBytes(kbuf[i], klen[i]);
+            const databox v = DATABOX_SIGNED(vals[i]);
+            (void)multidictAdd(src, &k, &v);
+        }
+        for (int i = 0; i < 2; i++) {
+            const int32_t kat = testCiFind_(o, kbuf[i], klen[i]);
+            if (mode == MULTIDICT_MERGE_REPLACE || kat < 0) {
+                testCiSet_(o, kat, kbuf[i], klen[i], vals[i]);
+                want++;
+            }
+        }
+        ok = multidictMerge(d, src, mode) == want;
+        break;
+    }
+    case 15:
+        multidictTouch(d, &kb); /* a use: changes no entry */
+        break;
+    case 16: {
+        databox rk = {};
+        const bool got = multidictGetRandomKey(d, &rk);
+        ok = got == (o->count > 0) && (!got || testCiFindExact_(o, &rk) >= 0);
+        break;
+    }
+    case 17: {
+        databox some[5];
+        /* A sample: possibly fewer than asked (none at all), a key
+         * possibly twice, but only keys the dict holds */
+        const uint32_t n = multidictGetSomeKeys(d, some, 5);
+        ok = n <= 5 && (o->count > 0 || n == 0);
+        for (uint32_t i = 0; ok && i < n; i++) {
+            ok = testCiFindExact_(o, &some[i]) >= 0;
+        }
+        break;
+    }
+    default: {
+        databox v = {};
+        const bool found = multidictFind(d, &kb, &v);
+        ok = found == (at >= 0) && (!found || testBoxIsInt_(&v, o->e[at].val));
+        break;
+    }
+    }
+    return ok;
 }
 
 /* @model: src/multidict.h */
@@ -6475,6 +6714,86 @@ static int testCiConfigure_(multidict *d, testCiOracle *o, bool *tracking,
             *tracking = on;
         }
         break;
+    case 11: { /* the use history: walked, one key placed, repacked */
+        cleanerName(zfree, PausedSeen) bool *seen =
+            zcalloc(TEST_CI_BASES * 8, sizeof(bool));
+        testCiVisits v = {.o = o, .seen = seen};
+        const size_t walked = multidictLRUWalk(d, testCiLruVisit_, &v);
+        if (*tracking && (walked != o->count || v.strangers)) {
+            ERR("step %" PRIu32 ": the LRU walk visited %zu of %" PRIu32
+                " keys, %" PRIu32 " strangers",
+                step, walked, o->count, v.strangers);
+        }
+        if (*tracking && o->count) {
+            const testCiEntry *e = &o->e[testRand() % o->count];
+            const databox k = databoxNewBytes(e->key, e->len);
+            if (!multidictLRUPlace(d, &k, 0) || multidictGetLRULevel(d, &k)) {
+                ERR("step %" PRIu32 ": a placed key is not at level 0", step);
+            }
+        }
+        (void)multidictLRURepack(d);
+        break;
+    }
+    case 12: { /* the inspectors agree with the oracle and the settings */
+        multidictStats st = {};
+        multidictGetStats(d, &st);
+        multidictDetailedStats ds = {};
+        multidictGetDetailedStats(d, &ds);
+        multidictLoadMetrics lm = {};
+        multidictGetLoadMetrics(d, &lm);
+        uint64_t target = 0;
+        uint64_t max = 0;
+        const bool byBytes = multidictGetByteBasedExpansion(d, &target, &max);
+        (void)multidictLoadFactor(d);
+        const bool wrong[] = {
+            st.count != o->count,
+            o->count && !multidictBytes(d),
+            multidictIsOverLimit(d),
+            multidictGetMaxMemory(d) != 0,
+            multidictHasLRU(d) != *tracking,
+            multidictLRULevels(d) != (*tracking ? 4u : 0u),
+            byBytes != multidictIsByteBasedExpansion(d),
+            multidictGetClass(d) == nullptr || multidictGetType(d) == nullptr,
+            st.isRehashing != multidictIsRehashing_(d),
+            multidictGetEvictPolicy(d) > MULTIDICT_EVICT_SIZE_LRU};
+        for (size_t w = 0; w < countof(wrong); w++) {
+            if (wrong[w]) {
+                ERR("step %" PRIu32 ": inspector check %zu disagrees (count "
+                    "%" PRIu64 " of %" PRIu32 ")",
+                    step, w, st.count, o->count);
+            }
+        }
+        (void)multidictResizeEnabled(d);
+        /* After the reads above: it may finish a rehash they report */
+        (void)multidictRehashMilliseconds(d, 1);
+        /* A safe iterator and a full scan each meet every key */
+        multidictIterator it;
+        uint32_t n = 0;
+        if (multidictIteratorGetSafe(d, &it)) {
+            multidictEntry e;
+            while (multidictIteratorNext(&it, &e)) {
+                n++;
+            }
+            multidictIteratorRelease(&it);
+        }
+        cleanerName(zfree, PausedSeen) bool *seen =
+            zcalloc(TEST_CI_BASES * 8, sizeof(bool));
+        testCiVisits v = {.o = o, .seen = seen};
+        uint64_t cursor = 0;
+        do {
+            cursor = multidictScan(d, cursor, testCiScanVisit_, &v);
+        } while (cursor);
+        uint32_t met = 0;
+        for (uint32_t i = 0; i < o->count; i++) {
+            met += seen[i];
+        }
+        if (n != o->count || met != o->count || v.strangers) {
+            ERR("step %" PRIu32 ": the safe iterator met %" PRIu32
+                ", the scan %" PRIu32 " of %" PRIu32 " keys",
+                step, n, met, o->count);
+        }
+        break;
+    }
     default: /* emptied */
         if (testRand() % 4 == 0) {
             multidictEmpty(d);
@@ -6517,9 +6836,11 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
         }
         inFlight += multidictIsRehashing(d);
 
-        const uint32_t op = testRand() % 100;
+        const uint32_t op = testRand() % 130;
         bool ok = true;
-        if (op < (draining ? 10u : 30u)) {
+        if (op >= 100) {
+            ok = testCiDataCall_(d, o, op, key, len, at, &nextVal, type);
+        } else if (op < (draining ? 10u : 30u)) {
             ok = multidictAdd(d, &kb, &vb) ==
                  (at >= 0 ? MULTIDICT_OK_REPLACED : MULTIDICT_OK_INSERTED);
             if (at >= 0) {

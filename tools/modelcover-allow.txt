@@ -1,0 +1,13 @@
+# Public calls a container's model test does not make: HEADER CALL REASON.
+# Each line says why the call has no state a model could get wrong; a line
+# that no longer matches a gap fails `dktools modelcover`.
+src/multidict.h multidictDefaultLoadFactors reads the process-wide defaults; no dict state
+src/multidict.h multidictSetDefaultLoadFactors sets process-wide defaults other tests read; its own test covers it
+src/multidict.h multidictGenCaseHashFunction a pure hash of bytes; no dict state
+src/multidict.h multidictGenHashFunction a pure hash of bytes; no dict state
+src/multidict.h multidictIntHashFunction a pure hash of an integer; no dict state
+src/multidict.h multidictLongLongHashFunction a pure hash of an integer; no dict state
+src/multidict.h multidictRandomSeed draws a process-wide random seed; no dict state
+src/multidict.h multidictOpRepr prints only
+src/multidict.h multidictPrintStats prints only
+src/multidict.h multidictRepr prints only

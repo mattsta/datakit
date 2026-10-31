@@ -13,7 +13,8 @@ right before them:
     static int multidictTestCaseDifferential_(...) { ... }
 
 and the calls their bodies make count for that header (each helper the
-test runs is marked too).  Reported: each public call of a modeled header
+test runs is marked too), a ``cleaner(fn)`` or ``cleanerName(fn, ...)``
+scope counting as a call of ``fn``.  Reported: each public call of a modeled header
 that no marked function makes, unless tools/modelcover-allow.txt has a
 ``HEADER CALL REASON`` line for it; a line that no longer matches fails
 too.  The summary counts the headers that have no model test yet.
@@ -39,6 +40,9 @@ from .retoken import VENDORED, sources
 ALLOW_FILE = Path("tools/modelcover-allow.txt")
 _MARK = re.compile(r"@model:\s*(\S+)\s*\*/")
 _CALL = re.compile(rb"\b([A-Za-z_]\w*)\s*\(")
+# A scope-exit cleaner names the function it calls: cleaner(fn), and
+# cleanerName(fn, Name)
+_CLEANER = re.compile(rb"\bcleaner(?:Name)?\s*\(\s*([A-Za-z_]\w*)")
 
 
 @dataclass
@@ -74,6 +78,9 @@ def models(files: dict[str, str]) -> dict[str, Model]:
             model.functions.append(name.decode())
             model.called |= {
                 c.group(1).decode() for c in _CALL.finditer(code, start, stop)
+            }
+            model.called |= {
+                c.group(1).decode() for c in _CLEANER.finditer(code, start, stop)
             }
     return found
 
