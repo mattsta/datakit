@@ -2875,7 +2875,7 @@ static void mdLRUMoved_(multilruPtr from, multilruPtr to, void *ctx) {
 }
 
 size_t multidictLRUWalk(multidict *d, multidictLRUVisitFn *visit, void *ctx) {
-    if (!d || !d->lruEnabled || !d->lru) {
+    if (!d || !d->lruEnabled) {
         return 0;
     }
 
@@ -2915,7 +2915,7 @@ bool multidictLRUPlace(multidict *d, const databox *keybox, size_t level) {
 }
 
 size_t multidictLRURepack(multidict *d) {
-    if (!d->lruEnabled || !d->lru) {
+    if (!d->lruEnabled) {
         return 0;
     }
     const size_t moved = multilruRepack(d->lru, mdLRUMoved_, d);
@@ -2950,9 +2950,7 @@ static bool mdLRUWindow_(multidict *d, mdLRUCandidates *cands) {
  * commits, and otherwise the caller counts it in cands->skip. */
 static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
                                      databox *keybox, databoxWide *slot) {
-    if (!d->lruEnabled || !d->lru) {
-        return false;
-    }
+    assert(d->lruEnabled && d->lru); /* the eviction loop checked */
 
     while (cands->skip < MD_LRU_CANDIDATES && mdLRUWindow_(d, cands)) {
         const multilruPtr ptr = cands->ptr[cands->pos++];
@@ -2979,9 +2977,7 @@ static constexpr uint32_t MD_LRU_SIZE_WINDOW = 8;
 static bool multidictLRUSelectVictimBySize(multidict *d, mdLRUCandidates *cands,
                                            uint64_t excess, databox *keybox,
                                            databoxWide *slot) {
-    if (!d->lruEnabled || !d->lru) {
-        return false;
-    }
+    assert(d->lruEnabled && d->lru); /* the eviction loop checked */
 
     while (cands->skip < MD_LRU_CANDIDATES && mdLRUWindow_(d, cands)) {
         const uint32_t end = cands->count - cands->pos < MD_LRU_SIZE_WINDOW
@@ -11528,7 +11524,8 @@ int multidictTest(int, char *[]) {
             multidictLRUPlace(nullptr, &k, 0) ||
             multidictLRUPlace(plain, &k, 0) ||
             multidictLRUPlace(e, nullptr, 0) ||
-            multidictLRUPlace(e, &missing, 0) || walked) {
+            multidictLRUPlace(e, &missing, 0) || multidictLRUPlace(e, &k, 99) ||
+            walked) {
             ERR("a refusal was taken%s", "");
         }
 
