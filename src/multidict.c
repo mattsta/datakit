@@ -5882,10 +5882,13 @@ typedef struct testCiEntry {
 typedef struct testCiOracle {
     bool fold; /* keys match ASCII case-insensitively */
     uint32_t count;
+    uint32_t evictMismatch;  /* evicted entries the oracle did not hold */
+    uint32_t configured[11]; /* testCiConfigure_ events made, by kind */
     testCiEntry e[TEST_CI_BASES * 8];
 } testCiOracle;
 
 defcleanerName(testCiOracle *, zfree, CiOracle);
+defcleanerName(uint8_t *, zfree, CiSnap);
 
 /* Key 'base' with the case of its first three letters set from 'flips' */
 static uint32_t testCiKey_(uint32_t base, uint32_t flips, uint8_t *out) {
@@ -5997,6 +6000,144 @@ static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
     return err;
 }
 
+/* An eviction the dict makes takes its entry out of the oracle too */
+static bool testCiEvicted_(void *privdata, const databox *key,
+                           const databox *val) {
+    testCiOracle *o = privdata;
+    const int32_t at = testCiFindExact_(o, key);
+    if (at >= 0 && testBoxIsInt_(val, o->e[at].val)) {
+        testCiRemove_(o, at);
+    } else {
+        o->evictMismatch++;
+    }
+    return true;
+}
+
+/* One configuration call, chosen at random, made with the dict in
+ * whatever state the run left it (holding keys, part way through a
+ * rehash, tracking LRU or not): the dict must still hold exactly the
+ * oracle, and so must a copy and a snapshot's restore of it */
+static int testCiConfigure_(multidict *d, testCiOracle *o, bool *tracking,
+                            uint32_t step) {
+    int err = 0;
+    const uint32_t event = testRand() % countof(o->configured);
+    o->configured[event]++;
+    switch (event) {
+    case 0: { /* only an empty dict takes a new seed */
+        const uint32_t seed = (uint32_t)testRand();
+        const uint32_t before = multidictGetHashFunctionSeed(d);
+        const bool taken = multidictSetHashFunctionSeed(d, seed);
+        if (taken != (o->count == 0) ||
+            multidictGetHashFunctionSeed(d) != (taken ? seed : before)) {
+            ERR("step %" PRIu32 ": seed change with %" PRIu32 " keys %s", step,
+                o->count, taken ? "taken" : "refused");
+        }
+        break;
+    }
+    case 1: { /* load factors change under the keys */
+        static const uint32_t expands[] = {200, 400, 800, 1600, 3200};
+        static const uint32_t shrinks[] = {5, 10, 25};
+        const uint32_t ex = expands[testRand() % countof(expands)];
+        const uint32_t sh = shrinks[testRand() % countof(shrinks)];
+        uint32_t gotEx = 0;
+        uint32_t gotSh = 0;
+        if (!multidictSetLoadFactors(d, ex, sh)) {
+            ERR("step %" PRIu32 ": load factors %" PRIu32 "/%" PRIu32
+                " refused",
+                step, ex, sh);
+        }
+        multidictGetLoadFactors(d, &gotEx, &gotSh);
+        if (gotEx != ex || gotSh != sh) {
+            ERR("step %" PRIu32 ": load factors read back wrong", step);
+        }
+        break;
+    }
+    case 2: /* byte-based expansion on and off */
+        if (multidictIsByteBasedExpansion(d)) {
+            multidictDisableByteBasedExpansion(d);
+        } else {
+            multidictEnableByteBasedExpansion(d, 512, 8192);
+        }
+        break;
+    case 3:
+        (void)multidictRehash(d, (int32_t)(1 + testRand() % 8));
+        break;
+    case 4:
+        (void)multidictResize(d);
+        break;
+    case 5: { /* a copy holds the same entries */
+        cleaner(multidictFree) multidict *copy = multidictCopy(d);
+        err += testCiVerify_(copy, o, false, step);
+        break;
+    }
+    case 6: { /* a snapshot's restore holds the same entries */
+        size_t len = 0;
+        cleanerName(zfree, CiSnap) uint8_t *snap =
+            persistOpsMultidict.snapshot(d, &len);
+        multidict *back =
+            snap ? persistOpsMultidict.restore(snap, len) : nullptr;
+        if (!back) {
+            ERR("step %" PRIu32 ": a snapshot did not restore", step);
+            break;
+        }
+        err += testCiVerify_(back, o, false, step);
+        persistOpsMultidict.free(back);
+        break;
+    }
+    case 7: { /* a memory cap evicts until the dict is under it */
+        const uint64_t user = multidictKeyBytes(d) + multidictValBytes(d);
+        if (o->count < 4) {
+            break;
+        }
+        const uint64_t cap = user * 3 / 4;
+        multidictSetEvictionCallback(d, testCiEvicted_, o);
+        multidictSetEvictPolicy(d, *tracking ? MULTIDICT_EVICT_LRU
+                                             : MULTIDICT_EVICT_RANDOM);
+        multidictSetMaxMemory(d, cap);
+        (void)multidictEvictToLimit(d);
+        multidictSetMaxMemory(d, 0);
+        multidictSetEvictionCallback(d, nullptr, nullptr);
+        if (o->evictMismatch ||
+            multidictKeyBytes(d) + multidictValBytes(d) > cap) {
+            ERR("step %" PRIu32 ": eviction to %" PRIu64 " bytes left %" PRIu64
+                " (%" PRIu32 " victims not in the oracle)",
+                step, cap, multidictKeyBytes(d) + multidictValBytes(d),
+                o->evictMismatch);
+        }
+        break;
+    }
+    case 8: /* automatic resizing off and on */
+        if (testRand() % 2) {
+            multidictResizeDisable(d);
+        } else {
+            multidictResizeEnable(d);
+        }
+        break;
+    case 9: /* LRU tracking off, and back on only when the dict is empty */
+        if (*tracking) {
+            multidictDisableLRU(d);
+            *tracking = false;
+        } else {
+            const bool on = multidictEnableLRU(d, 4);
+            if (on != (o->count == 0)) {
+                ERR("step %" PRIu32 ": LRU tracking turned on with %" PRIu32
+                    " keys %s",
+                    step, o->count, on ? "taken" : "refused");
+            }
+            *tracking = on;
+        }
+        break;
+    default: /* emptied */
+        if (testRand() % 4 == 0) {
+            multidictEmpty(d);
+            o->count = 0;
+        }
+        break;
+    }
+    err += testCiVerify_(d, o, *tracking, step);
+    return err;
+}
+
 static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
                                           bool lru) {
     int err = 0;
@@ -6004,11 +6145,8 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
     o->fold = type == &multidictTypeCaseKey;
 
     cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
-    cleaner(multidictFree) multidict *d =
-        multidictNew(type, qdc, (int32_t)seed);
-    if (lru) {
-        multidictEnableLRU(d, 4);
-    }
+    cleaner(multidictFree) multidict *d = multidictNew(type, qdc, seed);
+    bool tracking = lru && multidictEnableLRU(d, 4);
 
     testRandSeed(seed);
     uint32_t inFlight = 0;
@@ -6115,13 +6253,21 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
         }
 
         if (step % 500 == 499) {
-            err += testCiVerify_(d, o, lru, step);
+            err += testCiVerify_(d, o, tracking, step);
+        }
+        if (step % 61 == 60) {
+            err += testCiConfigure_(d, o, &tracking, step);
         }
     }
 
-    err += testCiVerify_(d, o, lru, steps);
+    err += testCiVerify_(d, o, tracking, steps);
     if (inFlight == 0) {
         ERR("differential never ran with a rehash in flight");
+    }
+    for (size_t e = 0; e < countof(o->configured); e++) {
+        if (!o->configured[e]) {
+            ERR("configuration event %zu never ran", e);
+        }
     }
 
     return err;
