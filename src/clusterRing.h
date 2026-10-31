@@ -357,10 +357,14 @@ typedef struct clusterRingConfig {
  * ==================================================================== */
 
 /* Nodes a placement or plan names, in preference order (read them with the
- * accessors below; the owning result's Free releases them).  Results hold
- * no shared state, so placements and plans may run concurrently.  Every
- * placement and plan call initializes its result first, so the result is
- * readable (empty on a refusal) and safe to Free whatever it returns. */
+ * accessors below; the owning result's Free releases the list).  The list
+ * and the result's keyspace point at the ring's own nodes and keyspaces:
+ * a result is valid until the ring changes them, so a RemoveNode or a
+ * RemoveKeySpace ends every result naming what it removed (keep node ids,
+ * clusterNodeGetId, to outlive one).  Results share no state with each
+ * other, so placements and plans may run concurrently.  Every placement
+ * and plan call initializes its result first, so the result is readable
+ * (empty on a refusal) and safe to Free whatever it returns. */
 typedef struct clusterNodeList {
     const clusterNode **nodes;
     uint32_t count;
