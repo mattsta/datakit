@@ -3884,6 +3884,12 @@ int flexEnvelopeTest(int, char *[]) {
                                  &openedLen) != cases[i].verifies) {
                 ERR("case %zu: open did not give %d", i, cases[i].verifies);
             }
+            /* A key length with no key opens nothing */
+            const flexEnvelopeVerifyParams noKey = {.key_len = sizeof(key)};
+            if (flexEnvelopeOpen(sealed, sealedLen, &noKey, opened,
+                                 sizeof(opened), &openedLen)) {
+                ERR("case %zu: opened with a length and no key", i);
+            }
         }
     }
 

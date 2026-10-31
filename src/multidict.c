@@ -6230,6 +6230,15 @@ static bool testCiLruVisit_(void *ctx, const databox *key, size_t) {
 /* The dict holds exactly the oracle: same count, every entry under the
  * oracle's spelling with its value, each once, and key bytes adding up */
 /* Counts the keys an LRU walk visits */
+/* An eviction callback that takes the victim and turns eviction off */
+static bool mdTestStopEvicting_(void *privdata, const databox *key,
+                                const databox *val) {
+    (void)key;
+    (void)val;
+    multidictSetEvictPolicy(privdata, MULTIDICT_EVICT_NONE);
+    return true;
+}
+
 static bool mdTestCountVisit_(void *ctx, const databox *key, size_t level) {
     (void)key;
     (void)level;
@@ -11482,6 +11491,72 @@ int multidictTest(int, char *[]) {
         multidictSetEvictPolicy(d, MULTIDICT_EVICT_NONE);
         assert(multidictGetEvictPolicy(d) == MULTIDICT_EVICT_NONE);
         multidictSetEvictPolicy(d, MULTIDICT_EVICT_LRU);
+    }
+
+    TEST("20.6c refusals, and eviction that stops early") {
+        /* No type, class, dict, key or value: refused.  A policy outside
+         * the enum changes nothing.  A dict without LRU tracking walks
+         * and places nothing; a tracked one places no key it lacks, and a
+         * walk mid-rehash meets every key.  Eviction ends when the
+         * callback turns it off, and when the dict is empty */
+        cleaner(multidictFree) multidict *e =
+            multidictNew(&multidictTypeExactKey, qdc, 7);
+        cleaner(multidictFree) multidict *plain =
+            multidictNew(&multidictTypeExactKey, qdc, 7);
+        const databox k = databoxNewSigned(1);
+        const databox missing = databoxNewSigned(-1);
+        databox v = {};
+        multidictEnableLRU(e, 4);
+        MULTIDICT_TEST_OK(multidictAdd(e, &k, &k));
+        MULTIDICT_TEST_OK(multidictAdd(plain, &k, &k));
+        multidictSetEvictPolicy(e, MULTIDICT_EVICT_LRU);
+        multidictSetEvictPolicy(e, (multidictEvictPolicy)99);
+        multidictSetEvictPolicy(nullptr, MULTIDICT_EVICT_LRU);
+        size_t walked = 0;
+        cleaner(multidictFree) multidict *noType =
+            multidictNew(nullptr, qdc, 7);
+        cleaner(multidictFree) multidict *noClass =
+            multidictNew(&multidictTypeExactKey, nullptr, 7);
+        if (noType || noClass || multidictFindNoTouch(nullptr, &k, &v) ||
+            multidictFindNoTouch(e, nullptr, &v) ||
+            multidictFindNoTouch(e, &k, nullptr) ||
+            multidictEvictToLimit(nullptr) ||
+            multidictGetEvictPolicy(e) != MULTIDICT_EVICT_LRU ||
+            multidictGetEvictPolicy(nullptr) != MULTIDICT_EVICT_RANDOM ||
+            multidictLRUWalk(nullptr, mdTestCountVisit_, &walked) ||
+            multidictLRUWalk(plain, mdTestCountVisit_, &walked) ||
+            multidictLRUPlace(nullptr, &k, 0) ||
+            multidictLRUPlace(plain, &k, 0) ||
+            multidictLRUPlace(e, nullptr, 0) ||
+            multidictLRUPlace(e, &missing, 0) || walked) {
+            ERR("a refusal was taken%s", "");
+        }
+
+        for (int64_t i = 2; i < 300; i++) {
+            const databox key = databoxNewSigned(i);
+            MULTIDICT_TEST_OK(multidictAdd(e, &key, &key));
+        }
+        while (multidictRehash(e, 100)) {
+        }
+        if (!multidictExpand(e, 8192) || !multidictIsRehashing(e) ||
+            multidictLRUWalk(e, mdTestCountVisit_, &walked) != 299 ||
+            walked != 299) {
+            ERR("a walk mid-rehash met %zu keys of 299", walked);
+        }
+
+        multidictSetEvictionCallback(e, mdTestStopEvicting_, e);
+        multidictSetMaxMemory(e, 1);
+        if (multidictEvictToLimit(e) != 1 || multidictCount(e) != 298) {
+            ERR("eviction went on after the callback turned it off (%zu "
+                "left)",
+                (size_t)multidictCount(e));
+        }
+        multidictSetEvictionCallback(e, nullptr, nullptr);
+        multidictSetEvictPolicy(e, MULTIDICT_EVICT_RANDOM);
+        if (multidictEvictToLimit(e) != 298 || multidictCount(e) != 0) {
+            ERR("eviction to a 1-byte limit left %zu keys",
+                (size_t)multidictCount(e));
+        }
     }
 
     TEST("20.6b every eviction policy chooses as it says") {

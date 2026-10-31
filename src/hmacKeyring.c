@@ -3459,7 +3459,7 @@ int hmacKeyringTest(int, char *[]) {
          "key's floor") {
         /* Key 5 is reserved to 100, then to 50; key 6 to 10.  Neither is
          * installed, so each keeps its highest limit for its install.  A
-         * snapshot whose pending floor names key 0 is refused */
+         * snapshot with a malformed pending floor is refused */
         hmacKeyring *ring = hmacKeyringCreate();
         const databox five = DATABOX_UNSIGNED(5);
         const databox six = DATABOX_UNSIGNED(6);
@@ -3493,18 +3493,35 @@ int hmacKeyringTest(int, char *[]) {
                 ", expected 100 and 10",
                 at5, at6);
         }
+
+        /* No ring or no nonce out: no nonce */
+        uint8_t nonce[12];
+        uint64_t generation = 0;
+        if (hmacKeyringNextAeadNonceAt(nullptr, 5u, nonce, &generation) ||
+            hmacKeyringNextAeadNonceAt(ring, 5u, nullptr, &generation)) {
+            ERR("a nonce was issued with no ring or no output");
+        }
         hmacKeyringFree(ring);
 
-        cleaner(flexFree) flex *f = flexNew();
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* no floor */
-        flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL); /* one pending */
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* key 0 */
-        flexPushUnsigned(&f, 9u, FLEX_ENDPOINT_TAIL);
-        hmacKeyring *dst = hmacKeyringCreate();
-        if (hmacKeyringRestore(dst, (const uint8_t *)f, flexBytes(f))) {
-            ERR("a pending floor for key 0 was restored");
+        /* A pending floor naming key 0, a key past 32 bits, or a limit
+         * that is not an unsigned integer */
+        static const uint64_t ids[] = {0u, UINT64_C(1) << 32, 5u};
+        for (size_t i = 0; i < countof(ids); i++) {
+            cleaner(flexFree) flex *f = flexNew();
+            flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* no floor */
+            flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL); /* one pending */
+            flexPushUnsigned(&f, ids[i], FLEX_ENDPOINT_TAIL);
+            if (i == 2) {
+                flexPushBytes(&f, "x", 1, FLEX_ENDPOINT_TAIL);
+            } else {
+                flexPushUnsigned(&f, 9u, FLEX_ENDPOINT_TAIL);
+            }
+            hmacKeyring *dst = hmacKeyringCreate();
+            if (hmacKeyringRestore(dst, (const uint8_t *)f, flexBytes(f))) {
+                ERR("pending floor %zu was restored", i);
+            }
+            hmacKeyringFree(dst);
         }
-        hmacKeyringFree(dst);
     }
 
     TEST("revoked key floor: default zero, monotonic, snapshot round-trip") {
