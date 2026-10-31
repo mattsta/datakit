@@ -491,6 +491,14 @@ typedef struct flexEnvelopeSealParams {
      * This keeps the historical caller-supplied-key contract intact
      * while enabling the cache for keyring-bound producers. */
     const struct hmacKeyring *keyring;
+    /* With the key taken from `keyring`: the generation of the key the
+     * nonce belongs to, as hmacKeyringNextAeadNonceAt reported it with
+     * the nonce (or hmacKeyringGetGeneration for a nonce made otherwise).
+     * Seal refuses unless key_id still holds that generation, so a
+     * rotation between taking the nonce and sealing can never seal under
+     * another key with a nonce that key issues too. Zero always refuses
+     * a keyring key; ignored when `key` is given. */
+    uint64_t key_generation;
 } flexEnvelopeSealParams;
 
 /* Encrypt + authenticate `plaintext` into `out`. `out_cap` must be at

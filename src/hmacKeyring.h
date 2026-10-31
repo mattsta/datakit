@@ -345,6 +345,12 @@ bool hmacKeyringGetRaw(hmacKeyring *ring, hmacKeyId id,
 bool hmacKeyringGetRawCopy(hmacKeyring *ring, hmacKeyId id, uint8_t *out_buf,
                            size_t out_cap, size_t *out_len,
                            const hmacHashAlgo **out_algo);
+/* hmacKeyringGetRawCopy that also writes the slot's generation, read
+ * under the same lock as the bytes (NULL: not wanted) */
+bool hmacKeyringGetRawCopyAt(hmacKeyring *ring, hmacKeyId id, uint8_t *out_buf,
+                             size_t out_cap, size_t *out_len,
+                             const hmacHashAlgo **out_algo,
+                             uint64_t *out_generation);
 
 /* Read the current generation counter for slot `id`. The generation is
  * a monotonically-increasing per-slot uint64 that bumps on EVERY
@@ -457,6 +463,11 @@ const struct aesGcmKey *hmacKeyringGetAesGcmKey(hmacKeyring *ring,
  * keys are key-equivalent material. */
 bool hmacKeyringGetAesGcmKeyCopy(hmacKeyring *ring, hmacKeyId id,
                                  struct aesGcmKey *out_key);
+/* hmacKeyringGetAesGcmKeyCopy that also writes the slot's generation,
+ * read under the same lock as the schedule (NULL: not wanted) */
+bool hmacKeyringGetAesGcmKeyCopyAt(hmacKeyring *ring, hmacKeyId id,
+                                   struct aesGcmKey *out_key,
+                                   uint64_t *out_generation);
 
 /* ---- AEAD nonce-counter helpers --------------------------------------
  *
@@ -498,6 +509,13 @@ bool hmacKeyringGetAesGcmKeyCopy(hmacKeyring *ring, hmacKeyId id,
  * On success writes 12 bytes to `out_nonce`. */
 bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
                               uint8_t out_nonce[12]);
+/* hmacKeyringNextAeadNonce that also writes the generation of the key the
+ * nonce was issued for (NULL: not wanted).  A seal that takes its key
+ * from the keyring passes it (flexEnvelopeSealParams.key_generation), so
+ * a rotation between the two never pairs the nonce with another key. */
+bool hmacKeyringNextAeadNonceAt(hmacKeyring *ring, hmacKeyId id,
+                                uint8_t out_nonce[12],
+                                uint64_t *out_generation);
 
 /* Install a 4-byte salt suffix for the AEAD nonce of `id`. May be
  * called at any time; the next NextAeadNonce call picks up the new

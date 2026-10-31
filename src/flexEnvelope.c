@@ -1172,9 +1172,16 @@ static bool sealResolveKey(const flexEnvelopeSealParams *params,
         return true;
     }
     size_t len = 0;
-    if (!hmacKeyringGetRawCopy((struct hmacKeyring *)params->keyring,
-                               params->key_id, buf, HMAC_KEYRING_MAX_KEY_BYTES,
-                               &len, nullptr)) {
+    uint64_t generation = 0;
+    if (!hmacKeyringGetRawCopyAt(
+            (struct hmacKeyring *)params->keyring, params->key_id, buf,
+            HMAC_KEYRING_MAX_KEY_BYTES, &len, nullptr, &generation)) {
+        return false;
+    }
+    /* The key the nonce was issued for, or none: a rotated key would
+     * issue this nonce again */
+    if (params->key_generation == 0 || generation != params->key_generation) {
+        dkSecureZero(buf, HMAC_KEYRING_MAX_KEY_BYTES);
         return false;
     }
     resolved->key = buf;
@@ -1305,11 +1312,16 @@ static bool sealRunCipher(uint8_t *out, size_t aad_len,
                params->algo == FLEX_ENV_ALGO_AEAD_AES256_GCM) {
         aesGcmKey k;
         /* A key resolved from the keyring has its expanded schedule
-         * cached on the slot: copy it rather than expand again. */
-        const bool cached =
-            fromRing &&
-            hmacKeyringGetAesGcmKeyCopy((struct hmacKeyring *)params->keyring,
-                                        params->key_id, &k);
+         * cached on the slot: copy it rather than expand again, while the
+         * slot still holds the key the bytes were checked against */
+        uint64_t scheduleGeneration = 0;
+        bool cached = fromRing && hmacKeyringGetAesGcmKeyCopyAt(
+                                      (struct hmacKeyring *)params->keyring,
+                                      params->key_id, &k, &scheduleGeneration);
+        if (cached && scheduleGeneration != params->key_generation) {
+            dkSecureZero(&k, sizeof(k));
+            cached = false;
+        }
         if (!cached && !aesGcmInit(&k, params->key, params->key_len)) {
             return false;
         }
@@ -3083,12 +3095,15 @@ int flexEnvelopeTest(int, char *[]) {
         static const flexEnvelopeAlgo algos[] = {
             FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
             FLEX_ENV_ALGO_AEAD_AES256_GCM};
+        uint64_t gen5 = 0;
+        (void)hmacKeyringGetGeneration(ring, 5, &gen5);
         for (size_t a = 0; a < countof(algos); a++) {
             const flexEnvelopeSealParams byRing = {.nonce = nonce,
                                                    .nonce_len = sizeof(nonce),
                                                    .algo = algos[a],
                                                    .key_id = 5,
-                                                   .keyring = ring};
+                                                   .keyring = ring,
+                                                   .key_generation = gen5};
             flexEnvelopeSealParams direct = byRing;
             direct.key = key32;
             direct.key_len = sizeof(key32);
@@ -3148,6 +3163,44 @@ int flexEnvelopeTest(int, char *[]) {
                 flexEnvelopeReserveSeal(out, sizeof(out), sizeof(plain), &bad,
                                         &r, &h)) {
                 ERR("key id %u sealed", badIds[i]);
+            }
+        }
+
+        /* A nonce taken for key 5, then a rotation of key 5 before the
+         * seal: the seal is refused (the new key issues that nonce too),
+         * as is a keyring seal that names no generation */
+        for (size_t a = 0; a < countof(algos); a++) {
+            uint8_t issued[12];
+            uint64_t gen = 0;
+            const bool took = hmacKeyringNextAeadNonceAt(ring, 5, issued, &gen);
+            flexEnvelopeSealParams p = {.nonce = issued,
+                                        .nonce_len = sizeof(issued),
+                                        .algo = algos[a],
+                                        .key_id = 5,
+                                        .keyring = ring,
+                                        .key_generation = gen};
+            uint8_t out[128];
+            size_t outLen = 0;
+            const bool before = flexEnvelopeSeal(out, sizeof(out), plain,
+                                                 sizeof(plain), &p, &outLen);
+            uint8_t other[32];
+            memset(other, 0x7a + (int)a, sizeof(other));
+            (void)hmacKeyringRetire(ring, 5);
+            (void)hmacKeyringInstallUnsalted(ring, 5, &hmacAlgoSHA256, other,
+                                             sizeof(other));
+            uint8_t *r = nullptr;
+            size_t h = 0;
+            const bool after = flexEnvelopeSeal(out, sizeof(out), plain,
+                                                sizeof(plain), &p, &outLen) ||
+                               flexEnvelopeReserveSeal(
+                                   out, sizeof(out), sizeof(plain), &p, &r, &h);
+            p.key_generation = 0;
+            const bool unnamed = flexEnvelopeSeal(out, sizeof(out), plain,
+                                                  sizeof(plain), &p, &outLen);
+            if (!took || !gen || !before || after || unnamed) {
+                ERR("algo %d: took %d, sealed before %d, after rotation %d, "
+                    "with no generation %d",
+                    (int)algos[a], took, before, after, unnamed);
             }
         }
         hmacKeyringFree(ring);

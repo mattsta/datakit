@@ -448,6 +448,14 @@ bool hmacKeyringGetRaw(hmacKeyring *ring, hmacKeyId id,
 bool hmacKeyringGetRawCopy(hmacKeyring *ring, hmacKeyId id, uint8_t *out_buf,
                            size_t out_cap, size_t *out_len,
                            const hmacHashAlgo **out_algo) {
+    return hmacKeyringGetRawCopyAt(ring, id, out_buf, out_cap, out_len,
+                                   out_algo, nullptr);
+}
+
+bool hmacKeyringGetRawCopyAt(hmacKeyring *ring, hmacKeyId id, uint8_t *out_buf,
+                             size_t out_cap, size_t *out_len,
+                             const hmacHashAlgo **out_algo,
+                             uint64_t *out_generation) {
     if (out_len != nullptr) {
         *out_len = 0;
     }
@@ -472,6 +480,9 @@ bool hmacKeyringGetRawCopy(hmacKeyring *ring, hmacKeyId id, uint8_t *out_buf,
     memcpy(out_buf, slot->raw_key_bytes, slot->raw_key_len);
     const size_t copied = slot->raw_key_len;
     const hmacHashAlgo *algo = slot->algo;
+    if (out_generation != nullptr) {
+        *out_generation = slot->generation;
+    }
     pthread_rwlock_unlock(&ring->lock);
 
     if (out_len != nullptr) {
@@ -496,6 +507,12 @@ const aesGcmKey *hmacKeyringGetAesGcmKey(hmacKeyring *ring, hmacKeyId id) {
 
 bool hmacKeyringGetAesGcmKeyCopy(hmacKeyring *ring, hmacKeyId id,
                                  aesGcmKey *out_key) {
+    return hmacKeyringGetAesGcmKeyCopyAt(ring, id, out_key, nullptr);
+}
+
+bool hmacKeyringGetAesGcmKeyCopyAt(hmacKeyring *ring, hmacKeyId id,
+                                   aesGcmKey *out_key,
+                                   uint64_t *out_generation) {
     if (ring == nullptr || id == HMAC_KEY_ID_INVALID || out_key == nullptr) {
         return false;
     }
@@ -512,6 +529,9 @@ bool hmacKeyringGetAesGcmKeyCopy(hmacKeyring *ring, hmacKeyId id,
         return false;
     }
     memcpy(out_key, slot->aead_schedule, sizeof(*out_key));
+    if (out_generation != nullptr) {
+        *out_generation = slot->generation;
+    }
     pthread_rwlock_unlock(&ring->lock);
     return true;
 }
@@ -624,6 +644,12 @@ static bool hkrAeadReserve(hmacKeyring *ring, hmacKeyId id) {
 
 bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
                               uint8_t out_nonce[12]) {
+    return hmacKeyringNextAeadNonceAt(ring, id, out_nonce, nullptr);
+}
+
+bool hmacKeyringNextAeadNonceAt(hmacKeyring *ring, hmacKeyId id,
+                                uint8_t out_nonce[12],
+                                uint64_t *out_generation) {
     if (ring == nullptr || id == HMAC_KEY_ID_INVALID || out_nonce == nullptr) {
         return false;
     }
@@ -680,6 +706,9 @@ bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
             out_nonce[9] = slot->aead_salt[1];
             out_nonce[10] = slot->aead_salt[2];
             out_nonce[11] = slot->aead_salt[3];
+            if (out_generation != nullptr) {
+                *out_generation = slot->generation;
+            }
             pthread_rwlock_unlock(&ring->lock);
             return true;
         }

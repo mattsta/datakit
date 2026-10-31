@@ -469,12 +469,24 @@ destroys both confidentiality and integrity. The keyring tracks a
 
 ```c
 uint8_t nonce[12];
-if (!hmacKeyringNextAeadNonce(ring, key_id, nonce)) {
+uint64_t generation;
+if (!hmacKeyringNextAeadNonceAt(ring, key_id, nonce, &generation)) {
     /* Refused: key id absent OR counter exhausted (2^64 issued). */
     abort();
 }
-/* Use `nonce` exactly once for flexEnvelopeSeal under `key_id`. */
+/* Use `nonce` exactly once for flexEnvelopeSeal under `key_id` */
+const flexEnvelopeSealParams sp = {.nonce = nonce,
+                                   .nonce_len = sizeof(nonce),
+                                   .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
+                                   .key_id = key_id,
+                                   .keyring = ring,
+                                   .key_generation = generation};
 ```
+
+A Seal that takes its key from the keyring checks `key_generation`
+against the key `key_id` holds when it seals, and refuses a mismatch (or
+zero): a rotation between taking the nonce and sealing would otherwise
+seal under the new key with a nonce the new key also issues.
 
 The 12-byte nonce is `[counter 8B LE][salt 4B]`. Install a per-process
 salt with `hmacKeyringSetAeadSalt` to give every writer process a
