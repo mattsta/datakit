@@ -141,6 +141,17 @@ bool ulidGenInit(ulidGen *g, ulidClockSource clock) {
     return true;
 }
 
+bool ulidGenSetClockSource(ulidGen *g, ulidClockSource clock) {
+    if (!g) {
+        return false;
+    }
+    g->clockSource = clock;
+    g->clockOffsetNs = clock == ULID_CLOCK_MONOTONIC_OFFSET
+                           ? timeUtilNs() - timeUtilMonotonicNs()
+                           : 0;
+    return true;
+}
+
 ulidGen *ulidGenNew(ulidClockSource clock) {
     /* @own: caller; free=ulidGenFree */
     ulidGen *g = zmalloc(sizeof(*g));
@@ -1186,17 +1197,23 @@ bool ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
      * strictly increase, and a unit's random start bounds how many it
      * holds.  Spending the low field carries into the time field,
      * borrowing the next unit. */
-    const uint8_t key = (uint8_t)(config->type + 1);
+    const uint32_t bit = UINT32_C(1) << config->type;
+    if (config->type == ULID_VARIANT_EPOCHCUSTOM &&
+        g->lastCustomEpochNs != config->customEpochNs) {
+        g->seen64 &= ~bit; /* another epoch: its own sequence */
+        g->lastCustomEpochNs = config->customEpochNs;
+    }
+    uint64_t *last = &g->last64[config->type];
     if ((l->low == ULID_LOW_RANDOM_ || l->low == ULID_LOW_COUNTER_) &&
-        g->last64Type == key && unit <= g->last64 >> l->lowBits) {
-        id = g->last64 + 1;
+        (g->seen64 & bit) && unit <= *last >> l->lowBits) {
+        id = *last + 1;
         if (id == 0 || (id >> l->lowBits) >> l->timeBits) {
             return false; /* the time field is spent */
         }
     }
 
-    g->last64 = id;
-    g->last64Type = key;
+    *last = id;
+    g->seen64 |= bit;
     out->data = id;
     return true;
 }
@@ -1223,14 +1240,15 @@ bool ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type) {
     /* Within the last id's time unit, the last one plus one while the low
      * field has room (a window wraps, so no unit is borrowed: past the
      * room the id is random again) */
-    const uint8_t key = (uint8_t)(type + 1);
-    if (g->last32Type == key && unit == g->last32 >> l->lowBits &&
-        ulidLow_(g->last32, l->lowBits) != ulidLow_(UINT64_MAX, l->lowBits)) {
-        id = g->last32 + 1;
+    const uint32_t bit = UINT32_C(1) << type;
+    uint32_t *last = &g->last32[type];
+    if ((g->seen32 & bit) && unit == *last >> l->lowBits &&
+        ulidLow_(*last, l->lowBits) != ulidLow_(UINT64_MAX, l->lowBits)) {
+        id = *last + 1;
     }
 
-    g->last32 = id;
-    g->last32Type = key;
+    *last = id;
+    g->seen32 |= bit;
     out->data = id;
     return true;
 }
@@ -2203,6 +2221,91 @@ int ulidTest(int, char *[]) {
             if (allHex) {
                 ERR("generator %d seeded from hex characters only", g);
             }
+        }
+    }
+
+    TEST("variants interleaved on one generator each keep strictly "
+         "increasing ids") {
+        /* MSCOUNT with MS (and 32MS with 32S) between its calls, all in
+         * the same units: each variant's ids still rise, none repeats */
+        ulidGen g;
+        ulidGenInit(&g, ULID_CLOCK_REALTIME);
+        ulid64_t prevCount = {};
+        ulid64_t prevMs = {};
+        ulid32_t prev32 = {};
+        bool rising = true;
+        for (int i = 0; i < 2000; i++) {
+            ulid64_t c;
+            ulid64_t m;
+            ulid32_t a;
+            ulid32_t b;
+            if (!ulid64Generate(&g, &c, ULID_VARIANT_MSCOUNT) ||
+                !ulid64Generate(&g, &m, ULID_VARIANT_MS) ||
+                !ulid32Generate(&g, &a, ULID_VARIANT_32MS) ||
+                !ulid32Generate(&g, &b, ULID_VARIANT_32S)) {
+                break;
+            }
+            /* A 32-bit variant follows its own last id within one unit
+             * while the low field (6 bits for 32MS) has room; past it, or
+             * in a new unit, the id is random again (the window cannot
+             * borrow a unit) */
+            const bool sameUnit = (a.data >> 6) == (prev32.data >> 6);
+            const bool room = (prev32.data & 63u) != 63u;
+            if (rising && i &&
+                (c.data <= prevCount.data || m.data <= prevMs.data ||
+                 (sameUnit && room && a.data != prev32.data + 1))) {
+                rising = false;
+                ERR("step %d: MSCOUNT %" PRIx64 " after %" PRIx64
+                    ", MS %" PRIx64 " after %" PRIx64 ", 32MS %" PRIx32
+                    " after %" PRIx32,
+                    i, c.data, prevCount.data, m.data, prevMs.data, a.data,
+                    prev32.data);
+            }
+            prevCount = c;
+            prevMs = m;
+            prev32 = a;
+        }
+    }
+
+    TEST("an EPOCHCUSTOM id is relative to the epoch it was made under") {
+        /* A later epoch's first id must not continue the earlier epoch's
+         * sequence (its time field would be off by the difference) */
+        ulidGen g;
+        ulidGenInit(&g, ULID_CLOCK_REALTIME);
+        ulidVariantConfig cfg;
+        ulidVariantConfigInit(&cfg, ULID_VARIANT_EPOCHCUSTOM);
+        cfg.customEpochNs = ULID_EPOCH_2020_NS;
+        ulid64_t early;
+        (void)ulid64GenerateWithConfig(&g, &early, &cfg);
+        cfg.customEpochNs = ULID_EPOCH_2020_NS + UINT64_C(86400000000000);
+        ulid64_t later;
+        (void)ulid64GenerateWithConfig(&g, &later, &cfg);
+        const uint64_t sinceLater =
+            ulid64GetTimestampNs(&later, ULID_VARIANT_EPOCHCUSTOM);
+        const uint64_t want = timeUtilNs() - cfg.customEpochNs;
+        const uint64_t off =
+            sinceLater > want ? sinceLater - want : want - sinceLater;
+        if (off > UINT64_C(60000000000)) {
+            ERR("the later epoch's id is %" PRIu64 " ns from its own time",
+                off);
+        }
+    }
+
+    TEST("a clock source change keeps a generator's ids rising") {
+        ulidGen g;
+        ulidGenInit(&g, ULID_CLOCK_REALTIME);
+        ulid64_t before;
+        for (int i = 0; i < 1000; i++) {
+            (void)ulid64Generate(&g, &before, ULID_VARIANT_MSCOUNT);
+        }
+        if (!ulidGenSetClockSource(&g, ULID_CLOCK_MONOTONIC_OFFSET)) {
+            ERR("%s", "the clock change was refused");
+        }
+        ulid64_t after;
+        (void)ulid64Generate(&g, &after, ULID_VARIANT_MSCOUNT);
+        if (after.data <= before.data ||
+            g.clockSource != ULID_CLOCK_MONOTONIC_OFFSET) {
+            ERR("%s", "after the clock change an id did not rise");
         }
     }
 

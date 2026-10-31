@@ -78,25 +78,15 @@ typedef enum ulidClockSource : uint32_t {
  * use and the clock defaults to REALTIME. Use ulidGenInit to pick the
  * clock source (required for MONOTONIC_OFFSET, which must capture its
  * offset at init). */
-typedef struct ulidGen {
-    uint64_t rng[2];        /* xoroshiro128+ state; {0,0} = unseeded */
-    uint64_t lastEmittedNs; /* emission watermark: next id > this */
-    uint64_t clockOffsetNs; /* realtime - monotonic, captured at init */
-    ulidClockSource clockSource;
-    uint64_t snowflakeLastMs; /* SNOWFLAKE per-ms sequence state */
-    uint16_t snowflakeSeq;
-    /* The last 64- and 32-bit variant ids and their types (+1; 0: none),
-     * so ids of one variant from one generator strictly increase even
-     * within one unit of their time field */
-    uint8_t last64Type;
-    uint8_t last32Type;
-    uint32_t last32;
-    uint64_t last64;
-} ulidGen;
+typedef struct ulidGen ulidGen; /* defined after ulidVariantType */
 
-/* Seed the RNG and configure the clock source. Returns false only on
- * NULL input. */
+/* Seed the RNG and configure the clock source, for a fresh generator: it
+ * resets every watermark and last id, so ids after it are not ordered
+ * after ids before it.  Returns false only on NULL input. */
 bool ulidGenInit(ulidGen *g, ulidClockSource clock);
+/* Change a live generator's clock source, keeping its watermark and last
+ * ids: its ids keep strictly increasing.  False only on NULL input. */
+bool ulidGenSetClockSource(ulidGen *g, ulidClockSource clock);
 
 /* Heap conveniences around ulidGenInit */
 ulidGen *ulidGenNew(ulidClockSource clock);
@@ -260,6 +250,26 @@ typedef enum ulidVariantType {
 
     ULID_VARIANT_COUNT
 } ulidVariantType;
+
+/* A generator's state (declared above, as ulidGen) */
+struct ulidGen {
+    uint64_t rng[2];        /* xoroshiro128+ state; {0,0} = unseeded */
+    uint64_t lastEmittedNs; /* emission watermark: next id > this */
+    uint64_t clockOffsetNs; /* realtime - monotonic, captured at init */
+    ulidClockSource clockSource;
+    uint64_t snowflakeLastMs; /* SNOWFLAKE per-ms sequence state */
+    uint16_t snowflakeSeq;
+    /* Each variant's last id (seen: a bit per variant type that has one),
+     * so ids of one variant from one generator strictly increase even
+     * within one unit of their time field, whatever other variants it
+     * makes in between; EPOCHCUSTOM's last id holds for the epoch it was
+     * made under */
+    uint32_t seen64;
+    uint32_t seen32;
+    uint64_t lastCustomEpochNs;
+    uint64_t last64[ULID_VARIANT_COUNT];
+    uint32_t last32[ULID_VARIANT_COUNT];
+};
 
 /* Variant configuration */
 typedef struct ulidVariantConfig {
