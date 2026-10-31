@@ -1363,17 +1363,15 @@ static bool multimapDeleteNextRowIf_(multimap **m, multimapIterator *it,
         row[i] = &owned[i];
     }
 
-    if (multimapIsSet(*m)) {
-        multimapDeleteFullWidth(m, row);
-    } else {
-        multimapDelete(m, row[0]);
-    }
-
+    /* A row the delete cannot find (its stored key is not the value the
+     * map orders by) ends the walk: the next walk would meet it again */
+    const bool removed = multimapIsSet(*m) ? multimapDeleteFullWidth(m, row)
+                                           : multimapDelete(m, row[0]);
     for (multimapElements i = 0; i < epe; i++) {
         databoxFreeData(&owned[i]);
     }
 
-    return true;
+    return removed;
 }
 
 size_t multimapDeleteRange(multimap **m, const databox *lo, const databox *hi) {
@@ -4577,6 +4575,35 @@ static constexpr int64_t MM_TEST_NOT_WRITTEN = INT64_MIN;
 
 int multimapTest(int, char *[]) {
     int err = 0;
+
+    TEST("DeleteByPredicate ends on rows it cannot delete") {
+        /* A surrogate-keyed map orders rows by the keys the atom table
+         * resolves, but stores references, which a plain delete looks up
+         * as values: a row it cannot find must end the walk, not repeat */
+        cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        for (size_t i = 0; i < 300; i++) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "pred-key-%05zu", 299 - i);
+            const databox key = databoxNewBytesString(buf);
+            databox ref = key;
+            multimapAtomInsertConvert(atoms, &ref);
+            const databox val = databoxNewUnsigned(i);
+            const databox *row[2] = {&key, &val};
+            multimapInsertWithSurrogateKey(&m, row, &ref, atoms);
+        }
+        const size_t before = multimapCount(m);
+        for (int c = 0; c < 2; c++) {
+            const multimapPredicate p = {
+                .condition = c ? MULTIMAP_CONDITION_GREATER_THAN
+                               : MULTIMAP_CONDITION_LESS_THAN,
+                .compareAgainst = databoxNewUnsigned(c ? 0 : UINT64_MAX)};
+            (void)multimapDeleteByPredicate(&m, &p);
+        }
+        if (multimapCount(m) > before) {
+            ERR("count grew from %zu to %zu", before, multimapCount(m));
+        }
+    }
 
     TEST("LookupWithReference finds rows keyed by atom references, every "
          "tier") {
