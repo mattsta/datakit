@@ -192,6 +192,9 @@ struct aesGcmKey;
  * tampered snapshot cannot drive an attacker-controlled allocation. */
 #define HMAC_KEYRING_MAX_KEY_BYTES ((size_t)256)
 
+/* The keys a keyring holds at once (installed, not retired) */
+#define HMAC_KEYRING_CAPACITY ((size_t)16)
+
 /* @handle: fixed: its address holds from creation to free */
 typedef struct hmacKeyring hmacKeyring;
 
@@ -224,6 +227,7 @@ void hmacKeyringFree(hmacKeyring *ring);
  * Returns false when:
  * - `id` is HMAC_KEY_ID_INVALID
  * - `id` is already installed and not yet retired
+ * - HMAC_KEYRING_CAPACITY keys are installed
  * - `algo` / `key_bytes` is NULL or `key_len` is 0
  * - `aead_salt` is NULL
  * - `aead_salt` is all-zero (callers wanting all-zero must use the
@@ -521,10 +525,11 @@ bool hmacKeyringNextAeadNonceAt(hmacKeyring *ring, hmacKeyId id,
  * called at any time; the next NextAeadNonce call picks up the new
  * salt. If `salt` is non-zero this also clears the slot's "unsalted"
  * flag (a non-zero salt makes the slot safe for nonce issuance even if
- * it was originally installed via InstallUnsalted). A zero salt leaves
- * the unsalted flag untouched — callers must use InstallUnsalted at
- * install time to declare the "no salt" intent. Returns false if `id`
- * is not installed or `salt` is NULL. */
+ * it was originally installed via InstallUnsalted). An all-zero salt is
+ * taken only by an unsalted slot (which stays unsalted): a salted key
+ * never holds one, as a salted install never takes one, and the call
+ * refuses it (reported as DK_DIAG_HMAC_KEYRING_ZERO_SALT).  Returns
+ * false if `id` is not installed, `salt` is NULL, or that refusal. */
 bool hmacKeyringSetAeadSalt(hmacKeyring *ring, hmacKeyId id,
                             const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES]);
 

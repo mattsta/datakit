@@ -29,8 +29,6 @@ defcleanerName(uint8_t *, zfree, Bytes);
 defcleanerName(uint64_t *, zfree, U64);
 defcleaner(flex *, flexFree);
 
-#define HMAC_KEYRING_CAPACITY ((size_t)16)
-
 /* Layout: largest to smallest fields to minimize padding. */
 typedef struct hmacKeyringEntry {
     const hmacHashAlgo *algo;  /* borrowed; descriptor is module-static */
@@ -850,13 +848,21 @@ bool hmacKeyringSetAeadSalt(hmacKeyring *ring, hmacKeyId id,
         pthread_rwlock_unlock(&ring->lock);
         return false;
     }
+    /* A salted key never holds an all-zero salt, as a salted install
+     * never takes one: the zero salt is what marks an unsalted key, in
+     * memory and in a snapshot (a restore installs a zero-salt slot
+     * unsalted, which would then issue zero-salt nonces) */
+    const bool zero = hmacKeyringSaltIsZero(salt);
+    if (zero && !slot->is_unsalted) {
+        pthread_rwlock_unlock(&ring->lock);
+        DK_DIAG(DK_DIAG_HMAC_KEYRING_ZERO_SALT,
+                "key %" PRIu32 ": an all-zero salt for a salted key", id);
+        return false;
+    }
     memcpy(slot->aead_salt, salt, HMAC_KEYRING_AEAD_SALT_BYTES);
-    /* If the caller supplied a real (non-zero) salt, transition the slot
-     * out of the "unsalted" state — the slot is now safe for fail-closed
-     * nonce issuance. A zero salt leaves `is_unsalted` untouched: an
-     * unsalted slot stays unsalted; a salted slot stays salted (and will
-     * subsequently fail NextAeadNonce until a non-zero salt is set). */
-    if (!hmacKeyringSaltIsZero(slot->aead_salt)) {
+    /* A real (non-zero) salt moves an unsalted slot to salted: it is now
+     * safe for fail-closed nonce issuance */
+    if (!zero) {
         slot->is_unsalted = false;
     }
     /* Bump generation — changing the salt rotates the AEAD nonce
@@ -1466,6 +1472,393 @@ static bool hkrTestReserveFn(void *ctx, hmacKeyId id, uint64_t limit) {
     return true;
 }
 
+/* ====================================================================
+ * The model test: every public call against a table of key slots (key,
+ * salt, counter, generation, reservation limit) and the floor, the
+ * keyring now and then rebuilt from its snapshot and the run going on
+ * with the copy
+ * ==================================================================== */
+#include "dkRandom.h"
+
+static constexpr uint32_t HK_IDS = 24; /* past HMAC_KEYRING_CAPACITY */
+
+typedef struct hkSlot_ {
+    bool in;
+    bool unsalted; /* installed through InstallUnsalted, never re-salted */
+    bool sha;      /* else BLAKE3 */
+    uint8_t keyLen;
+    uint8_t key[64];
+    uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES];
+    uint64_t counter;
+    uint64_t gen;    /* the generation last seen (0: none yet) */
+    uint64_t limit;  /* confirmed reservation limit */
+    uint64_t handed; /* the largest limit handed to the reservation */
+} hkSlot_;
+
+typedef struct hkModel_ {
+    hmacKeyring *ring;
+    hmacKeyId floor;
+    bool reserving;
+    uint64_t window;
+    bool answer; /* what the reservation function says */
+    uint32_t calls;
+    hmacKeyId calledId;
+    uint64_t calledLimit;
+    const char *why;
+    hkSlot_ s[HK_IDS + 1];
+} hkModel_;
+
+defcleanerName(hkModel_ *, zfree, HkModel);
+
+static bool hkReserve_(void *ctx, hmacKeyId id, uint64_t limit) {
+    hkModel_ *M = ctx;
+    M->calls++;
+    M->calledId = id;
+    M->calledLimit = limit;
+    return M->answer;
+}
+
+static size_t hkInstalled_(const hkModel_ *M) {
+    size_t n = 0;
+    for (uint32_t id = 1; id <= HK_IDS; id++) {
+        n += M->s[id].in;
+    }
+    return n;
+}
+
+static bool hkZeroSalt_(const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES]) {
+    return !(salt[0] | salt[1] | salt[2] | salt[3]);
+}
+
+/* The slot's generation moved forward (a mutation) or stayed (none) */
+static bool hkGeneration_(hkModel_ *M, hmacKeyId id, bool mutated) {
+    uint64_t g = 0;
+    const bool has = hmacKeyringGetGeneration(M->ring, id, &g);
+    if (has != M->s[id].in) {
+        return false;
+    }
+    if (!has) {
+        return true;
+    }
+    const bool ok = mutated ? g > M->s[id].gen : g == M->s[id].gen;
+    M->s[id].gen = g;
+    return ok;
+}
+
+/* @model: src/hmacKeyring.h */
+/* Every read of slot 'id' agrees with the model */
+static bool hkReads_(hkModel_ *M, hmacKeyId id) {
+    const hkSlot_ *s = &M->s[id];
+    const hmacHashAlgo *want = s->sha ? &hmacAlgoSHA256 : &hmacAlgoBLAKE3;
+    const uint8_t *raw = nullptr;
+    size_t rawLen = 0;
+    const hmacHashAlgo *algo = nullptr;
+    uint8_t copy[HMAC_KEYRING_MAX_KEY_BYTES];
+    size_t copyLen = 99;
+    uint64_t copyGen = 0;
+    uint64_t peek = 0;
+    const bool got = hmacKeyringGetRaw(M->ring, id, &raw, &rawLen, &algo);
+    if ((hmacKeyringLookup(M->ring, id) != nullptr) != s->in || got != s->in ||
+        hmacKeyringPeekAeadCounter(M->ring, id, &peek) != s->in) {
+        M->why = "a lookup's presence";
+        return false;
+    }
+    if (!s->in) {
+        return true;
+    }
+    if (rawLen != s->keyLen || memcmp(raw, s->key, s->keyLen) != 0 ||
+        algo != want || peek != s->counter) {
+        M->why = "the raw key, algorithm or counter";
+        return false;
+    }
+    /* A copy refused one byte short, then the bytes and generation */
+    if (hmacKeyringGetRawCopy(M->ring, id, copy, s->keyLen - 1u, &copyLen,
+                              nullptr) ||
+        copyLen != 0 ||
+        !hmacKeyringGetRawCopyAt(M->ring, id, copy, sizeof(copy), &copyLen,
+                                 &algo, &copyGen) ||
+        copyLen != s->keyLen || memcmp(copy, s->key, s->keyLen) != 0 ||
+        copyGen != s->gen ||
+        !hmacKeyringGetRawCopy(M->ring, id, copy, sizeof(copy), &copyLen,
+                               nullptr)) {
+        M->why = "a raw copy";
+        return false;
+    }
+    /* The AES-GCM schedule: cached for 16- and 32-byte keys only */
+    const bool aes = s->keyLen == 16 || s->keyLen == 32;
+    const struct aesGcmKey *sched = hmacKeyringGetAesGcmKey(M->ring, id);
+    struct aesGcmKey mine;
+    uint64_t schedGen = 0;
+    const bool copied = hmacKeyringGetAesGcmKeyCopy(M->ring, id, &mine);
+    const bool copiedAt =
+        hmacKeyringGetAesGcmKeyCopyAt(M->ring, id, &mine, &schedGen);
+    if ((sched != nullptr) != aes || copied != aes || copiedAt != aes ||
+        (aes &&
+         (memcmp(&mine, sched, sizeof(mine)) != 0 || schedGen != s->gen))) {
+        M->why = "the AES-GCM schedule";
+        return false;
+    }
+    dkSecureZero(&mine, sizeof(mine));
+    dkSecureZero(copy, sizeof(copy));
+    return true;
+}
+
+/* @model: src/hmacKeyring.h */
+/* One nonce for 'id', as the model issues it (or refuses) */
+static bool hkNonce_(hkModel_ *M, hmacKeyId id, bool at) {
+    hkSlot_ *s = &M->s[id];
+    bool want = s->in && !(hkZeroSalt_(s->salt) && !s->unsalted) &&
+                s->counter != UINT64_MAX;
+    const uint32_t callsBefore = M->calls;
+    bool reserves = false;
+    if (want && M->reserving && s->counter >= s->limit) {
+        reserves = true;
+        want = M->answer;
+    }
+    uint8_t nonce[12] = {};
+    uint64_t gen = 0;
+    const bool got = at ? hmacKeyringNextAeadNonceAt(M->ring, id, nonce, &gen)
+                        : hmacKeyringNextAeadNonce(M->ring, id, nonce);
+    if (got != want) {
+        M->why = "a nonce issued or refused";
+        return false;
+    }
+    if (reserves) {
+        /* (saturating at the counter's end) */
+        const uint64_t limit = s->counter > UINT64_MAX - M->window
+                                   ? UINT64_MAX
+                                   : s->counter + M->window;
+        if (M->calls != callsBefore + 1 || M->calledId != id ||
+            M->calledLimit != limit) {
+            static char why[200];
+            snprintf(why, sizeof(why),
+                     "the reservation call: %" PRIu32 " calls for id %" PRIu32
+                     " limit %" PRIu64 ", want 1 for %" PRIu32 " limit %" PRIu64
+                     " (counter %" PRIu64 ", limit was %" PRIu64
+                     ", answer %d, issued %d)",
+                     M->calls - callsBefore, M->calledId, M->calledLimit, id,
+                     limit, s->counter, s->limit, (int)M->answer, (int)got);
+            M->why = why;
+            return false;
+        }
+        s->handed = limit > s->handed ? limit : s->handed;
+        if (M->answer) {
+            s->limit = limit;
+        }
+    } else if (M->calls != callsBefore) {
+        M->why = "a reservation called within the limit";
+        return false;
+    }
+    if (got) {
+        uint8_t wantNonce[12];
+        dkStoreLe64(wantNonce, s->counter);
+        memcpy(wantNonce + 8, s->salt, HMAC_KEYRING_AEAD_SALT_BYTES);
+        if (memcmp(nonce, wantNonce, 12) != 0 || (at && gen != s->gen)) {
+            M->why = "the nonce's bytes or generation";
+            return false;
+        }
+        s->counter++;
+    }
+    return true;
+}
+
+/* @model: src/hmacKeyring.h */
+/* The keyring as a snapshot rebuilds it: the same keys, salts and floor,
+ * each counter at the larger of it and every limit handed out */
+static bool hkRebuild_(hkModel_ *M) {
+    const size_t need = hmacKeyringSnapshotSize(M->ring);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(need ? need : 1);
+    size_t written = 0;
+    if (!need || hmacKeyringSnapshot(M->ring, buf, need - 1, &written) ||
+        !hmacKeyringSnapshot(M->ring, buf, need, &written) || written != need) {
+        M->why = "the snapshot's size";
+        return false;
+    }
+    /* Into the keyring itself: every id collides (unless it is empty),
+     * and nothing changes */
+    if (hkInstalled_(M) && hmacKeyringRestore(M->ring, buf, written)) {
+        M->why = "a restore over its own ids";
+        return false;
+    }
+    hmacKeyring *back = hmacKeyringCreate();
+    if (!hmacKeyringRestore(back, buf, written) ||
+        hmacKeyringSize(back) != hkInstalled_(M) ||
+        hmacKeyringMinValidKeyId(back) != M->floor) {
+        hmacKeyringFree(back);
+        M->why = "a restore into a new keyring";
+        return false;
+    }
+    hmacKeyringFree(M->ring);
+    M->ring = back;
+    M->reserving = false; /* not persisted: installed again below */
+    for (uint32_t id = 1; id <= HK_IDS; id++) {
+        hkSlot_ *s = &M->s[id];
+        if (!s->in) {
+            s->gen = 0; /* generations are the new keyring's */
+            continue;
+        }
+        s->counter = s->handed > s->counter ? s->handed : s->counter;
+        s->limit = 0;
+        /* A restored slot with an all-zero salt is unsalted */
+        s->unsalted = hkZeroSalt_(s->salt);
+        uint64_t g = 0;
+        if (!hmacKeyringGetGeneration(M->ring, id, &g)) {
+            M->why = "a restored key has no generation";
+            return false;
+        }
+        s->gen = g;
+    }
+    return true;
+}
+
+/* @model: src/hmacKeyring.h */
+static int hmacKeyringTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, HkModel) hkModel_ *M = zcalloc(1, sizeof(*M));
+    /* @own: container; free=hmacKeyringFree */
+    M->ring = hmacKeyringCreate();
+    uint64_t rng = seed;
+    for (uint32_t step = 0; step < 6000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const hmacKeyId id = (hmacKeyId)(1 + r % HK_IDS);
+        hkSlot_ *s = &M->s[id];
+        const uint32_t op = (uint32_t)((r >> 8) % 16);
+        bool ok = true;
+        M->why = "the call's result";
+        switch (op) {
+        case 0:
+        case 1: { /* installed: salted or not, either algorithm */
+            static const uint8_t lens[] = {16, 20, 32, 64};
+            const uint8_t len = lens[(r >> 16) % 4];
+            uint8_t key[64];
+            uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES];
+            for (uint32_t i = 0; i < len; i++) {
+                key[i] = (uint8_t)(r >> (i % 56));
+            }
+            for (uint32_t i = 0; i < HMAC_KEYRING_AEAD_SALT_BYTES; i++) {
+                salt[i] = (uint8_t)((r >> (20 + i * 8)) % 4);
+            }
+            const bool sha = (r >> 24) % 2;
+            const bool unsalted = (r >> 25) % 4 == 0;
+            const hmacHashAlgo *algo = sha ? &hmacAlgoSHA256 : &hmacAlgoBLAKE3;
+            const bool fits = !s->in && hkInstalled_(M) < HMAC_KEYRING_CAPACITY;
+            const bool want = fits && (unsalted || !hkZeroSalt_(salt));
+            const bool got =
+                unsalted
+                    ? hmacKeyringInstallUnsalted(M->ring, id, algo, key, len)
+                    : hmacKeyringInstall(M->ring, id, algo, key, len, salt);
+            ok = got == want;
+            if (got) {
+                const uint64_t lastGen = s->gen;
+                *s = (hkSlot_){.in = true,
+                               .unsalted = unsalted,
+                               .sha = sha,
+                               .keyLen = len,
+                               .gen = lastGen};
+                memcpy(s->key, key, len);
+                if (!unsalted) {
+                    memcpy(s->salt, salt, sizeof(salt));
+                }
+                ok = hkGeneration_(M, id, true);
+            }
+            dkSecureZero(key, sizeof(key));
+            break;
+        }
+        case 2:
+            ok = hmacKeyringRetire(M->ring, id) == s->in;
+            s->in = false;
+            break;
+        case 3: { /* a new salt: a nonzero one makes the slot salted */
+            uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES];
+            for (uint32_t i = 0; i < HMAC_KEYRING_AEAD_SALT_BYTES; i++) {
+                salt[i] = (uint8_t)((r >> (20 + i * 8)) % 3);
+            }
+            /* (an all-zero salt only for an unsalted key) */
+            const bool want = s->in && (s->unsalted || !hkZeroSalt_(salt));
+            ok = hmacKeyringSetAeadSalt(M->ring, id, salt) == want;
+            if (want) {
+                memcpy(s->salt, salt, sizeof(salt));
+                s->unsalted = s->unsalted && hkZeroSalt_(salt);
+                ok = ok && hkGeneration_(M, id, true);
+            }
+            break;
+        }
+        case 4:
+        case 5:
+        case 6:
+        case 7:
+            ok = hkNonce_(M, id, (r >> 16) % 2);
+            break;
+        case 8: { /* the counter moved forward, never back */
+            const uint64_t to = (r >> 16) % 3 == 0
+                                    ? UINT64_MAX - (r >> 20) % 3
+                                    : s->counter + (r >> 20) % 40;
+            const uint64_t back = s->counter ? s->counter - 1 : 0;
+            const bool want = s->in && to >= s->counter && to != UINT64_MAX;
+            ok = hmacKeyringRestoreAeadCounter(M->ring, id, to) == want &&
+                 (!s->in || !s->counter ||
+                  !hmacKeyringRestoreAeadCounter(M->ring, id, back));
+            if (want) {
+                s->counter = to;
+            }
+            break;
+        }
+        case 9: { /* the floor: up, never down */
+            const hmacKeyId to = (hmacKeyId)((r >> 16) % 30);
+            const bool want = to >= M->floor;
+            ok = hmacKeyringSetMinValidKeyId(M->ring, to) == want;
+            if (want) {
+                M->floor = to;
+            }
+            ok = ok && hmacKeyringMinValidKeyId(M->ring) == M->floor;
+            break;
+        }
+        case 10: { /* the reservation: on (every slot reserves), or off */
+            if ((r >> 16) % 3 == 0) {
+                ok =
+                    hmacKeyringSetAeadReservation(M->ring, 0, nullptr, nullptr);
+                M->reserving = false;
+            } else {
+                const uint64_t window = 1 + (r >> 20) % 8;
+                ok =
+                    !hmacKeyringSetAeadReservation(M->ring, 0, hkReserve_, M) &&
+                    hmacKeyringSetAeadReservation(M->ring, window, hkReserve_,
+                                                  M);
+                M->reserving = true;
+                M->window = window;
+                for (uint32_t i = 1; i <= HK_IDS; i++) {
+                    M->s[i].limit = 0;
+                }
+            }
+            M->answer = (r >> 30) % 5 != 0;
+            break;
+        }
+        case 11:
+            M->answer = !M->answer;
+            break;
+        case 12:
+            if ((r >> 16) % 8 == 0) {
+                ok = hkRebuild_(M);
+            }
+            break;
+        default: /* reads only */
+            ok = hkReads_(M, id) && hkGeneration_(M, id, false);
+            break;
+        }
+        if (ok && hmacKeyringSize(M->ring) != hkInstalled_(M)) {
+            ok = false;
+            M->why = "the size";
+        }
+        if (!ok) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " on id %" PRIu32
+                ": %s (seed %" PRIu64 ")",
+                step, op, id, M->why, seed);
+        }
+    }
+    hmacKeyringFree(M->ring);
+    return err;
+}
+
 int hmacKeyringTest(int, char *[]) {
     int err = 0;
 
@@ -1700,6 +2093,44 @@ int hmacKeyringTest(int, char *[]) {
                 }
                 hmacKeyringFree(dst);
             }
+        }
+    }
+
+    TEST("a salted key refuses an all-zero salt, and stays salted through "
+         "a restore") {
+        cleaner(hmacKeyringFree) hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {7};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {1, 2, 3, 4};
+        const uint8_t zero[HMAC_KEYRING_AEAD_SALT_BYTES] = {};
+        uint8_t nonce[12];
+        if (!hmacKeyringInstall(ring, 5u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt) ||
+            hmacKeyringSetAeadSalt(ring, 5u, zero) ||
+            !hmacKeyringNextAeadNonce(ring, 5u, nonce) ||
+            memcmp(nonce + 8, salt, sizeof(salt)) != 0) {
+            ERR("%s", "a zero salt was taken by a salted key");
+        }
+        /* Restored, it still issues under its salt */
+        size_t len = hmacKeyringSnapshotSize(ring);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(len);
+        cleaner(hmacKeyringFree) hmacKeyring *back = hmacKeyringCreate();
+        if (!hmacKeyringSnapshot(ring, buf, len, &len) ||
+            !hmacKeyringRestore(back, buf, len) ||
+            !hmacKeyringNextAeadNonce(back, 5u, nonce) ||
+            memcmp(nonce + 8, salt, sizeof(salt)) != 0) {
+            ERR("%s", "the restored key lost its salt");
+        }
+        /* An unsalted key takes a zero salt (it stays unsalted) */
+        if (!hmacKeyringInstallUnsalted(ring, 6u, &hmacAlgoSHA256, key,
+                                        sizeof(key)) ||
+            !hmacKeyringSetAeadSalt(ring, 6u, zero)) {
+            ERR("%s", "an unsalted key refused a zero salt");
+        }
+    }
+
+    TEST("model: every public call against a table of key slots") {
+        for (uint64_t seed = 1; seed <= 4; seed++) {
+            err += hmacKeyringTestModel_(seed);
         }
     }
 
