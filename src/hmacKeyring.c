@@ -54,13 +54,13 @@ typedef struct hmacKeyringEntry {
      * write lock and are read under the lock. */
     uint64_t aead_limit;
     uint64_t aead_reserved;
-    /* Generation counter — bumped on EVERY mutation of this slot
-     * (Install, Retire, SetAeadSalt). Attach-style consumers cache the
-     * value observed at attach time and refuse to use the key if the
-     * generation has advanced. Stays monotonic across the slot's full
-     * lifetime — Retire does NOT reset it to zero, so a retire-then-
-     * reinstall under the same id is still distinguishable from "the
-     * exact slot you attached to". */
+    /* Generation: the keyring's generation clock at this slot's last
+     * mutation (Install, Retire, SetAeadSalt). Attach-style consumers
+     * cache the value observed at attach time and refuse to use the key
+     * if it has changed. The clock is the keyring's, not the slot's, so
+     * no two mutations of any slots share a value: a key retired and
+     * reinstalled in another slot cannot come back at a generation a
+     * consumer cached. */
     uint64_t generation;
     size_t raw_key_len;
     hmacKeyId id; /* HMAC_KEY_ID_INVALID iff slot is free */
@@ -77,6 +77,7 @@ struct hmacKeyring {
     pthread_rwlock_t lock;
     hmacKeyringEntry entries[HMAC_KEYRING_CAPACITY];
     size_t count;
+    uint64_t generationClock; /* the last generation any slot took */
     /* Revoked key floor . Monotonically non-decreasing
      * minimum key id permitted by floor-aware consumers
      * (flexEnvelopeVerify reads it via hmacKeyringMinValidKeyId). Zero
@@ -124,7 +125,7 @@ DK_FN_UNUSED static void hkrSecretBufWipeFree_cleanup(hkrSecretBuf *b) {
  * Bumps the slot's `generation` counter so attach-style consumers that
  * cached the pre-clear generation can detect the rotation and refuse to
  * use the now-freed key bytes (see hmacKeyringGetGeneration docs). */
-static void hmacKeyringEntryClear(hmacKeyringEntry *e) {
+static void hmacKeyringEntryClear(hmacKeyring *ring, hmacKeyringEntry *e) {
     if (e->raw_key_bytes != nullptr) {
         hmacKeyringSecureWipe(e->raw_key_bytes, e->raw_key_len);
         zfree(e->raw_key_bytes);
@@ -159,10 +160,10 @@ static void hmacKeyringEntryClear(hmacKeyringEntry *e) {
      * safe (fail-closed) state. A fresh Install must opt back in via
      * hmacKeyringInstallUnsalted if it wants zero-salt behavior. */
     e->is_unsalted = false;
-    /* Bump generation last — the counter is monotonic across the slot's
-     * full lifetime so a retire-then-reinstall under the same id stays
-     * distinguishable from "the exact slot you attached to". */
-    e->generation++;
+    /* A new generation last, from the keyring's clock: a retire-then-
+     * reinstall under the same id, in this slot or another, stays
+     * distinguishable from "the exact slot you attached to" */
+    e->generation = ++ring->generationClock;
 }
 
 /* Two variants of the slot lookup so the lock discipline shows up in
@@ -227,7 +228,7 @@ void hmacKeyringFree(hmacKeyring *ring) {
     }
     /* No lock needed — destructor; caller guarantees no concurrent use. */
     for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
-        hmacKeyringEntryClear(&ring->entries[i]);
+        hmacKeyringEntryClear(ring, &ring->entries[i]);
     }
     pthread_mutex_destroy(&ring->reserve_mu);
     pthread_rwlock_destroy(&ring->lock);
@@ -346,7 +347,7 @@ static bool hmacKeyringInstallInternal(
      * the pre-Install generation must reject the now-different key bound
      * to this id, even if the surrounding code never explicitly Retired
      * the slot (e.g. fresh slot acquired via a different path). */
-    slot->generation++;
+    slot->generation = ++ring->generationClock;
     ring->count++;
 
     /* Ownership now lives in the slot — disarm the scope-exit wipes. */
@@ -395,7 +396,7 @@ bool hmacKeyringRetire(hmacKeyring *ring, hmacKeyId id) {
         pthread_rwlock_unlock(&ring->lock);
         return false;
     }
-    hmacKeyringEntryClear(slot);
+    hmacKeyringEntryClear(ring, slot);
     ring->count--;
     pthread_rwlock_unlock(&ring->lock);
     return true;
@@ -785,7 +786,7 @@ bool hmacKeyringSetAeadSalt(hmacKeyring *ring, hmacKeyId id,
      * derivation surface for this key, which is a meaningful semantic
      * change for attach-style consumers that may have cached the prior
      * (key, salt) pairing. */
-    slot->generation++;
+    slot->generation = ++ring->generationClock;
     pthread_rwlock_unlock(&ring->lock);
     return true;
 }
@@ -1348,6 +1349,42 @@ static bool hkrTestReserveFn(void *ctx, hmacKeyId id, uint64_t limit) {
 
 int hmacKeyringTest(int, char *[]) {
     int err = 0;
+
+    TEST("a key reinstalled into another slot never repeats a generation") {
+        /* A in slot 0 and B in slot 1; B retired and reinstalled (a
+         * consumer caches that generation); A and B retired; B installed
+         * again with new bytes lands in slot 0: its generation must
+         * differ from the cached one, or the rotation goes unseen */
+        hmacKeyring *ring = hmacKeyringCreate();
+        uint8_t ka[32];
+        uint8_t kb[32];
+        uint8_t kc[32];
+        memset(ka, 0xa1, sizeof(ka));
+        memset(kb, 0xb2, sizeof(kb));
+        memset(kc, 0xc3, sizeof(kc));
+        const hmacKeyId A = 10;
+        const hmacKeyId B = 20;
+        (void)hmacKeyringInstallUnsalted(ring, A, &hmacAlgoSHA256, ka,
+                                         sizeof(ka));
+        (void)hmacKeyringInstallUnsalted(ring, B, &hmacAlgoSHA256, kb,
+                                         sizeof(kb));
+        (void)hmacKeyringRetire(ring, B);
+        (void)hmacKeyringInstallUnsalted(ring, B, &hmacAlgoSHA256, kb,
+                                         sizeof(kb));
+        uint64_t cached = 0;
+        (void)hmacKeyringGetGeneration(ring, B, &cached);
+        (void)hmacKeyringRetire(ring, A);
+        (void)hmacKeyringRetire(ring, B);
+        (void)hmacKeyringInstallUnsalted(ring, B, &hmacAlgoSHA256, kc,
+                                         sizeof(kc));
+        uint64_t now = 0;
+        if (!hmacKeyringGetGeneration(ring, B, &now) || now == cached) {
+            ERR("the reinstalled key's generation %" PRIu64
+                " repeats the cached %" PRIu64,
+                now, cached);
+        }
+        hmacKeyringFree(ring);
+    }
 
     TEST("Restore of every truncation and byte flip: all or nothing") {
         /* A ring of four keys (two algorithms, a salted one, an advanced
