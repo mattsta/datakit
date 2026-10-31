@@ -830,12 +830,16 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
      *         to match.  Launchers start with stdio open and with stdin
      *         and stdout closed, where the readiness channel would land
      *         on the streams /dev/null replaces.  The daemons are
-     *         re-parented away from the test process, so only the
-     *         launchers are reaped here. */
+     *         re-parented away from the test process, so the launchers
+     *         are reaped here and each daemon is awaited through a pipe
+     *         it holds open until it exits. */
     for (int closedStdio = 0; closedStdio < 2; closedStdio++) {
         for (int signals = 0; signals < 2; signals++) {
+            int gone[2] = {-1, -1};
+            REXPECT(pipe(gone) == 0, "pipe the daemon holds");
             const pid_t launcher = fork();
             if (launcher == 0) {
+                close(gone[0]);
                 if (closedStdio) {
                     close(STDIN_FILENO);
                     close(STDOUT_FILENO);
@@ -870,6 +874,11 @@ static int dkTestDaemonizeReadyTest(int, char *[]) {
                 REXPECT(WIFEXITED(status) && WEXITSTATUS(status) == want,
                         "launcher exit status follows the daemon's readiness");
             }
+            close(gone[1]);
+            REXPECT(OSRegulateReadyPipeAwaitMs(gone[0], kGenerousMs) ==
+                        OS_REGULATE_READY_AWAIT_WRITER_GONE,
+                    "the daemon exited");
+            close(gone[0]);
         }
     }
 

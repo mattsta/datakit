@@ -303,12 +303,12 @@ void OSRegulateDaemonizeSignalReady(void) {
 }
 
 void OSRegulateDaemonizeThenExitNoWait(void) {
-    if (!OSRegulateDaemonize(nullptr)) {
+    if (OSRegulateDaemonize(nullptr) == OS_REGULATE_DAEMONIZE_PARENT) {
         /* parent process exits cleanly */
         OSRegulateExitClean();
     }
 
-    /* child process continues */
+    /* the daemon continues (or, when the fork failed, this process) */
 }
 
 bool OSRegulateWritePidToFile(const char *path) {
@@ -1605,14 +1605,21 @@ int OSRegulateTest(int, char *[]) {
          "each in a child") {
         /* ExitClean ends a child with status 0.  DaemonizeThenExitNoWait
          * ends the calling child (status 0) and goes on in its daemon,
-         * which leaves at once.  The parent-exit signal is set on Linux
-         * and refused elsewhere */
+         * which leaves at once; the daemon holds a pipe open until it
+         * exits, so it is awaited too.  The parent-exit signal is set on
+         * Linux and refused elsewhere */
         static const int jobs = 3;
         for (int job = 0; job < jobs; job++) {
             fflush(stdout);
             fflush(stderr);
+            int gone[2] = {-1, -1};
+            if (pipe(gone) != 0) {
+                ERR("job %d: no pipe", job);
+                break;
+            }
             const pid_t child = fork();
             if (child == 0) {
+                close(gone[0]);
                 if (job == 0) {
                     OSRegulateExitClean();
                 }
@@ -1625,11 +1632,17 @@ int OSRegulateTest(int, char *[]) {
                                    ? 0
                                    : 1);
             }
+            close(gone[1]);
             int status = 0;
             if (child < 0 || waitpid(child, &status, 0) != child ||
                 !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
                 ERR("job %d: the child ended with status %d", job, status);
             }
+            if (OSRegulateReadyPipeAwaitMs(gone[0], 30000) !=
+                OS_REGULATE_READY_AWAIT_WRITER_GONE) {
+                ERR("job %d: a process holding the pipe did not exit", job);
+            }
+            close(gone[0]);
         }
     }
 
