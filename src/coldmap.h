@@ -116,10 +116,12 @@ size_t coldmapRemoveIf(coldmap *cm, coldmapRowFn *remove, void *ctx,
 /* One block's rows, each kept, removed, or kept with its last element
  * changed ('fn' fills '*last', set up for any value, and answers CHANGE):
  * the block is rewritten once when any row is removed or changed (an
- * emptied block goes, a shrunken one may merge into the block before it),
- * and left as it is otherwise.  Removed rows are appended to '*removed' (NULL:
- * not kept) in key order.  '*next' is the block to sweep after it (0 past
- * the last: a sweep goes round).  Returns the rows removed. */
+ * emptied block goes, a shrunken one may merge into the block before it,
+ * one grown past the raw limit splits into blocks that fit), and left as
+ * it is otherwise.  Removed rows are appended to '*removed' (NULL: not
+ * kept) in key order.  '*next' is the block to sweep after it and the
+ * blocks it split into (0 past the last: a sweep goes round).  'fn' reads
+ * only: it must not change the coldmap.  Returns the rows removed. */
 typedef enum coldmapSweepAction {
     COLDMAP_SWEEP_KEEP = 0,
     COLDMAP_SWEEP_REMOVE = 1,

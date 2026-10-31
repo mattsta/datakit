@@ -324,6 +324,25 @@ static void coldmapMaybeMerge_(coldmap *cm, size_t at) {
     }
 }
 
+/* 'f' stored as block 'at' (in place, holding nothing) and, while a
+ * piece of two or more rows is past the raw limit, split at its middle
+ * into blocks after it; returns the blocks it took */
+static size_t coldmapStoreFitting_(coldmap *cm, size_t at, flex *f) {
+    const multimapElements epe = cm->elementsPerEntry;
+    flex *upper = nullptr;
+    if (flexBytes(f) > cm->rawCap && flexCount(f) >= 2 * (size_t)epe) {
+        /* @own: container; free=mflexFree */
+        upper = flexSplitMiddle(&f, epe, flexMiddle(f, epe));
+    }
+    if (!upper) {
+        coldmapBlockStore_(cm, &cm->blocks[at], f, true);
+        return 1;
+    }
+    const size_t low = coldmapStoreFitting_(cm, at, f);
+    (void)coldmapBlockInsert_(cm, at + low);
+    return low + coldmapStoreFitting_(cm, at + low, upper);
+}
+
 bool coldmapInsert(coldmap *cm, const databox *elements[]) {
     const multimapElements epe = cm->elementsPerEntry;
     if (!cm->blockCount) {
@@ -568,16 +587,20 @@ size_t coldmapSweepBlock(coldmap *cm, size_t index, coldmapSweepFn *fn,
     }
     coldmapBlockRelease_(b);
     *b = (coldmapBlock){};
-    coldmapBlockStore_(cm, b, kept, true);
+    /* Changed values that grew it past the raw limit split it; the next
+     * block to sweep is past every piece */
+    const size_t took = coldmapStoreFitting_(cm, index, kept);
+    b = &cm->blocks[index];
     /* A small block merges into the one before it (already swept), never
      * the one after: a sweep skips no row and passes none twice */
-    if (index && mflexBytesActual(b->rows) * 2 < cm->storedTarget &&
+    if (took == 1 && index &&
+        mflexBytesActual(b->rows) * 2 < cm->storedTarget &&
         (uint64_t)cm->blocks[index - 1].raw + b->raw <= cm->rawCap) {
         coldmapMergeNext_(cm, index - 1);
         *next = index < cm->blockCount ? index : 0;
         return gone;
     }
-    *next = index + 1 < cm->blockCount ? index + 1 : 0;
+    *next = index + took < cm->blockCount ? index + took : 0;
     return gone;
 }
 
@@ -1422,6 +1445,18 @@ coldmapTestSweep_(void *ctx, const databox *const row[], databox *last) {
     return COLDMAP_SWEEP_KEEP;
 }
 
+/* Every value becomes 100 bytes */
+static coldmapSweepAction
+coldmapTestWiden_(void *ctx, const databox *const row[], databox *last) {
+    (void)row;
+    static const char wide[101] =
+        "0123456789012345678901234567890123456789012345678901234567890123456"
+        "789012345678901234567890123456789";
+    (*(uint64_t *)ctx)++;
+    *last = databoxNewBytesString(wide);
+    return COLDMAP_SWEEP_CHANGE;
+}
+
 int coldmapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1849,6 +1884,41 @@ int coldmapTest(int argc, char *argv[]) {
                         gone);
                 }
             }
+        }
+    }
+
+    TEST("a sweep that widens values splits blocks to the raw limit and "
+         "passes every row once") {
+        const coldmapConfig config = {.rawLimit = FLEX_CAP_LEVEL_512,
+                                      .storedTarget = 128};
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        cleaner(multimapFree) multimap *m =
+            coldmapTestRows_(COLDMAP_SHAPE_INTS, 600);
+        cleaner(coldmapFree) coldmap *cm =
+            coldmapNewFromDump(2, &config, multimapDump(m));
+        const size_t blocksBefore = coldmapBlockCount(cm);
+        uint64_t seen = 0;
+        size_t at = 0;
+        size_t passes = 0;
+        do {
+            size_t next;
+            (void)coldmapSweepBlock(cm, at, coldmapTestWiden_, &seen, nullptr,
+                                    &next);
+            at = next;
+            passes++;
+        } while (at != 0 && passes < 10000);
+        bool fits = true;
+        for (size_t i = 0; i < cm->blockCount; i++) {
+            if (cm->blocks[i].count > 1 && cm->blocks[i].raw > cm->rawCap) {
+                fits = false;
+            }
+        }
+        if (seen != 600 || !fits || cm->rows != 600 ||
+            coldmapBlockCount(cm) <= blocksBefore ||
+            !coldmapVerify_(cm, state)) {
+            ERR("%" PRIu64 " rows seen, %zu blocks (from %zu), %s", seen,
+                coldmapBlockCount(cm), blocksBefore,
+                fits ? "all fit" : "one past the raw limit");
         }
     }
 
