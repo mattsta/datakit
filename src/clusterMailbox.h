@@ -296,9 +296,11 @@ typedef enum [[nodiscard]] clusterMailboxIngestResult {
     CLUSTER_MAILBOX_ERR_REPLAY = 6,            /* sequence <= last applied */
     CLUSTER_MAILBOX_ERR_APPLY_REJECTED = 7,    /* on_apply returned false */
     CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL = 8, /* too many distinct origins */
-    CLUSTER_MAILBOX_ERR_PROTOCOL = 9, /* frame protocol this build does not
-                                         read (a newer peer's version or
-                                         must-understand feature) */
+    CLUSTER_MAILBOX_ERR_PROTOCOL = 9,     /* frame protocol this build does not
+                                             read (a newer peer's version or
+                                             must-understand feature) */
+    CLUSTER_MAILBOX_ERR_KEY_REVOKED = 10, /* key_id below the keyring's
+                                             revoked-key floor */
 } clusterMailboxIngestResult;
 
 /* Consumer: verify and dispatch a single envelope. The caller-
@@ -328,7 +330,8 @@ clusterMailboxIngestResult clusterMailboxIngest(clusterMailbox *mb,
  * - table_full > 0: capacity exhausted; either grow CAP or expect
  * missed frames from new origins.
  * - key_missing > 0: rotation desync; new producer key not yet
- * installed on this consumer. */
+ * installed on this consumer.
+ * - key_revoked > 0: a peer still seals under an id below the floor. */
 typedef struct clusterMailboxStats {
     uint64_t ingest_total;      /* every Ingest call, success or not */
     uint64_t apply_ok;          /* OK results (frame applied) */
@@ -337,6 +340,7 @@ typedef struct clusterMailboxStats {
     uint64_t algo_mismatch;     /* ERR_ALGO_MISMATCH */
     uint64_t verify_failed;     /* ERR_VERIFY_FAILED */
     uint64_t key_missing;       /* ERR_KEY_MISSING */
+    uint64_t key_revoked;       /* ERR_KEY_REVOKED */
     uint64_t bad_frame;         /* ERR_BAD_FRAME */
     uint64_t origin_table_full; /* ERR_ORIGIN_TABLE_FULL */
     uint64_t protocol_rejected; /* ERR_PROTOCOL */

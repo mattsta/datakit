@@ -147,6 +147,7 @@ typedef struct clusterMailboxCounters {
     _Atomic uint64_t algo_mismatch;
     _Atomic uint64_t verify_failed;
     _Atomic uint64_t key_missing;
+    _Atomic uint64_t key_revoked;
     _Atomic uint64_t bad_frame;
     _Atomic uint64_t origin_table_full;
     _Atomic uint64_t param_error;
@@ -227,6 +228,9 @@ static void cmRecordIngestResult(clusterMailbox *mb,
         break;
     case CLUSTER_MAILBOX_ERR_KEY_MISSING:
         cmBumpCounter(&mb->counters.key_missing, 1);
+        break;
+    case CLUSTER_MAILBOX_ERR_KEY_REVOKED:
+        cmBumpCounter(&mb->counters.key_revoked, 1);
         break;
     case CLUSTER_MAILBOX_ERR_VERIFY_FAILED:
         cmBumpCounter(&mb->counters.verify_failed, 1);
@@ -689,7 +693,9 @@ static bool cmSealImpl(clusterMailbox *mb, uint32_t origin_id,
      * key-equivalent material before the stack frame unwinds. */
     uint8_t key_copy[HMAC_KEYRING_MAX_KEY_BYTES];
     size_t key_len = 0;
-    if (!hmacKeyringGetRawCopy(mb->ring, key_id, key_copy, sizeof(key_copy),
+    /* A revoked id seals nothing, though its bytes may still be held */
+    if (key_id < hmacKeyringMinValidKeyId(mb->ring) ||
+        !hmacKeyringGetRawCopy(mb->ring, key_id, key_copy, sizeof(key_copy),
                                &key_len, nullptr)) {
         return false;
     }
@@ -804,6 +810,11 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
      * key UAF window. */
     uint8_t key_copy[HMAC_KEYRING_MAX_KEY_BYTES];
     size_t raw_key_len = 0;
+    /* The floor is policy, independent of Retire: an id below it is
+     * refused while its bytes are still installed */
+    if (key_id < hmacKeyringMinValidKeyId(mb->ring)) {
+        return CLUSTER_MAILBOX_ERR_KEY_REVOKED;
+    }
     if (!hmacKeyringGetRawCopy(mb->ring, key_id, key_copy, sizeof(key_copy),
                                &raw_key_len, nullptr)) {
         return CLUSTER_MAILBOX_ERR_KEY_MISSING;
@@ -1043,6 +1054,9 @@ void clusterMailboxGetStats(const clusterMailbox *mb,
     out->key_missing =
         atomic_load_explicit(&mb->counters.key_missing, memory_order_relaxed);
     /* @sync: relaxed counter */
+    out->key_revoked =
+        atomic_load_explicit(&mb->counters.key_revoked, memory_order_relaxed);
+    /* @sync: relaxed counter */
     out->bad_frame =
         atomic_load_explicit(&mb->counters.bad_frame, memory_order_relaxed);
     /* @sync: relaxed counter */
@@ -1088,6 +1102,8 @@ void clusterMailboxResetStats(clusterMailbox *mb) {
     atomic_store_explicit(&mb->counters.verify_failed, 0, memory_order_relaxed);
     /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.key_missing, 0, memory_order_relaxed);
+    /* @sync: relaxed counter */
+    atomic_store_explicit(&mb->counters.key_revoked, 0, memory_order_relaxed);
     /* @sync: relaxed counter */
     atomic_store_explicit(&mb->counters.bad_frame, 0, memory_order_relaxed);
     /* @sync: relaxed counter */
@@ -2900,6 +2916,54 @@ int clusterMailboxTest(int, char *[]) {
             clusterMailboxIngest(mb, buf, written, K_missing);
         if (rc != CLUSTER_MAILBOX_ERR_KEY_MISSING) {
             ERR("Expected KEY_MISSING, got %d", (int32_t)rc);
+        }
+        clusterMailboxFree(mb);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("a key id below the revoked-key floor neither seals nor ingests") {
+        /* The rotation choreography raises the floor past the old id
+         * while the old key is still installed: both directions must
+         * refuse it from then on */
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        hmacKeyringInstallUnsalted(ring, K1 + 1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        cmTestCtx ctx = {};
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
+        const uint8_t payload[] = "old key";
+        const size_t sz = clusterMailboxSealedSize(mb, sizeof(payload));
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
+        size_t written = 0;
+        if (!clusterMailboxSeal(mb, 1u, 1u, 0u, payload, sizeof(payload), K1,
+                                buf, sz, &written)) {
+            ERR("%s", "the seal before the floor was refused");
+        }
+        if (!hmacKeyringSetMinValidKeyId(ring, K1 + 1)) {
+            ERR("%s", "the floor was not raised");
+        }
+        const clusterMailboxIngestResult rc =
+            clusterMailboxIngest(mb, buf, written, K1);
+        clusterMailboxStats st;
+        clusterMailboxGetStats(mb, &st);
+        if (rc != CLUSTER_MAILBOX_ERR_KEY_REVOKED || ctx.apply_count ||
+            st.key_revoked != 1) {
+            ERR("a frame under a revoked id: result %d, %u applied, %" PRIu64
+                " counted revoked",
+                (int32_t)rc, (unsigned)ctx.apply_count, st.key_revoked);
+        }
+        size_t again = 0;
+        if (clusterMailboxSeal(mb, 1u, 2u, 0u, payload, sizeof(payload), K1,
+                               buf, sz, &again)) {
+            ERR("%s", "a seal under a revoked id was taken");
+        }
+        if (!clusterMailboxSeal(mb, 1u, 2u, 0u, payload, sizeof(payload),
+                                K1 + 1, buf, sz, &again) ||
+            clusterMailboxIngest(mb, buf, again, K1 + 1) !=
+                CLUSTER_MAILBOX_OK) {
+            ERR("%s", "the id at the floor no longer seals and ingests");
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
