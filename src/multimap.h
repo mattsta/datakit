@@ -127,10 +127,13 @@ void multimapDeleteEntryWithReference(
  * a row by deleting it and inserting the new one.  True when written. */
 bool multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
 bool multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
-/* multimapReplaceEntry for a map whose keys are references into
- * 'referenceContainer': the replace may then re-balance the Full tier's
- * sub-maps (resolving keys through the references), which the plain
- * form must not do without the container */
+/* multimapResizeEntry and multimapReplaceEntry for a map whose keys are
+ * references into 'referenceContainer' (a map of references uses these):
+ * a resize or replace may then re-balance the Full tier's sub-maps,
+ * resolving keys through the references, which the plain forms cannot */
+bool multimapResizeEntryWithReference(
+    multimap **m, multimapEntry *me, size_t newLen,
+    const struct multimapAtom *referenceContainer);
 bool multimapReplaceEntryWithReference(
     multimap **m, multimapEntry *me, const databox *box,
     const struct multimapAtom *referenceContainer);

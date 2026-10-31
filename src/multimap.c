@@ -918,6 +918,29 @@ bool multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box) {
     return true;
 }
 
+/* After an in-place rewrite of a map of references: the Full tier
+ * re-balances with keys resolved through the references */
+static void
+multimapRegularizeWithReference_(multimap **m, multimapEntry *me,
+                                 const multimapAtom *referenceContainer) {
+    if (multimapType_(*m) == MULTIMAP_TYPE_FULL) {
+        multimapFullRegularizeMapWithReference(mmf(*m), me->mapIdx, me->map,
+                                               referenceContainer);
+    }
+}
+
+bool multimapResizeEntryWithReference(multimap **m, multimapEntry *me,
+                                      size_t newLen,
+                                      const multimapAtom *referenceContainer) {
+    if (MM_SET_REWRITE_REFUSED_(*m)) {
+        return false;
+    }
+
+    MULTIMAP_ENTRY_UPDATE_(*m, me, ResizeEntry, newLen);
+    multimapRegularizeWithReference_(m, me, referenceContainer);
+    return true;
+}
+
 bool multimapReplaceEntryWithReference(multimap **m, multimapEntry *me,
                                        const databox *box,
                                        const multimapAtom *referenceContainer) {
@@ -926,13 +949,7 @@ bool multimapReplaceEntryWithReference(multimap **m, multimapEntry *me,
     }
 
     MULTIMAP_ENTRY_UPDATE_(*m, me, ReplaceEntry, box);
-
-    const multimapType type = multimapType_(*m);
-    if (type == MULTIMAP_TYPE_FULL) {
-        multimapFull *full = mmf(*m);
-        multimapFullRegularizeMapWithReference(full, me->mapIdx, me->map,
-                                               referenceContainer);
-    }
+    multimapRegularizeWithReference_(m, me, referenceContainer);
     return true;
 }
 
@@ -4575,6 +4592,53 @@ static constexpr int64_t MM_TEST_NOT_WRITTEN = INT64_MIN;
 
 int multimapTest(int, char *[]) {
     int err = 0;
+
+    TEST("a resize that splits a map of references keeps every key found") {
+        /* Growing values past the 512-byte limit splits Full sub-maps; the
+         * split's routing keys are the resolved keys, not the stored
+         * references, so every key is still found */
+        cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        static constexpr size_t n = 2000;
+        for (size_t i = 0; i < n; i++) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "rz-key-%05zu", (i * 7) % n);
+            const databox key = databoxNewBytesString(buf);
+            databox ref = key;
+            multimapAtomInsertConvert(atoms, &ref);
+            const databox val = databoxNewBytesString("v");
+            const databox *row[2] = {&key, &val};
+            multimapInsertWithSurrogateKey(&m, row, &ref, atoms);
+        }
+        for (size_t i = 0; i < n; i += 9) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "rz-key-%05zu", i);
+            const databox key = databoxNewBytesString(buf);
+            multimapEntry me;
+            if (!multimapGetUnderlyingEntryWithReference(m, &key, &me, atoms)) {
+                ERR("key %zu not found before its resize", i);
+                continue;
+            }
+            me.fe = flexNext(*me.map, me.fe);
+            (void)multimapResizeEntryWithReference(&m, &me, 200, atoms);
+        }
+        size_t missed = 0;
+        for (size_t i = 0; i < n; i++) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "rz-key-%05zu", i);
+            const databox key = databoxNewBytesString(buf);
+            databox got = {};
+            databox *out[1] = {&got};
+            if (!multimapLookupWithReference(m, &key, out, atoms)) {
+                missed++;
+            }
+        }
+        if (multimapType_(m) != MULTIMAP_TYPE_FULL || missed) {
+            ERR("tier %d, %zu of %zu keys lost after the resizes",
+                (int)multimapType_(m), missed, n);
+        }
+    }
 
     TEST("DeleteByPredicate ends on rows it cannot delete") {
         /* A surrogate-keyed map orders rows by the keys the atom table

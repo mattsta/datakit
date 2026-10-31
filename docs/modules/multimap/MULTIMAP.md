@@ -541,6 +541,14 @@ bool multimapGetUnderlyingEntryFullWidth(multimap *m, const databox *elements[],
 
 bool multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
 bool multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
+/* For a map of atom references: a rewrite that re-balances the Full tier
+ * resolves keys through the container */
+bool multimapResizeEntryWithReference(
+    multimap **m, multimapEntry *me, size_t newLen,
+    const struct multimapAtom *referenceContainer);
+bool multimapReplaceEntryWithReference(
+    multimap **m, multimapEntry *me, const databox *box,
+    const struct multimapAtom *referenceContainer);
 void multimapDeleteEntry(multimap **m, multimapEntry *me);
 ```
 
