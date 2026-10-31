@@ -128,6 +128,8 @@ static void atomHolesReleaseIfEmpty_(multimapAtom *ma) {
 
 /* 'id' is now in use: generated ids continue past it.  Under LOWEST a
  * hole it fills leaves the free set, and the ids it skips past join it. */
+static void atomAfterDelete_(multimapAtom *ma, uint64_t deletedId);
+
 static void atomBindId_(multimapAtom *ma, const uint64_t id) {
     const uint64_t next = atomNextId_(ma);
     if (multimapAtomGetIds(ma) != MULTIMAP_ATOM_IDS_LOWEST) {
@@ -1178,6 +1180,9 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
         [[maybe_unused]] const bool deleted =
             atomFwdDelete_(ma, foundReference.data.u);
         assert(deleted);
+        /* The value's old id is released as any deleted atom's is (the
+         * next id lowered, or a hole kept for LOWEST) */
+        atomAfterDelete_(ma, foundReference.data.u);
     }
 
     /* Also clear any prior binding of this exact ID to a DIFFERENT key,
@@ -4655,6 +4660,376 @@ static int atomTestLowest_(const atomTestKind_ *kind) {
     return err;
 }
 
+/* ====================================================================
+ * The model test: every public call against a table of values (each
+ * with its id and references), in every configuration (index, ids,
+ * store), with the id each behaviour hands out next checked at every
+ * step: REUSE one past the largest live id, PERMANENT one past every
+ * id ever used, LOWEST the lowest id not in use
+ * ==================================================================== */
+#include "dkRandom.h"
+
+static constexpr uint32_t AM_VALUES = 250; /* 150 numbers, 100 strings */
+static constexpr uint32_t AM_IDS = 8192;
+
+typedef struct amAtom_ {
+    bool in;
+    uint64_t id;
+    uint64_t refs;
+} amAtom_;
+
+typedef struct amModel_ {
+    multimapAtomIds ids;
+    amAtom_ a[AM_VALUES];
+    int32_t byId[AM_IDS]; /* value index, -1 for none */
+    uint64_t everMax;     /* one past every id used (PERMANENT) */
+    uint32_t count;
+    char str[AM_VALUES][24];
+    const char *why;
+    uint32_t lastOp; /* the step's call, for a report */
+    uint64_t lastId; /* the id it named or bound */
+} amModel_;
+
+defcleanerName(amModel_ *, zfree, AmModel);
+
+/* Value 'v' as a box: a number (an integer, or now and then the same
+ * whole real) or a string, long ones past a box's 8 inline bytes */
+static databox amBox_(const amModel_ *M, uint32_t v, bool alt) {
+    if (v < 150) {
+        return alt ? databoxNewReal((double)v) : databoxNewSigned((int64_t)v);
+    }
+    return databoxNewBytesString(M->str[v]);
+}
+
+static bool amIs_(const amModel_ *M, uint32_t v, const databox *got) {
+    const databox want = amBox_(M, v, false);
+    return databoxCompare(got, &want) == 0;
+}
+
+static uint64_t amNextId_(const amModel_ *M) {
+    if (M->ids == MULTIMAP_ATOM_IDS_PERMANENT) {
+        return M->everMax;
+    }
+    if (M->ids == MULTIMAP_ATOM_IDS_LOWEST) {
+        uint64_t id = 0;
+        while (id < AM_IDS && M->byId[id] >= 0) {
+            id++;
+        }
+        return id;
+    }
+    for (uint64_t id = AM_IDS; id-- > 0;) {
+        if (M->byId[id] >= 0) {
+            return id + 1;
+        }
+    }
+    return 0;
+}
+
+static void amCreate_(amModel_ *M, uint32_t v, uint64_t id) {
+    M->a[v] = (amAtom_){.in = true, .id = id, .refs = 1};
+    M->byId[id] = (int32_t)v;
+    M->count++;
+    M->everMax = id + 1 > M->everMax ? id + 1 : M->everMax;
+}
+
+static void amRemove_(amModel_ *M, uint32_t v) {
+    M->byId[M->a[v].id] = -1;
+    M->a[v].in = false;
+    M->count--;
+}
+
+/* One reference fewer; true when that deleted the atom */
+static bool amRelease_(amModel_ *M, uint32_t v) {
+    if (!M->a[v].in || M->ids == MULTIMAP_ATOM_IDS_PERMANENT) {
+        return false;
+    }
+    if (--M->a[v].refs == 0) {
+        amRemove_(M, v);
+        return true;
+    }
+    return false;
+}
+
+static void amRetain_(amModel_ *M, uint32_t v) {
+    if (M->ids != MULTIMAP_ATOM_IDS_PERMANENT) {
+        M->a[v].refs++;
+    }
+}
+
+/* @model: src/multimapAtom.h */
+/* Every value's presence, id, value and count read back as the model's,
+ * by value, by id and by reference */
+static bool amSame_(amModel_ *M, const multimapAtom *ma) {
+    if (multimapAtomCount(ma) != M->count ||
+        multimapAtomNextId(ma) != amNextId_(M) ||
+        multimapAtomGetIds(ma) != M->ids) {
+        M->why = "the count, next id or settings";
+        return false;
+    }
+    uint64_t references = 0;
+    for (uint32_t v = 0; v < AM_VALUES; v++) {
+        const amAtom_ *x = &M->a[v];
+        const databox box = amBox_(M, v, v % 2);
+        uint64_t id = 0;
+        const bool has = multimapAtomGetId(ma, &box, &id);
+        if (has != x->in || (has && id != x->id)) {
+            M->why = "a value's id";
+            return false;
+        }
+        if (!x->in) {
+            continue;
+        }
+        references += x->refs;
+        const databox ref = {.data.u = x->id,
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        databox byId = {};
+        databox byRef = {};
+        databox count = {};
+        databox lookedRef = {};
+        databox converted = ref;
+        databoxBig convertedBig;
+        DATABOX_BIG_INIT(&convertedBig);
+        convertedBig.type = ref.type;
+        convertedBig.data = ref.data;
+        multimapAtomResult result = {};
+        multimapAtomLookupConvert(ma, &converted);
+        multimapAtomLookupConvertBig(ma, &convertedBig);
+        multimapAtomLookupResult(ma, &ref, &result);
+        const uint64_t stored =
+            M->ids == MULTIMAP_ATOM_IDS_PERMANENT ? 0 : x->refs - 1;
+        if (!multimapAtomLookupById(ma, x->id, &byId) || !amIs_(M, v, &byId) ||
+            !multimapAtomLookup(ma, &ref, &byRef) || !amIs_(M, v, &byRef) ||
+            !amIs_(M, v, &converted) ||
+            !amIs_(M, v, (const databox *)&convertedBig) ||
+            !amIs_(M, v, &result.val) || result.refcount != stored ||
+            !multimapAtomLookupRefcount(ma, &ref, &count) ||
+            count.data.u != stored ||
+            multimapAtomRefcountById(ma, x->id) != x->refs ||
+            !multimapAtomLookupReference(ma, &box, &lookedRef) ||
+            lookedRef.data.u != x->id) {
+            M->why = "a lookup by id, reference or value";
+            return false;
+        }
+    }
+    multimapAtomStats st = {};
+    multimapAtomGetStats(ma, &st);
+    if (st.atoms != M->count || st.references != references ||
+        (M->count && multimapAtomBytes(ma) == 0) ||
+        st.tableBytes != multimapAtomBytes(ma)) {
+        M->why = "the stats";
+        return false;
+    }
+    return true;
+}
+
+/* @model: src/multimapAtom.h */
+static bool amStep_(amModel_ *M, multimapAtom *ma, uint64_t r) {
+    const uint32_t v = (uint32_t)(r % AM_VALUES);
+    amAtom_ *x = &M->a[v];
+    const bool alt = (r >> 8) % 3 == 0;
+    databox box = amBox_(M, v, alt);
+    const uint32_t op = (uint32_t)((r >> 12) % 18);
+    const uint64_t next = amNextId_(M);
+    M->lastOp = op;
+    M->lastId = x->in ? x->id : next;
+    bool ok = true;
+    M->why = "the call's result";
+    switch (op) {
+    case 0: /* a new value, with or without its reference back */
+        if (!x->in && next < AM_IDS) {
+            if ((r >> 20) % 2) {
+                multimapAtomInsert(ma, &box);
+            } else {
+                multimapAtomInsertConvert(ma, &box);
+                ok = box.type == DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
+                     box.data.u == next;
+            }
+            amCreate_(M, v, next);
+        }
+        break;
+    case 1: { /* insert-if-new: the existing one, or a new one */
+        const bool retain = (r >> 20) % 2;
+        if (!x->in && next >= AM_IDS) {
+            break;
+        }
+        const bool existed =
+            retain ? multimapAtomInsertIfNewConvertAndRetain(ma, &box)
+                   : multimapAtomInsertIfNewConvert(ma, &box);
+        ok = existed == x->in;
+        if (!x->in) {
+            amCreate_(M, v, next);
+        } else if (retain) {
+            amRetain_(M, v);
+        }
+        ok = ok && box.data.u == x->id;
+        break;
+    }
+    case 2:
+    case 3: { /* a reference more: by value (new ones made), ref, id */
+        const uint64_t how = (r >> 20) % 5;
+        if (!x->in) {
+            if (next >= AM_IDS || how > 1) {
+                break;
+            }
+            if (how) {
+                multimapAtomRetainConvert(ma, &box);
+                ok = box.data.u == next;
+            } else {
+                multimapAtomRetain(ma, &box);
+            }
+            amCreate_(M, v, next);
+            break;
+        }
+        const databox ref = {.data.u = x->id,
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        if (how == 0) {
+            multimapAtomRetain(ma, &box);
+        } else if (how == 1) {
+            multimapAtomRetainConvert(ma, &box);
+            ok = box.data.u == x->id;
+        } else if (how == 2) {
+            multimapAtomRetainByRef(ma, &ref);
+        } else if (how == 3) {
+            multimapAtomRetainById(ma, x->id);
+        } else {
+            ok = multimapAtomIntern(ma, &box) == x->id;
+        }
+        amRetain_(M, v);
+        break;
+    }
+    case 4:
+    case 5:
+    case 6: { /* a reference fewer: the last one deletes */
+        const uint64_t how = (r >> 20) % 3;
+        const databox ref = {.data.u = x->in ? x->id : AM_IDS + 5,
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        const bool got = how == 0   ? multimapAtomRelease(ma, &box)
+                         : how == 1 ? multimapAtomReleaseByRef(ma, &ref)
+                                    : multimapAtomReleaseById(ma, ref.data.u);
+        ok = got == amRelease_(M, v);
+        break;
+    }
+    case 7: { /* deleted whatever its count */
+        const uint64_t how = (r >> 20) % 3;
+        const databox ref = {.data.u = x->in ? x->id : AM_IDS + 5,
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        const bool got = how == 0   ? multimapAtomDelete(ma, &box)
+                         : how == 1 ? multimapAtomDeleteByRef(ma, &ref)
+                                    : multimapAtomDeleteById(ma, ref.data.u);
+        ok = got == x->in;
+        if (x->in) {
+            amRemove_(M, v);
+        }
+        break;
+    }
+    case 8: { /* interned: a new value's id, or the old one's */
+        if (!x->in && next >= AM_IDS) {
+            break;
+        }
+        const uint64_t id = multimapAtomIntern(ma, &box);
+        if (x->in) {
+            amRetain_(M, v);
+        } else {
+            amCreate_(M, v, next);
+        }
+        ok = id == x->id;
+        break;
+    }
+    case 9: { /* bound to the caller's id, replacing both old bindings */
+        if ((r >> 20) % 4) {
+            break;
+        }
+        const uint64_t id =
+            (r >> 24) % 40 == 0 ? 3000 + (r >> 30) % 2000 : (r >> 30) % 300;
+        multimapAtomInsertWithExactAtomID(ma, id, &box);
+        M->lastId = id;
+        if (x->in) {
+            amRemove_(M, v);
+        }
+        if (M->byId[id] >= 0) {
+            amRemove_(M, (uint32_t)M->byId[id]);
+        }
+        amCreate_(M, v, id);
+        break;
+    }
+    default:
+        break;
+    }
+    return ok;
+}
+
+/* @model: src/multimapAtom.h */
+static int multimapAtomTestModel_(uint32_t config, uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, AmModel) amModel_ *M = zcalloc(1, sizeof(*M));
+    for (uint32_t v = 150; v < AM_VALUES; v++) {
+        snprintf(M->str[v], sizeof(M->str[v]),
+                 v < 220 ? "w%" PRIu32 : "atom-value-long-%" PRIu32, v);
+    }
+    for (uint32_t id = 0; id < AM_IDS; id++) {
+        M->byId[id] = -1;
+    }
+    const multimapAtomConfig cfg = {
+        .index = (multimapAtomIndex)(config % 3),
+        .ids = (multimapAtomIds)((config / 3) % 3),
+        .store = (multimapAtomStore)((config / 9) % 2),
+    };
+    M->ids = cfg.ids;
+    multimapAtom *ma =
+        config == 0 ? multimapAtomNew() : multimapAtomNewConfig(&cfg);
+    if (multimapAtomGetIndex(ma) != cfg.index ||
+        multimapAtomGetStore(ma) != cfg.store) {
+        ERR("config %" PRIu32 ": the settings", config);
+    }
+    uint64_t rng = seed * 101 + config;
+    for (uint32_t step = 0; step < 4000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const uint64_t nextBefore = multimapAtomNextId(ma);
+        bool ok = amStep_(M, ma, r);
+        if (ok && multimapAtomNextId(ma) != amNextId_(M)) {
+            static char why[80];
+            snprintf(why, sizeof(why),
+                     "the next id after the step (it was %" PRIu64 ")",
+                     nextBefore);
+            M->why = why;
+            ok = false;
+        }
+        if (ok && step % 50 == 49) {
+            ok = amSame_(M, ma);
+        }
+        if (ok && step % 400 == 399) { /* a copy reads the same, then serves */
+            multimapAtom *copy = multimapAtomCopy(ma);
+            ok = copy && amSame_(M, copy);
+            if (ok) {
+                multimapAtomFree(ma);
+                ma = copy;
+            } else {
+                multimapAtomFree(copy);
+            }
+        }
+        if (ok && step % 1300 == 1299) { /* emptied: ids start over */
+            multimapAtomReset(ma);
+            for (uint32_t v = 0; v < AM_VALUES; v++) {
+                if (M->a[v].in) {
+                    amRemove_(M, v);
+                }
+            }
+            M->everMax = 0;
+            ok = amSame_(M, ma);
+        }
+        if (!ok) {
+            ERR("model step %" PRIu32 ": %s (config %" PRIu32 ": index %d, ids "
+                "%d, store %d; %" PRIu32 " atoms, next %" PRIu64 " vs %" PRIu64
+                "; last op %" PRIu32 " on id %" PRIu64 ")",
+                step, M->why, config, (int)cfg.index, (int)cfg.ids,
+                (int)cfg.store, M->count, multimapAtomNextId(ma), amNextId_(M),
+                M->lastOp, M->lastId);
+        }
+    }
+    multimapAtomFree(ma);
+    return err;
+}
+
 int multimapAtomTest(int, char *[]) {
     int err = 0;
 
@@ -4681,6 +5056,12 @@ int multimapAtomTest(int, char *[]) {
     }
 
     atomTestHashMask_ = UINT32_MAX;
+
+    TEST("model: every public call in every configuration") {
+        for (uint32_t config = 0; config < 18; config++) {
+            err += multimapAtomTestModel_(config, 1 + config % 4);
+        }
+    }
 
     TEST("index kinds: heap bytes per atom, measured at the allocator") {
         /* The same atoms under each kind, the whole table (structs,
