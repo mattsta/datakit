@@ -2088,8 +2088,631 @@ static int mosAlgebraCheck_(const multiOrderedSet *got, uint32_t n,
     return err;
 }
 
+/* ====================================================================
+ * The model test: every public call against a sorted array of (score,
+ * member) pairs, members unique, scores integers or reals, through every
+ * tier and back
+ * ==================================================================== */
+#include "dkRandom.h"
+
+typedef struct moRow_ {
+    bool real;
+    int64_t i;
+    double d;
+    uint16_t m; /* the member's index */
+} moRow_;
+
+static constexpr uint32_t MO_MEMBERS = 300;
+
+typedef struct moModel_ {
+    uint32_t n;
+    char name[MO_MEMBERS][6];
+    moRow_ r[MO_MEMBERS];
+    uint32_t events[6];
+} moModel_;
+
+defcleanerName(moModel_ *, zfree, MoModel);
+
+static uint64_t moRng_;
+static uint64_t moRand_(void) {
+    return dkSplitmix64Next(&moRng_);
+}
+
+/* Why the step disagreed, for its report */
+static const char *moWhy_;
+static char moWhyBuf_[160];
+
+static databox moScore_(const moRow_ *row) {
+    return row->real ? databoxNewReal(row->d) : databoxNewSigned(row->i);
+}
+
+static databox moMember_(const moModel_ *M, uint32_t m) {
+    return databoxNewBytesString(M->name[m]);
+}
+
+static double moScoreReal_(const moRow_ *row) {
+    return row->real ? row->d : (double)row->i;
+}
+
+static int moCmp_(const moModel_ *M, const moRow_ *a, const moRow_ *b) {
+    const databox sa = moScore_(a);
+    const databox sb = moScore_(b);
+    const int c = databoxCompare(&sa, &sb);
+    if (c) {
+        return c;
+    }
+    const databox ma = moMember_(M, a->m);
+    const databox mb = moMember_(M, b->m);
+    return databoxCompare(&ma, &mb);
+}
+
+static int64_t moFind_(const moModel_ *M, uint32_t m) {
+    for (uint32_t i = 0; i < M->n; i++) {
+        if (M->r[i].m == m) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void moRemoveAt_(moModel_ *M, uint32_t at) {
+    memmove(&M->r[at], &M->r[at + 1], (M->n - at - 1) * sizeof(M->r[0]));
+    M->n--;
+}
+
+/* The member's row set to 'row' (added, or moved to its new place) */
+static void moPut_(moModel_ *M, const moRow_ *row) {
+    const int64_t had = moFind_(M, row->m);
+    if (had >= 0) {
+        moRemoveAt_(M, (uint32_t)had);
+    }
+    uint32_t at = 0;
+    while (at < M->n && moCmp_(M, &M->r[at], row) < 0) {
+        at++;
+    }
+    memmove(&M->r[at + 1], &M->r[at], (M->n - at) * sizeof(M->r[0]));
+    M->r[at] = *row;
+    M->n++;
+}
+
+/* A random score: an integer, or a real half-step */
+static moRow_ moRandomRow_(void) {
+    const uint64_t r = moRand_();
+    moRow_ row = {.m = (uint16_t)(r % MO_MEMBERS)};
+    if ((r >> 12) % 4 == 0) {
+        row.real = true;
+        row.d = (double)((int64_t)((r >> 16) % 201) - 100) / 2.0;
+    } else {
+        row.i = (int64_t)((r >> 16) % 101) - 50;
+    }
+    return row;
+}
+
+static bool moIsRow_(const moModel_ *M, const moRow_ *row,
+                     const databox *member, const databox *score) {
+    const databox want = moMember_(M, row->m);
+    const databox ws = moScore_(row);
+    return databoxCompare(member, &want) == 0 &&
+           databoxCompare(score, &ws) == 0;
+}
+
+/* A range of scores, each end open or closed */
+static mosRangeSpec moRange_(void) {
+    const uint64_t r = moRand_();
+    const int64_t lo = (int64_t)(r % 121) - 60;
+    const int64_t hi = lo + (int64_t)((r >> 8) % 40);
+    return (mosRangeSpec){.min = databoxNewSigned(lo),
+                          .max = databoxNewSigned(hi),
+                          .minExclusive = (r >> 20) % 2,
+                          .maxExclusive = (r >> 21) % 2};
+}
+
+static bool moInRange_(const moRow_ *row, const mosRangeSpec *range) {
+    const databox s = moScore_(row);
+    const int lo = databoxCompare(&s, &range->min);
+    const int hi = databoxCompare(&s, &range->max);
+    return (range->minExclusive ? lo > 0 : lo >= 0) &&
+           (range->maxExclusive ? hi < 0 : hi <= 0);
+}
+
+static bool moProceed_(void *ctx) {
+    return *(const bool *)ctx;
+}
+
+/* @model: src/multiOrderedSet.h */
+/* The set holds exactly the model's pairs, in order, either way */
+static bool moSame_(const multiOrderedSet *mos, const moModel_ *M) {
+    if (multiOrderedSetCount(mos) != M->n || multiOrderedSetBytes(mos) == 0) {
+        moWhy_ = "the count or bytes";
+        return false;
+    }
+    for (int dir = 0; dir < 2; dir++) {
+        mosIterator it;
+        multiOrderedSetIteratorInit(mos, &it, dir == 0);
+        databox member = {};
+        databox score = {};
+        uint32_t i = 0;
+        while (multiOrderedSetIteratorNext(&it, &member, &score)) {
+            const uint32_t at = dir == 0 ? i : M->n - 1 - i;
+            if (i >= M->n || !moIsRow_(M, &M->r[at], &member, &score)) {
+                moWhy_ = dir == 0 ? "iterating forward" : "iterating backward";
+                return false;
+            }
+            i++;
+        }
+        multiOrderedSetIteratorRelease(&it);
+        if (i != M->n) {
+            moWhy_ = "an iteration's length";
+            return false;
+        }
+    }
+    return true;
+}
+
+/* @model: src/multiOrderedSet.h */
+/* One random call against the model; true when it agreed */
+static bool moStep_(multiOrderedSet **mos, moModel_ *M, uint32_t op) {
+    const uint64_t r = moRand_();
+    moRow_ row = moRandomRow_();
+    const databox score = moScore_(&row);
+    const databox member = moMember_(M, row.m);
+    const int64_t at = moFind_(M, row.m);
+    bool ok = true;
+    moWhy_ = "the call's result";
+    switch (op) {
+    case 0:
+    case 1:
+        ok = multiOrderedSetAdd(mos, &score, &member) == (at >= 0);
+        moPut_(M, &row);
+        break;
+    case 2:
+        ok = multiOrderedSetAddNX(mos, &score, &member) == (at < 0);
+        if (at < 0) {
+            moPut_(M, &row);
+        }
+        break;
+    case 3:
+        ok = multiOrderedSetAddXX(mos, &score, &member) == (at >= 0);
+        if (at >= 0) {
+            moPut_(M, &row);
+        }
+        break;
+    case 4: { /* the previous score, as a copy */
+        databox prev = {};
+        const bool had =
+            multiOrderedSetAddGetPrevious(mos, &score, &member, &prev);
+        if (at >= 0) {
+            const databox old = moScore_(&M->r[at]);
+            ok = had && databoxCompare(&prev, &old) == 0;
+            databoxFreeData(&prev);
+        } else {
+            ok = !had;
+        }
+        moPut_(M, &row);
+        break;
+    }
+    case 5: { /* a counter: exact for integers, a double past a real */
+        /* (a real box may be a FLOAT_32: the model keeps the value) */
+        const bool realDelta = (r >> 8) % 3 == 0;
+        const int64_t di = (int64_t)(r % 21) - 10;
+        const double dd = (double)di / 2.0;
+        const databox delta =
+            realDelta ? databoxNewReal(dd) : databoxNewSigned(di);
+        databox result = {};
+        moRow_ next = {.m = row.m};
+        if (at < 0) {
+            next.real = realDelta;
+            next.d = realDelta ? dd : 0;
+            next.i = realDelta ? 0 : di;
+        } else if (!realDelta && !M->r[at].real) {
+            next.i = M->r[at].i + di;
+        } else {
+            next.real = true;
+            next.d = moScoreReal_(&M->r[at]) + (realDelta ? dd : (double)di);
+        }
+        const databox want = moScore_(&next);
+        const bool done = multiOrderedSetIncrBy(mos, &delta, &member, &result);
+        ok = done && databoxCompare(&result, &want) == 0;
+        if (!ok) {
+            snprintf(moWhyBuf_, sizeof(moWhyBuf_),
+                     "IncrBy %s by %s %g on %s %g: %d, type %d %g (%" PRId64
+                     "), want %g",
+                     M->name[row.m], realDelta ? "real" : "integer",
+                     realDelta ? dd : (double)di,
+                     at < 0          ? "absent"
+                     : M->r[at].real ? "real"
+                                     : "integer",
+                     at < 0 ? 0.0 : moScoreReal_(&M->r[at]), (int)done,
+                     (int)result.type, result.data.d64, result.data.i64,
+                     moScoreReal_(&next));
+            moWhy_ = moWhyBuf_;
+        }
+        moPut_(M, &next);
+        break;
+    }
+    case 6:
+        ok = multiOrderedSetRemove(mos, &member) == (at >= 0);
+        if (at >= 0) {
+            moRemoveAt_(M, (uint32_t)at);
+        }
+        break;
+    case 7: { /* removed with its score, or asked first */
+        if ((r >> 8) % 2) {
+            databox got = {};
+            const bool had = multiOrderedSetRemoveGetScore(mos, &member, &got);
+            if (at >= 0) {
+                const databox old = moScore_(&M->r[at]);
+                ok = had && databoxCompare(&got, &old) == 0;
+                databoxFreeData(&got);
+                moRemoveAt_(M, (uint32_t)at);
+            } else {
+                ok = !had;
+            }
+        } else {
+            const bool yes = (r >> 9) % 2;
+            const bool gone =
+                multiOrderedSetRemoveIf(mos, &member, moProceed_, (void *)&yes);
+            ok = gone == (at >= 0 && yes);
+            if (gone) {
+                moRemoveAt_(M, (uint32_t)at);
+            }
+        }
+        break;
+    }
+    case 8: { /* a score range */
+        const mosRangeSpec range = moRange_();
+        size_t want = 0;
+        for (uint32_t i = M->n; i-- > 0;) {
+            if (moInRange_(&M->r[i], &range)) {
+                moRemoveAt_(M, i);
+                want++;
+            }
+        }
+        ok = multiOrderedSetRemoveRangeByScore(mos, &range) == want;
+        break;
+    }
+    case 9: { /* a rank range, clamped, from either end */
+        const int64_t n = M->n;
+        int64_t start = (int64_t)(r % (uint64_t)(2 * n + 7)) - n - 3;
+        int64_t stop = (int64_t)((r >> 20) % (uint64_t)(2 * n + 7)) - n - 3;
+        const int64_t start0 = start;
+        const int64_t stop0 = stop;
+        start = start < 0 ? start + n : start;
+        stop = stop < 0 ? stop + n : stop;
+        start = start < 0 ? 0 : start;
+        stop = stop >= n ? n - 1 : stop;
+        size_t want = 0;
+        if (n && start <= stop && start < n && stop >= 0) {
+            for (int64_t i = stop; i >= start; i--) {
+                moRemoveAt_(M, (uint32_t)i);
+                want++;
+            }
+        }
+        ok = multiOrderedSetRemoveRangeByRank(mos, start0, stop0) == want;
+        break;
+    }
+    case 10: { /* the lowest or highest few */
+        const size_t count = 1 + (size_t)(r % 3);
+        databox members[3] = {};
+        databox scores[3] = {};
+        const bool fromMax = (r >> 8) % 2;
+        const size_t got =
+            fromMax ? multiOrderedSetPopMax(mos, count, members, scores)
+                    : multiOrderedSetPopMin(mos, count, members, scores);
+        const size_t want = count < M->n ? count : M->n;
+        ok = got == want;
+        for (size_t i = 0; i < got; i++) {
+            const uint32_t from = fromMax ? M->n - 1 : 0;
+            ok = ok && moIsRow_(M, &M->r[from], &members[i], &scores[i]);
+            moRemoveAt_(M, from);
+            databoxFreeData(&members[i]);
+            databoxFreeData(&scores[i]);
+        }
+        break;
+    }
+    case 11: { /* a member's presence, score and ranks */
+        databox got = {};
+        const bool has = multiOrderedSetGetScore(*mos, &member, &got);
+        const int64_t rank = multiOrderedSetGetRank(*mos, &member);
+        const int64_t rev = multiOrderedSetGetReverseRank(*mos, &member);
+        ok = multiOrderedSetExists(*mos, &member) == (at >= 0) &&
+             has == (at >= 0) && rank == at &&
+             rev == (at >= 0 ? (int64_t)M->n - 1 - at : -1);
+        if (has) {
+            const databox old = moScore_(&M->r[at]);
+            ok = ok && databoxCompare(&got, &old) == 0;
+        }
+        break;
+    }
+    case 12: { /* a rank, from either end or past them */
+        const int64_t n = M->n;
+        const int64_t rank = (int64_t)(r % (uint64_t)(2 * n + 5)) - n - 2;
+        const int64_t idx = rank < 0 ? rank + n : rank;
+        databox m = {};
+        databox s = {};
+        const bool valid = idx >= 0 && idx < n;
+        ok = multiOrderedSetGetByRank(*mos, rank, &m, &s) == valid &&
+             (!valid || moIsRow_(M, &M->r[idx], &m, &s));
+        break;
+    }
+    case 13: { /* a range's count */
+        const mosRangeSpec range = moRange_();
+        size_t want = 0;
+        for (uint32_t i = 0; i < M->n; i++) {
+            want += moInRange_(&M->r[i], &range);
+        }
+        ok = multiOrderedSetCountByScore(*mos, &range) == want;
+        break;
+    }
+    case 14: { /* iterators from a score and from a rank, either way */
+        const bool forward = (r >> 8) % 2;
+        mosIterator it;
+        uint32_t from = 0;
+        while (from < M->n) {
+            const databox s = moScore_(&M->r[from]);
+            if (databoxCompare(&s, &score) >= 0) {
+                break;
+            }
+            from++;
+        }
+        bool started =
+            multiOrderedSetIteratorInitAtScore(*mos, &it, &score, forward);
+        ok = started == (from < M->n);
+        moWhy_ = "an iterator from a score";
+        for (int64_t i = from, k = 0; ok && started && k < 4;
+             k++, i += forward ? 1 : -1) {
+            databox m = {};
+            databox s = {};
+            const bool more = multiOrderedSetIteratorNext(&it, &m, &s);
+            const bool want = i >= 0 && i < (int64_t)M->n;
+            ok = more == want && (!more || moIsRow_(M, &M->r[i], &m, &s));
+            if (!more) {
+                break;
+            }
+        }
+        multiOrderedSetIteratorRelease(&it);
+        const int64_t n = M->n;
+        const int64_t rank =
+            (int64_t)((r >> 16) % (uint64_t)(2 * n + 5)) - n - 2;
+        const int64_t idx = rank < 0 ? rank + n : rank;
+        started = multiOrderedSetIteratorInitAtRank(*mos, &it, rank, forward);
+        ok = ok && started == (idx >= 0 && idx < n);
+        moWhy_ = "an iterator from a rank";
+        for (int64_t i = idx, k = 0; ok && started && k < 4;
+             k++, i += forward ? 1 : -1) {
+            databox m = {};
+            databox s = {};
+            const bool more = multiOrderedSetIteratorNext(&it, &m, &s);
+            const bool want = i >= 0 && i < n;
+            ok = more == want && (!more || moIsRow_(M, &M->r[i], &m, &s));
+            if (!more) {
+                break;
+            }
+        }
+        multiOrderedSetIteratorRelease(&it);
+        break;
+    }
+    case 15: { /* the ends */
+        databox m = {};
+        databox s = {};
+        databox lm = {};
+        databox ls = {};
+        const bool f = multiOrderedSetFirst(*mos, &m, &s);
+        const bool l = multiOrderedSetLast(*mos, &lm, &ls);
+        ok = f == (M->n > 0) && l == (M->n > 0) &&
+             (!f || (moIsRow_(M, &M->r[0], &m, &s) &&
+                     moIsRow_(M, &M->r[M->n - 1], &lm, &ls)));
+        break;
+    }
+    case 16: { /* random members: distinct, or drawn with repeats */
+        databox members[8] = {};
+        databox scores[8] = {};
+        const bool distinct = (r >> 8) % 2;
+        const int64_t count = 1 + (int64_t)(r % 8);
+        const size_t got = multiOrderedSetRandomMembers(
+            *mos, distinct ? count : -count, members, scores);
+        const size_t want = !M->n                  ? 0
+                            : !distinct            ? (size_t)count
+                            : (size_t)count < M->n ? (size_t)count
+                                                   : M->n;
+        ok = got == want;
+        moWhy_ = "a random member";
+        for (size_t i = 0; ok && i < got; i++) {
+            /* a member of the set with its score; distinct when asked */
+            const uint32_t idx =
+                DATABOX_IS_BYTES(&members[i]) && members[i].len > 1
+                    ? (uint32_t)strtoul(
+                          (const char *)databoxBytes(&members[i]) + 1, nullptr,
+                          10)
+                    : MO_MEMBERS;
+            const int64_t rat = idx < MO_MEMBERS ? moFind_(M, idx) : -1;
+            ok = rat >= 0 && moIsRow_(M, &M->r[rat], &members[i], &scores[i]);
+            for (size_t j = 0; ok && distinct && j < i; j++) {
+                ok = databoxCompare(&members[i], &members[j]) != 0;
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    return ok;
+}
+
+/* @model: src/multiOrderedSet.h */
+/* The set operations against the model's own union, intersection and
+ * difference with a second set */
+static bool moSetOps_(const multiOrderedSet *mos, const moModel_ *M,
+                      flexCapSizeLimit limit) {
+    cleaner(multiOrderedSetFree) multiOrderedSet *b =
+        multiOrderedSetNewLimit(limit);
+    double bScore[MO_MEMBERS] = {};
+    bool inB[MO_MEMBERS] = {};
+    for (uint32_t k = 0; k < 120; k++) {
+        const moRow_ row = moRandomRow_();
+        const databox s = moScore_(&row);
+        const databox m = moMember_(M, row.m);
+        (void)multiOrderedSetAdd(&b, &s, &m);
+        inB[row.m] = true;
+        bScore[row.m] = moScoreReal_(&row);
+    }
+    double aScore[MO_MEMBERS] = {};
+    bool inA[MO_MEMBERS] = {};
+    for (uint32_t i = 0; i < M->n; i++) {
+        inA[M->r[i].m] = true;
+        aScore[M->r[i].m] = moScoreReal_(&M->r[i]);
+    }
+    const multiOrderedSet *sets[2] = {mos, b};
+    const double weights[2] = {1.0, 2.0};
+    const mosAggregate agg = (mosAggregate)(moRand_() % 3);
+    cleaner(multiOrderedSetFree) multiOrderedSet *u =
+        multiOrderedSetUnion(sets, weights, 2, agg);
+    cleaner(multiOrderedSetFree) multiOrderedSet *x =
+        multiOrderedSetIntersect(sets, weights, 2, agg);
+    cleaner(multiOrderedSetFree) multiOrderedSet *d =
+        multiOrderedSetDifference(sets, 2);
+    size_t nu = 0;
+    size_t nx = 0;
+    size_t nd = 0;
+    bool ok = true;
+    for (uint32_t m = 0; ok && m < MO_MEMBERS; m++) {
+        const databox member = moMember_(M, m);
+        const double a = aScore[m];
+        const double bw = 2.0 * bScore[m];
+        const double both = agg == MOS_AGGREGATE_SUM   ? a + bw
+                            : agg == MOS_AGGREGATE_MIN ? (a < bw ? a : bw)
+                                                       : (a > bw ? a : bw);
+        databox got = {};
+        const bool hasU = multiOrderedSetGetScore(u, &member, &got);
+        const double wantU = inA[m] && inB[m] ? both : inA[m] ? a : bw;
+        ok =
+            hasU == (inA[m] || inB[m]) &&
+            (!hasU || databoxCompare(&got, &(databox){.type = DATABOX_DOUBLE_64,
+                                                      .data.d64 = wantU}) == 0);
+        const bool hasX = multiOrderedSetGetScore(x, &member, &got);
+        ok =
+            ok && hasX == (inA[m] && inB[m]) &&
+            (!hasX || databoxCompare(&got, &(databox){.type = DATABOX_DOUBLE_64,
+                                                      .data.d64 = both}) == 0);
+        const bool hasD = multiOrderedSetGetScore(d, &member, &got);
+        ok =
+            ok && hasD == (inA[m] && !inB[m]) &&
+            (!hasD || databoxCompare(&got, &(databox){.type = DATABOX_DOUBLE_64,
+                                                      .data.d64 = a}) == 0);
+        nu += hasU;
+        nx += hasX;
+        nd += hasD;
+    }
+    return ok && multiOrderedSetCount(u) == nu &&
+           multiOrderedSetCount(x) == nx && multiOrderedSetCount(d) == nd;
+}
+
+/* @model: src/multiOrderedSet.h */
+static int multiOrderedSetTestModel_(flexCapSizeLimit limit, uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, MoModel) moModel_ *M = zcalloc(1, sizeof(*M));
+    for (uint32_t m = 0; m < MO_MEMBERS; m++) {
+        snprintf(M->name[m], sizeof(M->name[m]), "m%" PRIu32, m);
+    }
+    multiOrderedSet *mos =
+        seed % 2 ? multiOrderedSetNewLimit(limit) : multiOrderedSetNew();
+    const flexCapSizeLimit made = seed % 2 ? limit : multiOrderedSetLimit(mos);
+    moRng_ = seed;
+    dkRandomTestReplay(seed);
+    uint32_t tiers = 0;
+    const uint32_t steps = 5000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        const bool draining = step >= steps * 2 / 3;
+        uint32_t op = (uint32_t)(moRand_() % 17);
+        if (draining && op <= 5 && moRand_() % 3) {
+            op = 6 + (uint32_t)(moRand_() % 5); /* a removal instead */
+        } else if (!draining && op >= 6 && op <= 10 && moRand_() % 4) {
+            op = (uint32_t)(moRand_() % 6); /* an add instead, to grow */
+        }
+        if (!moStep_(&mos, M, op)) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " disagreed: %s (%" PRIu32
+                " pairs, seed %" PRIu64 ")",
+                step, op, moWhy_, M->n, seed);
+            break;
+        }
+        dkTierStats st = {};
+        multiOrderedSetStats(mos, &st);
+        tiers |= 1u << st.tier;
+        if (st.count != M->n || multiOrderedSetLimit(mos) != made) {
+            ERR("step %" PRIu32 ": the stats or limit disagree", step);
+        }
+        if (step % 25 == 24 && !moSame_(mos, M)) {
+            ERR("model step %" PRIu32 ": after op %" PRIu32
+                ": %s (seed %" PRIu64 ")",
+                step, op, moWhy_, seed);
+            break;
+        }
+        if (step % 89 != 88) {
+            continue;
+        }
+        /* A configuration event, with the set as the steps left it */
+        const uint32_t event = (uint32_t)(moRand_() % countof(M->events));
+        M->events[event]++;
+        switch (event) {
+        case 0: {
+            cleaner(multiOrderedSetFree) multiOrderedSet *copy =
+                multiOrderedSetCopy(mos);
+            if (!moSame_(copy, M)) {
+                ERR("step %" PRIu32 ": the copy differs: %s", step, moWhy_);
+            }
+            break;
+        }
+        case 1:
+            multiOrderedSetCompact(&mos);
+            break;
+        case 2:
+            if (!moSetOps_(mos, M, limit)) {
+                ERR("step %" PRIu32 ": a set operation disagreed", step);
+            }
+            break;
+        case 3:
+            multiOrderedSetVerify(mos);
+            break;
+        case 4: /* emptied, now and then */
+            if (moRand_() % 4 == 0) {
+                multiOrderedSetReset(&mos);
+                M->n = 0;
+            }
+            break;
+        default:
+            break;
+        }
+        if (!moSame_(mos, M)) {
+            ERR("step %" PRIu32 ": after event %" PRIu32 ": %s", step, event,
+                moWhy_);
+        }
+    }
+    if (!moSame_(mos, M)) {
+        ERR("the run ended differing: %s", moWhy_);
+    }
+    multiOrderedSetFree(mos);
+    dkRandomTestLive();
+    if (seed % 2 && !(tiers & (1u << MOS_TYPE_FULL))) {
+        ERR("the model did not reach Full (seen %#x, seed %" PRIu64 ")", tiers,
+            seed);
+    }
+    for (size_t e = 0; e < countof(M->events); e++) {
+        if (!M->events[e]) {
+            ERR("configuration event %zu never ran", e);
+        }
+    }
+    return err;
+}
+
 int multiOrderedSetTest(int argc, char *argv[]) {
     int err = 0;
+
+    TEST("model: every public call against a sorted array, every tier") {
+        for (uint64_t seed = 1; seed <= 6; seed++) {
+            /* odd seeds at 256 (through Full), even at the default */
+            err += multiOrderedSetTestModel_(FLEX_CAP_LEVEL_256, seed);
+        }
+    }
 
     TEST("multiOrderedSet: create and free") {
         cleaner(multiOrderedSetFree) multiOrderedSet *mos =
