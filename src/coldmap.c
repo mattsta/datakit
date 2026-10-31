@@ -1457,6 +1457,271 @@ coldmapTestWiden_(void *ctx, const databox *const row[], databox *last) {
     return COLDMAP_SWEEP_CHANGE;
 }
 
+/* ====================================================================
+ * The model test: random sequences of every public call against a
+ * multimap of the same rows, every read checked and the whole dump
+ * compared, through block splits, merges, sweeps and removals
+ * ==================================================================== */
+static uint64_t cmModelRng_;
+
+/* Row 'k' with a value of varying length (its bytes from 'k' and 'gen') */
+static void cmModelRow_(int64_t k, uint64_t gen, uint8_t buf[96],
+                        databox row[2]) {
+    const size_t len = 4 + (size_t)((k * 7 + (int64_t)gen) % 90);
+    for (size_t i = 0; i < len; i++) {
+        buf[i] = (uint8_t)('a' + (gen + i) % 26);
+    }
+    row[0] = databoxNewSigned(k);
+    row[1] = databoxNewBytes(buf, len);
+}
+
+/* RemoveIf and SweepBlock: rows whose key is a multiple of 'mod' */
+static bool cmModelRemoveMod_(void *ctx, const databox *const row[]) {
+    return row[0]->data.i64 % *(const int64_t *)ctx == 0;
+}
+
+static coldmapSweepAction cmModelSweep_(void *ctx, const databox *const row[],
+                                        databox *last) {
+    const int64_t mod = *(const int64_t *)ctx;
+    if (row[0]->data.i64 % mod == 0) {
+        return COLDMAP_SWEEP_REMOVE;
+    }
+    if (row[0]->data.i64 % mod == 1) {
+        *last = databoxNewBytesString("swept");
+        return COLDMAP_SWEEP_CHANGE;
+    }
+    return COLDMAP_SWEEP_KEEP;
+}
+
+/* @model: src/coldmap.h */
+static bool cmModelSame_(const coldmap *cm, mflexState *state,
+                         const multimap *model) {
+    cleaner(flexFree) flex *want = multimapDump(model);
+    cleaner(flexFree) flex *got = coldmapDump(cm, state);
+    coldmapStats st = {};
+    coldmapGetStats(cm, &st);
+    return flexEqual(want, got) && coldmapCount(cm) == multimapCount(model) &&
+           st.rows == multimapCount(model) &&
+           st.blocks == coldmapBlockCount(cm) && coldmapVerify_(cm, state) &&
+           (multimapCount(model) == 0 || coldmapBytes(cm) > 0) &&
+           coldmapElementsPerEntry(cm) == 2;
+}
+
+/* @model: src/coldmap.h */
+static int coldmapTestModel_(const coldmapConfig *config, uint64_t seed) {
+    int err = 0;
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+    cleaner(multimapFree) multimap *model = multimapNew(2);
+    cleaner(coldmapFree) coldmap *cm =
+        seed % 2 ? coldmapNew(2, config)
+                 : coldmapNewFromDump(2, config, multimapDump(model));
+    coldmapConfig got = {};
+    coldmapGetConfig(cm, &got);
+    if (!got.rawLimit || !got.storedTarget) {
+        ERR("%s", "the config's defaults are not resolved");
+    }
+    cmModelRng_ = seed;
+    for (uint32_t step = 0; step < 3000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&cmModelRng_);
+        const int64_t k = (int64_t)(r % 1200);
+        const uint32_t op = (uint32_t)((r >> 16) % 15);
+        uint8_t buf[96];
+        databox row[2];
+        cmModelRow_(k, step, buf, row);
+        const databox *rowp[2] = {&row[0], &row[1]};
+        databox want = {};
+        databox *wantp[1] = {&want};
+        const bool had = multimapLookup(model, &row[0], wantp);
+        bool ok = true;
+        switch (op) {
+        case 0:
+        case 1:
+        case 2:
+            ok = coldmapInsert(cm, rowp) == had;
+            multimapInsert(&model, rowp);
+            break;
+        case 3: { /* a run of rows at once */
+            cleaner(flexFree) flex *rows = flexNew();
+            size_t replaced = 0;
+            size_t wantReplaced = 0;
+            uint8_t bufs[8][96];
+            for (int64_t i = 0; i < 8; i++) {
+                databox rr[2];
+                cmModelRow_(k + i * 3, step + 1, bufs[i], rr);
+                const databox *rrp[2] = {&rr[0], &rr[1]};
+                flexAppendMultipleExact(&rows, 2, rrp);
+                wantReplaced += multimapExists(model, &rr[0]);
+                multimapInsert(&model, rrp);
+            }
+            ok = coldmapRowsAscend(rows, 2) &&
+                 coldmapInsertMany(cm, rows, &replaced) &&
+                 replaced == wantReplaced;
+            break;
+        }
+        case 4: { /* keys at once */
+            cleaner(flexFree) flex *keys = flexNew();
+            size_t deleted = 0;
+            size_t wantDeleted = 0;
+            for (int64_t i = 0; i < 6; i++) {
+                const databox key = databoxNewSigned(k + i * 5);
+                flexPushByTypeExact(&keys, &key, FLEX_ENDPOINT_TAIL);
+                wantDeleted += multimapDelete(&model, &key);
+            }
+            ok =
+                coldmapDeleteMany(cm, keys, &deleted) && deleted == wantDeleted;
+            break;
+        }
+        case 5:
+            ok = coldmapDelete(cm, &row[0]) == had;
+            multimapDelete(&model, &row[0]);
+            break;
+        case 6: { /* a key range */
+            const databox lo = databoxNewSigned(k);
+            const databox hi = databoxNewSigned(k + (int64_t)(r >> 40) % 30);
+            const size_t wantGone = multimapDeleteRange(&model, &lo, &hi);
+            ok = coldmapDeleteRange(cm, &lo, &hi) == wantGone;
+            break;
+        }
+        case 7: { /* the value, or none */
+            databox val = {};
+            databox *vals[1] = {&val};
+            const bool found = coldmapLookup(cm, state, &row[0], vals);
+            ok = found == had && coldmapExists(cm, state, &row[0]) == had &&
+                 (!found || databoxCompare(&val, &want) == 0);
+            break;
+        }
+        case 8: { /* iterate from a key, either way, a few rows */
+            const bool forward = (r >> 24) % 2;
+            coldmapIterator it;
+            multimapIterator mi;
+            const bool started =
+                coldmapIteratorInitAt(cm, state, &it, forward, &row[0]);
+            bool mstarted = false;
+            if (forward) {
+                mstarted = multimapIteratorInitAt(model, &mi, true, &row[0]);
+            } else { /* the last row at or below 'k': walk the model */
+                mstarted = multimapCount(model) > 0;
+                multimapIteratorInit(model, &mi, false);
+            }
+            databox a[2] = {};
+            databox b[2] = {};
+            databox *ap[2] = {&a[0], &a[1]};
+            databox *bp[2] = {&b[0], &b[1]};
+            bool mmore = mstarted && multimapIteratorNext(&mi, bp);
+            while (!forward && mmore && b[0].data.i64 > k) {
+                mmore = multimapIteratorNext(&mi, bp);
+            }
+            ok = started == mmore;
+            for (int i = 0; ok && started && i < 5; i++) {
+                const bool more = coldmapIteratorNext(&it, ap);
+                ok = more == mmore &&
+                     (!more || (databoxCompare(&a[0], &b[0]) == 0 &&
+                                databoxCompare(&a[1], &b[1]) == 0));
+                if (!more) {
+                    break;
+                }
+                mmore = multimapIteratorNext(&mi, bp);
+            }
+            break;
+        }
+        case 9: { /* the whole walk from either end */
+            const bool forward = (r >> 24) % 2;
+            coldmapIterator it;
+            size_t n = 0;
+            if (coldmapIteratorInit(cm, state, &it, forward)) {
+                databox a[2] = {};
+                databox *ap[2] = {&a[0], &a[1]};
+                while (coldmapIteratorNext(&it, ap)) {
+                    n++;
+                }
+            }
+            ok = n == multimapCount(model);
+            break;
+        }
+        case 10: { /* rows a predicate takes, kept in order */
+            int64_t mod = 7 + (int64_t)(r >> 30) % 20;
+            cleaner(flexFree) flex *removed = flexNew();
+            const size_t gone =
+                coldmapRemoveIf(cm, cmModelRemoveMod_, &mod, &removed);
+            size_t wantGone = 0;
+            for (int64_t x = 0; x < 1200 + 40; x += mod) {
+                const databox key = databoxNewSigned(x);
+                wantGone += multimapDelete(&model, &key);
+            }
+            ok = gone == wantGone && flexCount(removed) == 2 * gone &&
+                 coldmapRowsAscend(removed, 2);
+            break;
+        }
+        case 11: { /* one block swept: some rows go, some change */
+            if (!coldmapBlockCount(cm)) {
+                break;
+            }
+            const size_t index = (r >> 30) % coldmapBlockCount(cm);
+            cleaner(flexFree) flex *first = coldmapBlockFirstKey(cm, index);
+            int64_t mod = 13;
+            size_t next = 0;
+            cleaner(flexFree) flex *removed = flexNew();
+            /* The model's rows of the block: from its first key to the
+             * next block's */
+            databox lo = {};
+            flexGetByType(flexHead(first), &lo);
+            cleaner(flexFree) flex *after =
+                index + 1 < coldmapBlockCount(cm)
+                    ? coldmapBlockFirstKey(cm, index + 1)
+                    : nullptr;
+            databox hi = {};
+            if (after) {
+                flexGetByType(flexHead(after), &hi);
+            }
+            ok = coldmapBlockFor(cm, &lo) == index;
+            (void)coldmapSweepBlock(cm, index, cmModelSweep_, &mod, &removed,
+                                    &next);
+            for (int64_t x = lo.data.i64; after ? x < hi.data.i64 : x < 1300;
+                 x++) {
+                const databox key = databoxNewSigned(x);
+                if (x % mod == 0) {
+                    multimapDelete(&model, &key);
+                } else if (x % mod == 1 && multimapExists(model, &key)) {
+                    const databox swept = databoxNewBytesString("swept");
+                    const databox *srow[2] = {&key, &swept};
+                    multimapInsert(&model, srow);
+                }
+            }
+            break;
+        }
+        case 12: { /* a block taken out whole */
+            if (!coldmapBlockCount(cm) || (r >> 30) % 4) {
+                break;
+            }
+            const size_t index = (r >> 34) % coldmapBlockCount(cm);
+            cleaner(flexFree) flex *rows = coldmapRemoveBlock(cm, index);
+            ok = rows != nullptr;
+            for (flexEntry *fe = rows ? flexHead(rows) : nullptr;
+                 fe && fe < (flexEntry *)rows + flexBytes(rows);) {
+                databox key = {};
+                flexGetByType(fe, &key);
+                ok = ok && multimapDelete(&model, &key);
+                fe = flexNext(rows, fe);
+                fe = flexNext(rows, fe);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        if (!ok || (step % 50 == 49 && !cmModelSame_(cm, state, model))) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " disagreed (%zu rows, "
+                "seed %" PRIu64 ")",
+                step, op, multimapCount(model), seed);
+            break;
+        }
+    }
+    if (!cmModelSame_(cm, state, model)) {
+        ERR("%s", "the model run ended differing");
+    }
+    return err;
+}
+
 int coldmapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1883,6 +2148,16 @@ int coldmapTest(int argc, char *argv[]) {
                     ERR("config %zu mod %" PRIu64 ": %zu removed", c, mod,
                         gone);
                 }
+            }
+        }
+    }
+
+    TEST("model: every public call against a multimap of the same rows") {
+        static const coldmapConfig configs[] = {
+            {}, {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128}};
+        for (size_t c = 0; c < countof(configs); c++) {
+            for (uint64_t seed = 1; seed <= 2; seed++) {
+                err += coldmapTestModel_(&configs[c], seed + 10 * c);
             }
         }
     }
