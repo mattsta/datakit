@@ -840,6 +840,9 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
     multimapFull *const copy =
         multimapFullNewFromManyGrow(nullptr, maps, howMany ? middles : nullptr,
                                     howMany, m->elementsPerEntry, m->mapIsSet);
+    /* The grow starts at the default inner-map size: the copy splits and
+     * packs at the source's */
+    copy->maxSize = m->maxSize;
 
     /* The grow decodes each rangeBox from its map's head.  In a
      * surrogate-keyed map that head is a reference id, not the resolved

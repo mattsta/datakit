@@ -9472,6 +9472,27 @@ int multimapTest(int, char *[]) {
         }
     }
 
+    TEST("a copy of a Full map keeps its size limit") {
+        cleaner(multimapFree) multimap *m =
+            multimapNewConfigure(2, false, FLEX_CAP_LEVEL_512);
+        for (int64_t k = 0; k < 1500; k++) {
+            const databox key = databoxNewSigned(k);
+            const databox val = databoxNewSigned(k * 3);
+            const databox *row[] = {&key, &val};
+            multimapInsert(&m, row);
+        }
+        cleaner(multimapFree) multimap *c = multimapCopy(m);
+        const uint32_t want = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_512];
+        if (multimapType_(c) != MULTIMAP_TYPE_FULL || mmf(c)->maxSize != want ||
+            multimapLimit(c) != FLEX_CAP_LEVEL_512 ||
+            multimapCount(c) != 1500) {
+            ERR("the copy's maxSize is %u (want %u), limit %d",
+                (unsigned)mmf(c)->maxSize, (unsigned)want,
+                (int)multimapLimit(c));
+        }
+        multimapVerify(c);
+    }
+
     TEST("NewFromDump rebuilds every tier and kind; later edits agree") {
         /* For maps and sets of each tier: the rebuilt dump is the same
          * bytes, the rebuild verifies, and the same later inserts and
