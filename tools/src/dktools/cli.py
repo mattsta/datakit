@@ -53,6 +53,7 @@ from . import (
     testtime,
     toolchain,
     tune,
+    typeaudit,
     unusednames,
     validate,
     vendorsync,
@@ -383,6 +384,16 @@ def main(argv: list[str] | None = None) -> int:
         "in tools/magic-allow.txt or stale allow lines)",
     )
     mgc.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    tya = sub.add_parser(
+        "typeaudit",
+        help="list the public API's integer parameters, returns and fields "
+        "by the concept their names end in, with the types each is spelled "
+        "with (a report: exit 0)",
+    )
+    tya.add_argument("--concept", help="every site of one concept")
+    tya.add_argument("--min", type=int, default=3, help="smallest group shown")
+    tya.add_argument("headers", nargs="*", help="repo-relative public headers")
 
     hnd = sub.add_parser(
         "handles",
@@ -1511,6 +1522,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return idioms.run(args.repo, tuple(args.paths))
     if args.command == "magic":
         return magic.run(args.repo, tuple(args.paths))
+    if args.command == "typeaudit":
+        return typeaudit.run(args.repo, tuple(args.headers), args.concept, args.min)
     if args.command == "docgaps":
         return docgaps.run(args.repo, tuple(args.headers), args.names)
     if args.command == "handles":

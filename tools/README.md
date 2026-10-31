@@ -803,6 +803,22 @@ uv run --project tools dktools magic [FILE ...]
   stays true. Runs in `verify` and `validate` (the `magic` line). Exits
   0 clean, 1 for hits or stale allow lines.
 
+## typeaudit — what the public API's integers mean
+
+```sh
+uv run --project tools dktools typeaudit [--concept WORD] [--min N] [HEADER ...]
+```
+
+- Lists every integer-typed parameter, return and struct field in the
+  public headers, grouped by the word its name ends in (`timeoutMs`: ms,
+  `nodeId`: id, `maxLevels`: level), with the types each concept is
+  spelled with and how many headers it crosses. `--concept WORD` lists
+  every site of one concept; `--min N` hides smaller groups (default 3).
+- A concept spelled several ways, with a range or sentinel the type
+  could name, or holding an enum's values in a plain integer, is a
+  candidate for a typedef; a count or length named for what it counts
+  is not. A report: exits 0.
+
 ## headers — every header compiles on its own
 
 ```sh
