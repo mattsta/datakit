@@ -2277,6 +2277,11 @@ bool persistCompact(persist *p, void *structure) {
          * WAL starts over as a fresh header */
         p->walBufferUsed = 0;
         if (!persistWALWriteHeader(p)) {
+            /* The snapshot holds every op, but the WAL's header may be
+             * torn: an append behind it is one recovery cannot read, so
+             * appends wait for a compaction that writes it whole */
+            p->walInitialized = false;
+            p->walHeld = true;
             return false;
         }
         p->walInitialized = true;
@@ -6887,6 +6892,16 @@ static bool persistTestMlApplyPop(multilist **ml, bool fromTail,
         (const uint8_t *)f, flexBytes(f));
 }
 
+/* A memory WAL store whose writes fail while persistTestWalWriteFails is
+ * set */
+static bool persistTestWalWriteFails;
+static ssize_t persistTestFailingWrite(void *ctx, const void *data,
+                                       size_t len) {
+    if (persistTestWalWriteFails) {
+        return -1;
+    }
+    return persistMemWrite(ctx, data, len);
+}
 int persistTest(int, char *[]) {
     int err = 0;
 
@@ -10650,6 +10665,46 @@ int persistTest(int, char *[]) {
         PERSIST_TEST_FILE_IS("new2");
 #undef PERSIST_TEST_FILE_IS
         persistStoreClose(s);
+    }
+
+    TEST("a compaction whose WAL header does not write holds appends until "
+         "one succeeds") {
+        persist *p = persistCreate(&persistOpsIntset, nullptr);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistStore *wal = persistStoreMemory(0);
+        wal->write = persistTestFailingWrite;
+        persistAttachWAL(p, wal);
+        cleaner(intsetFree) intset *live = intsetNew();
+        persistSnapshot(p, live);
+        for (int64_t v = 1; v <= 3; v++) {
+            bool added = false;
+            intsetAdd(&live, v, &added);
+            PTEST_LOGGED(persistLogOp(p, PERSIST_OP_INSERT, &v, 1));
+        }
+        persistSync(p);
+        persistTestWalWriteFails = true;
+        const bool compacted = persistCompact(p, live);
+        persistTestWalWriteFails = false;
+        const int64_t four = 4;
+        const bool appended =
+            persistLogOp(p, PERSIST_OP_INSERT, &four, 1) != PERSIST_LOG_REFUSED;
+        const bool again = persistCompact(p, live);
+        bool added = false;
+        intsetAdd(&live, four, &added);
+        const bool after =
+            persistLogOp(p, PERSIST_OP_INSERT, &four, 1) != PERSIST_LOG_REFUSED;
+        persistSync(p);
+        intset *got = persistRecover(p);
+        const size_t members = got ? (size_t)intsetCount(got) : 0;
+        if (got) {
+            intsetFree(got);
+        }
+        if (compacted || appended || !again || !after || members != 4) {
+            ERR("failed compaction %d, append behind it %d, compaction %d, "
+                "append %d, %zu of 4 recovered",
+                compacted, appended, again, after, members);
+        }
+        persistClose(p);
     }
 
     TEST("rebinding to a new key mid-WAL keeps everything recoverable") {
