@@ -95,8 +95,9 @@ bool multitierPeek(multitier *t, const databox *key, databox *value);
 bool multitierDelete(multitier *t, const databox *key);
 /* Every live row once, hot level first (in no order), then the batch and
  * the cold level (each in key order), until 'visit' returns false; moves
- * nothing, uses nothing.  Rows are borrowed for the call.  Returns the
- * rows visited. */
+ * nothing, uses nothing.  Rows are borrowed for the call, and 'visit'
+ * reads only: it must not change the multitier (collect keys, then change
+ * it after the walk).  Returns the rows visited. */
 typedef enum multitierLevel {
     MULTITIER_LEVEL_HOT = 0,
     MULTITIER_LEVEL_BATCH = 1, /* waiting for the cold level */

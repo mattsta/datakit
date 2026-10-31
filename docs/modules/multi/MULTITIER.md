@@ -18,17 +18,17 @@ losing them silently. With no limits it is a multidict with LRU tracking.
 
 ## API
 
-| Call                                                      | Does                                                                       |
-| --------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `multitierNew(config)` / `multitierFree(t)`               | make and free (config NULL: no limits)                                     |
-| `multitierSet(t, key, value)`                             | set in the hot level; a copy below goes (true: the key is new)             |
-| `multitierGet(t, key, value)`                             | the value, moving a lower row up to the hot level (one LRU use)            |
-| `multitierPeek(t, key, value)`                            | the value where it is: no move, no LRU use                                 |
-| `multitierDelete(t, key)`                                 | from whichever level holds it                                              |
-| `multitierFlush(t)`                                       | the rows waiting for the cold level, put into it now                       |
-| `multitierWalk(t, visit, ctx)`                            | every live row once with its level (hot, batch, cold); moves nothing       |
-| `multitierCount` / `multitierBytes` / `multitierGetStats` | rows, memory at every level, per-level rows, bytes and counters            |
-| `multitierSetSink` / `multitierGetConfig`                 | the sink (a restore has the recovery sink until set) / the config in force |
+| Call                                                      | Does                                                                                                        |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `multitierNew(config)` / `multitierFree(t)`               | make and free (config NULL: no limits)                                                                      |
+| `multitierSet(t, key, value)`                             | set in the hot level; a copy below goes (true: the key is new)                                              |
+| `multitierGet(t, key, value)`                             | the value, moving a lower row up to the hot level (one LRU use)                                             |
+| `multitierPeek(t, key, value)`                            | the value where it is: no move, no LRU use                                                                  |
+| `multitierDelete(t, key)`                                 | from whichever level holds it                                                                               |
+| `multitierFlush(t)`                                       | the rows waiting for the cold level, put into it now                                                        |
+| `multitierWalk(t, visit, ctx)`                            | every live row once with its level (hot, batch, cold); moves nothing; 'visit' must not change the multitier |
+| `multitierCount` / `multitierBytes` / `multitierGetStats` | rows, memory at every level, per-level rows, bytes and counters                                             |
+| `multitierSetSink` / `multitierGetConfig`                 | the sink (a restore has the recovery sink until set) / the config in force                                  |
 
 `multitierConfig`: `hotMaxBytes` (0: no limit, nothing leaves the hot level), `hotLevels` (LRU
 levels, 1-64, 0: 4), `demoteBatch` (rows waiting before they go cold, at least; 0: 64), `coldMaxBytes`
