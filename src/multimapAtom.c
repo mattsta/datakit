@@ -5055,6 +5055,33 @@ int multimapAtomTest(int, char *[]) {
         }
     }
 
+    TEST("hashed: every value at hash 0, its rows across inner maps") {
+        /* With every hash 0, the rows of hash 0 fill every inner map, so
+         * each find walks from the start of the index across maps: every
+         * value finds its own atom */
+        atomTestHashMask_ = 0;
+        cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+        static constexpr int64_t values = 1500;
+        for (int64_t i = 0; i < values; i++) {
+            const databox v = databoxNewSigned(i * 7);
+            multimapAtomInsert(ma, &v);
+        }
+        int64_t found = 0;
+        for (int64_t i = 0; i < values; i++) {
+            const databox v = databoxNewSigned(i * 7);
+            databox ref = {};
+            databox back = {};
+            found += multimapAtomLookupReference(ma, &v, &ref) &&
+                     multimapAtomLookup(ma, &ref, &back) &&
+                     databoxCompare(&back, &v) == 0;
+        }
+        atomTestHashMask_ = UINT32_MAX;
+        if (found != values) {
+            ERR("%" PRId64 " of %" PRId64 " values found their atom", found,
+                values);
+        }
+    }
+
     atomTestHashMask_ = UINT32_MAX;
 
     TEST("model: every public call in every configuration") {
