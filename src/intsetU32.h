@@ -30,6 +30,9 @@ uint32_t *intsetU32Array(intsetU32 *is);
 /* Room for 'len' members; below the count it keeps the 'len' smallest */
 void intsetU32Resize(intsetU32 *is, uint32_t len);
 void intsetU32ShrinkToSize(intsetU32 *is);
+/* The members are the first 'len' of intsetU32Array (written there in
+ * ascending order by the caller); 'len' at most the room the set has
+ * (intsetU32NewLen, intsetU32Resize) */
 void intsetU32UpdateCount(intsetU32 *is, uint32_t len);
 void intsetU32Free(intsetU32 *is);
 bool intsetU32Add(intsetU32 *is, uint32_t value);

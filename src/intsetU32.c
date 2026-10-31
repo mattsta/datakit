@@ -109,6 +109,8 @@ void intsetU32ShrinkToSize(intsetU32 *is) {
 }
 
 void intsetU32UpdateCount(intsetU32 *is, const uint32_t len) {
+    /* Past the room the array has, every read would run off its end */
+    assert(len <= is->capacity);
     is->count = len;
 }
 
@@ -360,8 +362,165 @@ static intsetU32 *createSet(int bits, int size) {
     return is;
 }
 
+/* ====================================================================
+ * The model test: random sequences of every public call against a sorted
+ * array, every read checked
+ * ==================================================================== */
+static constexpr uint32_t U32_MODEL_CAP = 4000;
+
+typedef struct u32Model_ {
+    uint32_t n;
+    uint32_t v[U32_MODEL_CAP];
+} u32Model_;
+
+defcleanerName(u32Model_ *, zfree, U32Model);
+
+static uint64_t u32ModelRng_;
+static uint32_t u32ModelRand_(void) {
+    return (uint32_t)dkSplitmix64Next(&u32ModelRng_);
+}
+
+static uint32_t u32ModelLower_(const u32Model_ *M, uint32_t x) {
+    uint32_t lo = 0;
+    uint32_t hi = M->n;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (M->v[mid] < x) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+static bool u32ModelHas_(const u32Model_ *M, uint32_t x) {
+    const uint32_t at = u32ModelLower_(M, x);
+    return at < M->n && M->v[at] == x;
+}
+
+static void u32ModelAdd_(u32Model_ *M, uint32_t x) {
+    const uint32_t at = u32ModelLower_(M, x);
+    if (at < M->n && M->v[at] == x) {
+        return;
+    }
+    memmove(&M->v[at + 1], &M->v[at], (M->n - at) * sizeof(M->v[0]));
+    M->v[at] = x;
+    M->n++;
+}
+
+static void u32ModelRemove_(u32Model_ *M, uint32_t x) {
+    const uint32_t at = u32ModelLower_(M, x);
+    if (at < M->n && M->v[at] == x) {
+        memmove(&M->v[at], &M->v[at + 1], (M->n - at - 1) * sizeof(M->v[0]));
+        M->n--;
+    }
+}
+
+/* @model: src/intsetU32.h */
+/* The set holds exactly the model's members */
+static bool u32ModelSame_(intsetU32 *is, const u32Model_ *M) {
+    if (intsetU32Count(is) != M->n ||
+        (M->n && intsetU32Bytes(is) < M->n * sizeof(uint32_t))) {
+        return false;
+    }
+    const uint32_t *a = intsetU32Array(is);
+    for (uint32_t i = 0; i < M->n; i++) {
+        uint32_t got = 0;
+        if (a[i] != M->v[i] || !intsetU32Get(is, i, &got) || got != M->v[i]) {
+            return false;
+        }
+    }
+    uint32_t past = 0;
+    return !intsetU32Get(is, M->n, &past);
+}
+
+/* @model: src/intsetU32.h */
+/* Returns the step that disagreed, or UINT32_MAX when every one agreed */
+static uint32_t intsetU32TestModel_(uint64_t seed) {
+    cleanerName(zfree, U32Model) u32Model_ *M = zcalloc(1, sizeof(*M));
+    cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
+    u32ModelRng_ = seed;
+    const uint32_t steps = 8000;
+    for (uint32_t step = 0; step < steps; step++) {
+        const uint32_t r = u32ModelRand_();
+        const uint32_t x = u32ModelRand_() % 6000;
+        const bool draining = step >= steps * 2 / 3;
+        const uint32_t op = r % 16;
+        bool ok = true;
+        if (op < (draining ? 2u : 5u) && M->n < U32_MODEL_CAP - 64) {
+            ok = intsetU32Add(is, x) == !u32ModelHas_(M, x);
+            u32ModelAdd_(M, x);
+        } else if (op < 8) {
+            const uint32_t y = M->n && r % 2 ? M->v[(r >> 8) % M->n] : x;
+            ok = intsetU32Remove(is, y) == u32ModelHas_(M, y);
+            u32ModelRemove_(M, y);
+        } else if (op == 8) {
+            ok = intsetU32Exists(is, x) == u32ModelHas_(M, x);
+        } else if (op == 9) { /* a random member, or one taken out */
+            if (r % 2) {
+                uint32_t gone = 0;
+                const bool took = intsetU32RandomDelete(is, &gone);
+                ok = took == (M->n > 0) && (!took || u32ModelHas_(M, gone));
+                if (took) {
+                    u32ModelRemove_(M, gone);
+                }
+            } else {
+                ok = M->n == 0 || u32ModelHas_(M, intsetU32Random(is));
+            }
+        } else if (op == 10 && M->n + 40 < U32_MODEL_CAP) {
+            /* a merge of a few others: the ones new to the set count */
+            cleaner(intsetU32Free) intsetU32 *b = intsetU32New();
+            uint32_t want = 0;
+            for (uint32_t i = 0; i < 1 + r % 30; i++) {
+                const uint32_t y = u32ModelRand_() % 6000;
+                if (intsetU32Add(b, y)) {
+                    want += !u32ModelHas_(M, y);
+                    u32ModelAdd_(M, y);
+                }
+            }
+            ok = intsetU32Merge(is, b) == want;
+        } else if (op == 11) { /* a copy: equal, and each a subset */
+            cleaner(intsetU32Free) intsetU32 *copy = intsetU32Copy(is);
+            ok = intsetU32Equal(copy, is) && intsetU32Subset(is, copy) &&
+                 intsetU32Subset(copy, is) && u32ModelSame_(copy, M);
+            if (ok && M->n) { /* one fewer: still a subset, not equal */
+                intsetU32Remove(copy, M->v[0]);
+                ok = intsetU32Subset(copy, is) && !intsetU32Equal(copy, is) &&
+                     !intsetU32Subset(is, copy);
+            }
+        } else if (op == 12 && M->n) { /* room changed, then fitted */
+            if (r % 4 == 0) {          /* below the count: the smallest stay */
+                const uint32_t keep = (r >> 8) % M->n;
+                intsetU32Resize(is, keep);
+                M->n = keep;
+            } else {
+                intsetU32Resize(is, M->n + (r >> 8) % 50);
+            }
+            intsetU32ShrinkToSize(is);
+        } else if (op == 13) { /* built by hand: written, then counted */
+            cleaner(intsetU32Free) intsetU32 *built = intsetU32NewLen(M->n);
+            memcpy(intsetU32Array(built), M->v, M->n * sizeof(M->v[0]));
+            intsetU32UpdateCount(built, M->n);
+            ok = intsetU32Equal(built, is) && u32ModelSame_(built, M);
+        }
+        if (!ok || (step % 40 == 39 && !u32ModelSame_(is, M))) {
+            printf("model step %u: op %u disagreed (%u members)\n",
+                   (unsigned)step, (unsigned)op, (unsigned)M->n);
+            return step;
+        }
+    }
+    return u32ModelSame_(is, M) ? UINT32_MAX : steps;
+}
+
 int intsetU32Test(int, char **) {
     srandom(time(nullptr));
+
+    printf("Model: every public call against a sorted array: ");
+    for (uint64_t seed = 1; seed <= 4; seed++) {
+        intsetU32Assert(intsetU32TestModel_(seed) == UINT32_MAX);
+    }
+    printf("SUCCESS\n");
 
     printf("Random picks are members; RandomDelete drains every member: ");
     {
