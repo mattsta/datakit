@@ -4669,8 +4669,528 @@ static int mrRunSetOps_(uint64_t seed) {
     return err;
 }
 
+/* ====================================================================
+ * The model test: random sequences of every public call against plain
+ * models, every read checked.  Bit mode: a bitmap over eight chunks,
+ * filled sparse, dense and whole so every chunk form appears.  Value
+ * mode: an array of values, with the calls of each mode refused on the
+ * other.
+ * ==================================================================== */
+static constexpr uint64_t MR_MODEL_BITS = 8 * 8192;
+
+typedef struct mrModel_ {
+    uint8_t bit[MR_MODEL_BITS / 8];
+    uint32_t events[4];
+} mrModel_;
+
+defcleanerName(mrModel_ *, zfree, MrModel);
+
+static uint64_t mrModelRng_;
+static uint64_t mrModelRand_(void) {
+    return dkSplitmix64Next(&mrModelRng_);
+}
+
+static bool mrModelGet_(const mrModel_ *M, uint64_t p) {
+    return p < MR_MODEL_BITS && (M->bit[p / 8] >> (p % 8)) & 1;
+}
+
+static void mrModelPut_(mrModel_ *M, uint64_t p, bool on) {
+    if (on) {
+        M->bit[p / 8] |= (uint8_t)(1u << (p % 8));
+    } else {
+        M->bit[p / 8] &= (uint8_t)~(1u << (p % 8));
+    }
+}
+
+static uint64_t mrModelCount_(const mrModel_ *M, uint64_t from, uint64_t to) {
+    uint64_t n = 0;
+    for (uint64_t p = from; p < to && p < MR_MODEL_BITS; p++) {
+        n += mrModelGet_(M, p);
+    }
+    return n;
+}
+
+/* A position: mostly near a chunk edge or inside one of the dense spots */
+static uint64_t mrModelPos_(void) {
+    const uint64_t r = mrModelRand_();
+    const uint64_t chunk = (r >> 8) % 8;
+    switch (r % 4) {
+    case 0: /* a chunk's edges */
+        return chunk * 8192 +
+               ((r >> 16) % 2 ? (r >> 20) % 8 : 8184 + (r >> 20) % 8);
+    case 1: /* sparse */
+        return chunk * 8192 + (r >> 16) % 8192;
+    default: /* dense: the first 700 of chunks 2 and 5 */
+        return (chunk % 2 ? 2 : 5) * 8192 + (r >> 16) % 700;
+    }
+}
+
+/* A second roar and its model, for the set operations */
+static multiroar *mrModelOther_(mrModel_ *B) {
+    memset(B->bit, 0, sizeof(B->bit));
+    /* @own: caller; free=multiroarFree */
+    multiroar *b = multiroarBitNew();
+    const uint64_t n = 50 + mrModelRand_() % 2000;
+    for (uint64_t i = 0; i < n; i++) {
+        const uint64_t p = mrModelPos_();
+        multiroarBitSet(b, p);
+        mrModelPut_(B, p, true);
+    }
+    if (mrModelRand_() % 3 == 0) { /* a whole chunk */
+        const uint64_t c = mrModelRand_() % 8;
+        multiroarBitSetRange(b, c * 8192, 8192);
+        for (uint64_t p = c * 8192; p < (c + 1) * 8192; p++) {
+            mrModelPut_(B, p, true);
+        }
+    }
+    return b;
+}
+
+/* @model: src/multiroar.h */
+/* The roar holds exactly the model's bits */
+static bool mrModelSame_(const multiroar *r, const mrModel_ *M) {
+    multiroarIterator it;
+    multiroarIteratorInit(r, &it);
+    uint64_t p;
+    uint64_t want = 0;
+    uint64_t n = 0;
+    while (multiroarIteratorNext(&it, &p)) {
+        while (want < MR_MODEL_BITS && !mrModelGet_(M, want)) {
+            want++;
+        }
+        if (p != want) {
+            return false;
+        }
+        want++;
+        n++;
+    }
+    const uint64_t total = mrModelCount_(M, 0, MR_MODEL_BITS);
+    if (n != total || multiroarBitCount(r) != total ||
+        multiroarIsEmpty(r) != (total == 0)) {
+        return false;
+    }
+    /* The walk again from the start, a few bits */
+    multiroarIteratorReset(&it);
+    if (total && (!multiroarIteratorNext(&it, &p) || !mrModelGet_(M, p))) {
+        return false;
+    }
+    uint64_t lo = 0;
+    uint64_t hi = 0;
+    if (total) {
+        uint64_t first = 0;
+        while (!mrModelGet_(M, first)) {
+            first++;
+        }
+        uint64_t last = MR_MODEL_BITS - 1;
+        while (!mrModelGet_(M, last)) {
+            last--;
+        }
+        return multiroarMin(r, &lo) && multiroarMax(r, &hi) && lo == first &&
+               hi == last;
+    }
+    return !multiroarMin(r, &lo) && !multiroarMax(r, &hi);
+}
+
+/* The model of 'a op b' in 'out' */
+typedef enum mrModelOp_ { MR_M_AND, MR_M_OR, MR_M_XOR, MR_M_ANDNOT } mrModelOp_;
+static void mrModelCombine_(mrModel_ *out, const mrModel_ *a, const mrModel_ *b,
+                            mrModelOp_ op) {
+    for (size_t i = 0; i < sizeof(out->bit); i++) {
+        const uint8_t x = a->bit[i];
+        const uint8_t y = b->bit[i];
+        out->bit[i] = op == MR_M_AND   ? x & y
+                      : op == MR_M_OR  ? x | y
+                      : op == MR_M_XOR ? x ^ y
+                                       : x & (uint8_t)~y;
+    }
+}
+
+/* Not within the chunks that hold a bit */
+static void mrModelNot_(mrModel_ *M) {
+    for (uint64_t c = 0; c < 8; c++) {
+        if (!mrModelCount_(M, c * 8192, (c + 1) * 8192)) {
+            continue;
+        }
+        for (uint64_t i = c * 1024; i < (c + 1) * 1024; i++) {
+            M->bit[i] = (uint8_t)~M->bit[i];
+        }
+    }
+}
+
+static bool mrModelNear_(double a, double b) {
+    return a - b < 1e-9 && b - a < 1e-9;
+}
+
+/* @model: src/multiroar.h */
+/* One random bit-mode call against the model; true when it agreed */
+static bool mrModelStep_(multiroar **rp, mrModel_ *M, mrModel_ *B, mrModel_ *T,
+                         uint32_t op) {
+    multiroar *r = *rp;
+    const uint64_t p = mrModelPos_();
+    const uint64_t extent = 1 + mrModelRand_() % 9000;
+    bool ok = true;
+    switch (op) {
+    case 0:
+    case 1:
+    case 2:
+        ok = multiroarBitSet(r, p) == mrModelGet_(M, p);
+        mrModelPut_(M, p, true);
+        break;
+    case 3:
+        ok = multiroarBitClear(r, p) == mrModelGet_(M, p);
+        mrModelPut_(M, p, false);
+        break;
+    case 4:
+        ok = multiroarBitGet(r, p) == mrModelGet_(M, p);
+        break;
+    case 5: { /* a range set, cleared or flipped */
+        const uint64_t end =
+            p + extent < MR_MODEL_BITS ? p + extent : MR_MODEL_BITS;
+        const uint64_t how = mrModelRand_() % 3;
+        if (how == 0) {
+            multiroarBitSetRange(r, p, end - p);
+        } else if (how == 1) {
+            multiroarBitClearRange(r, p, end - p);
+        } else {
+            multiroarBitFlipRange(r, p, end - p);
+        }
+        for (uint64_t q = p; q < end; q++) {
+            mrModelPut_(M, q,
+                        how == 0   ? true
+                        : how == 1 ? false
+                                   : !mrModelGet_(M, q));
+        }
+        break;
+    }
+    case 6: { /* many at once */
+        uint64_t ps[16];
+        bool got[16];
+        const uint64_t n = 1 + mrModelRand_() % 16;
+        for (uint64_t i = 0; i < n; i++) {
+            ps[i] = mrModelPos_();
+        }
+        multiroarBitGetMany(r, ps, n, got);
+        for (uint64_t i = 0; ok && i < n; i++) {
+            ok = got[i] == mrModelGet_(M, ps[i]);
+        }
+        if (mrModelRand_() % 2) {
+            multiroarBitSetMany(r, ps, n);
+            for (uint64_t i = 0; i < n; i++) {
+                mrModelPut_(M, ps[i], true);
+            }
+        }
+        break;
+    }
+    case 7: { /* rank, select and a range's count */
+        const uint64_t rank = mrModelCount_(M, 0, p);
+        uint64_t at = 0;
+        const uint64_t total = mrModelCount_(M, 0, MR_MODEL_BITS);
+        const uint64_t k = 1 + mrModelRand_() % (total + 2);
+        const bool sel = multiroarSelect(r, k, &at);
+        ok = multiroarRank(r, p) == rank && sel == (k <= total) &&
+             (!sel ||
+              (mrModelGet_(M, at) && mrModelCount_(M, 0, at) == k - 1)) &&
+             multiroarRangeCount(r, p, p + extent) ==
+                 mrModelCount_(M, p, p + extent);
+        break;
+    }
+    case 8: { /* the positions out, and a roar made from them */
+        static uint64_t ps[MR_MODEL_BITS];
+        const uint64_t n = multiroarToArray(r, ps, MR_MODEL_BITS);
+        ok = n == mrModelCount_(M, 0, MR_MODEL_BITS);
+        for (uint64_t i = 0; ok && i < n; i++) {
+            ok = mrModelGet_(M, ps[i]) && (i == 0 || ps[i] > ps[i - 1]);
+        }
+        cleaner(multiroarFree) multiroar *back = multiroarFromArray(ps, n);
+        ok = ok && multiroarEquals(back, r);
+        break;
+    }
+    case 9: { /* comparisons and similarity with another roar */
+        cleaner(multiroarFree) multiroar *b = mrModelOther_(B);
+        mrModelCombine_(T, M, B, MR_M_AND);
+        const uint64_t both = mrModelCount_(T, 0, MR_MODEL_BITS);
+        mrModelCombine_(T, M, B, MR_M_XOR);
+        const uint64_t differ = mrModelCount_(T, 0, MR_MODEL_BITS);
+        const uint64_t na = mrModelCount_(M, 0, MR_MODEL_BITS);
+        const uint64_t nb = mrModelCount_(B, 0, MR_MODEL_BITS);
+        const uint64_t either = na + nb - both;
+        mrModelCombine_(T, M, B, MR_M_ANDNOT);
+        const bool subset = mrModelCount_(T, 0, MR_MODEL_BITS) == 0;
+        const double jac = either ? (double)both / (double)either : 1.0;
+        const double dice =
+            na + nb ? 2.0 * (double)both / (double)(na + nb) : 1.0;
+        const uint64_t small = na < nb ? na : nb;
+        const double over = small ? (double)both / (double)small : 0.0;
+        ok = multiroarIntersects(r, b) == (both > 0) &&
+             multiroarIsSubset(r, b) == subset &&
+             multiroarEquals(r, b) == (differ == 0) &&
+             multiroarHammingDistance(r, b) == differ &&
+             mrModelNear_(multiroarJaccard(r, b), jac) &&
+             mrModelNear_(multiroarDice(r, b), dice) &&
+             mrModelNear_(multiroarOverlap(r, b), over);
+        break;
+    }
+    case 10: { /* a set operation, in place or new */
+        cleaner(multiroarFree) multiroar *b = mrModelOther_(B);
+        const uint64_t which = mrModelRand_() % 5;
+        static const mrModelOp_ ops[] = {MR_M_AND, MR_M_OR, MR_M_XOR,
+                                         MR_M_ANDNOT};
+        const bool fresh = mrModelRand_() % 2;
+        if (which == 4) { /* Not is no inverse of itself: a full chunk
+                           * becomes empty and stays so */
+            memcpy(T->bit, M->bit, sizeof(T->bit));
+            mrModelNot_(T);
+            if (fresh) {
+                cleaner(multiroarFree) multiroar *got = multiroarNewNot(r);
+                ok = mrModelSame_(got, T);
+            } else {
+                multiroarNot(r);
+                memcpy(M->bit, T->bit, sizeof(M->bit));
+            }
+            break;
+        }
+        mrModelCombine_(T, M, B, ops[which]);
+        if (fresh) {
+            cleaner(multiroarFree) multiroar *got =
+                which == 0   ? multiroarNewAnd(r, b)
+                : which == 1 ? multiroarNewOr(r, b)
+                : which == 2 ? multiroarNewXor(r, b)
+                             : multiroarNewAndNot(r, b);
+            ok = mrModelSame_(got, T);
+        } else {
+            if (which == 0) {
+                multiroarAnd(r, b);
+            } else if (which == 1) {
+                multiroarOr(r, b);
+            } else if (which == 2) {
+                multiroarXor(r, b);
+            } else {
+                multiroarAndNot(r, b);
+            }
+            memcpy(M->bit, T->bit, sizeof(M->bit));
+        }
+        break;
+    }
+    case 11: { /* three ways at once, in place or new */
+        cleaner(multiroarFree) multiroar *b = mrModelOther_(B);
+        static mrModel_ C;
+        cleaner(multiroarFree) multiroar *c = mrModelOther_(&C);
+        multiroar *const roars[3] = {r, b, c};
+        const uint64_t which = mrModelRand_() % 3;
+        static const mrModelOp_ ops[] = {MR_M_AND, MR_M_OR, MR_M_XOR};
+        mrModelCombine_(T, M, B, ops[which]);
+        mrModelCombine_(T, T, &C, ops[which]);
+        if (mrModelRand_() % 2) {
+            cleaner(multiroarFree) multiroar *got =
+                which == 0   ? multiroarNewAndN(3, roars)
+                : which == 1 ? multiroarNewOrN(3, roars)
+                             : multiroarNewXorN(3, roars);
+            ok = mrModelSame_(got, T);
+        } else {
+            if (which == 0) {
+                multiroarAndN(3, roars);
+            } else if (which == 1) {
+                multiroarOrN(3, roars);
+            } else {
+                multiroarXorN(3, roars);
+            }
+            memcpy(M->bit, T->bit, sizeof(M->bit));
+        }
+        break;
+    }
+    default: /* the value calls refuse a bit roar */
+        ok =
+            multiroarValueSet(
+                r, p, &(databox){.type = DATABOX_UNSIGNED_64, .data.u64 = 1}) ==
+                MULTIROAR_VALUE_REFUSED &&
+            !multiroarValueGet(r, p, &(databox){}) &&
+            multiroarValueWidth(r) == 0 && multiroarValueCount(r) == 0 &&
+            multiroarMemoryUsage(r) > 0;
+        break;
+    }
+    return ok;
+}
+
+/* @model: src/multiroar.h */
+static int multiroarTestModelBits_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, MrModel) mrModel_ *M = zcalloc(1, sizeof(*M));
+    cleanerName(zfree, MrModel) mrModel_ *B = zcalloc(1, sizeof(*B));
+    cleanerName(zfree, MrModel) mrModel_ *T = zcalloc(1, sizeof(*T));
+    cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+    mrModelRng_ = seed;
+    const uint32_t steps = 3000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        const uint32_t op = (uint32_t)(mrModelRand_() % 13);
+        if (!mrModelStep_(&r, M, B, T, op) ||
+            (step % 30 == 29 && !mrModelSame_(r, M))) {
+            ERR("bit model step %" PRIu32 ": op %" PRIu32 " disagreed (seed "
+                "%" PRIu64 ", %" PRIu64 " bits)",
+                step, op, seed, mrModelCount_(M, 0, MR_MODEL_BITS));
+            break;
+        }
+        if (step % 97 != 96) {
+            continue;
+        }
+        /* Each kind in turn, so every one runs */
+        const uint32_t event = (step / 97) % countof(M->events);
+        M->events[event]++;
+        if (event == 0) {
+            cleaner(multiroarFree) multiroar *copy = multiroarDuplicate(r);
+            if (!mrModelSame_(copy, M)) {
+                ERR("bit model step %" PRIu32 ": a duplicate differs", step);
+            }
+        } else if (event <= 2) { /* serialized and read back, sealed or raw */
+            const bool raw = event == 2;
+            const uint64_t size = raw ? multiroarSerializedSizeRaw(r)
+                                      : multiroarSerializedSize(r);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size ? size : 1);
+            const uint64_t wrote = raw ? multiroarSerializeRaw(r, buf, size)
+                                       : multiroarSerialize(r, buf, size);
+            cleaner(multiroarFree) multiroar *back =
+                raw ? multiroarDeserializeRaw(buf, wrote)
+                    : multiroarDeserialize(buf, wrote);
+            if (wrote != size || !back || !mrModelSame_(back, M)) {
+                ERR("bit model step %" PRIu32 ": a %s round trip differs", step,
+                    raw ? "raw" : "sealed");
+            }
+        } else if (mrModelRand_() % 3 == 0) {
+            multiroarClear(r);
+            memset(M->bit, 0, sizeof(M->bit));
+        }
+    }
+    if (!mrModelSame_(r, M)) {
+        ERR("%s", "the bit model run ended differing");
+    }
+    for (size_t e = 0; e < countof(M->events); e++) {
+        if (!M->events[e]) {
+            ERR("bit model event %zu never ran", e);
+        }
+    }
+    return err;
+}
+
+/* @model: src/multiroar.h */
+/* Value mode against an array, the bit calls refused on it */
+static int multiroarTestModelValues_(uint8_t width, uint64_t rows,
+                                     uint64_t cols, uint64_t seed) {
+    int err = 0;
+    const uint64_t span = rows * cols;
+    cleanerName(zfree, UInt64) uint64_t *val =
+        zcalloc(span + 8, sizeof(uint64_t));
+    cleanerName(zfree, Bytes) uint8_t *has = zcalloc(span + 8, 1);
+    cleaner(multiroarFree) multiroar *r = multiroarValueNew(width, rows, cols);
+    uint64_t count = 0;
+    uint64_t rr = seed;
+    const uint64_t maxValue =
+        width == 64 ? UINT64_MAX : (UINT64_C(1) << width) - 1;
+    for (uint32_t step = 0; step < 4000; step++) {
+        const uint64_t q = splitmix64(&rr);
+        const uint64_t p = q % (span + 4); /* now and then outside */
+        const bool inside = p < span;
+        bool ok = true;
+        uint64_t rows2 = 0;
+        uint64_t cols2 = 0;
+        multiroarValueDimensions(r, &rows2, &cols2);
+        ok = rows2 == rows && cols2 == cols &&
+             multiroarValueWidth(r) == width &&
+             multiroarValueInBounds(r, p) == inside;
+        switch (q >> 60) {
+        case 0:
+        case 1:
+        case 2:
+        case 3: { /* a value that fits, or (one time in eight) one too big */
+            const bool tooBig = width < 64 && (q >> 8) % 8 == 0;
+            const uint64_t v = tooBig ? maxValue + 1 : (q >> 12) & maxValue;
+            databox box = DATABOX_UNSIGNED(v);
+            databox old = {};
+            const bool previous = (q >> 9) % 2;
+            const multiroarValueSetResult got =
+                previous ? multiroarValueSetGetPrevious(r, p, &box, &old)
+                         : multiroarValueSet(r, p, &box);
+            const multiroarValueSetResult want =
+                !inside || tooBig ? MULTIROAR_VALUE_REFUSED
+                : has[p]          ? MULTIROAR_VALUE_REPLACED
+                                  : MULTIROAR_VALUE_ADDED;
+            ok = ok && got == want &&
+                 (!previous || want != MULTIROAR_VALUE_REPLACED ||
+                  old.data.u64 == val[p]);
+            if (want != MULTIROAR_VALUE_REFUSED) {
+                count += !has[p];
+                has[p] = 1;
+                val[p] = v;
+            }
+            break;
+        }
+        case 4:
+        case 5: {
+            databox got = {};
+            const bool found = multiroarValueGet(r, p, &got);
+            ok = ok && found == (inside && has[p]) &&
+                 (!found || got.data.u64 == val[p]);
+            break;
+        }
+        case 6: {
+            databox gone = {};
+            const bool took = multiroarValueRemoveGetRemoved(r, p, &gone);
+            ok = ok && took == (inside && has[p]) &&
+                 (!took || gone.data.u64 == val[p]);
+            if (took) {
+                has[p] = 0;
+                count--;
+            }
+            break;
+        }
+        case 7: { /* the bit calls refuse a value roar */
+            uint64_t pos = 0;
+            ok = ok && !multiroarBitSet(r, p) && !multiroarBitGet(r, p) &&
+                 multiroarBitCount(r) == 0 && !multiroarMin(r, &pos) &&
+                 multiroarNewNot(r) == nullptr;
+            break;
+        }
+        case 8: { /* a duplicate, and a round trip of the stream */
+            cleaner(multiroarFree) multiroar *copy = multiroarDuplicate(r);
+            const uint64_t size = multiroarSerializedSize(r);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size);
+            const uint64_t wrote = multiroarSerialize(r, buf, size);
+            cleaner(multiroarFree) multiroar *back =
+                multiroarDeserialize(buf, wrote);
+            ok = ok && multiroarEquals(copy, r) && back &&
+                 multiroarEquals(back, r) && multiroarValueCount(back) == count;
+            break;
+        }
+        case 9:
+            if ((q >> 8) % 20 == 0) {
+                multiroarClear(r);
+                memset(has, 0, span + 8);
+                count = 0;
+            }
+            break;
+        default:
+            break;
+        }
+        ok = ok && multiroarValueCount(r) == count;
+        if (!ok) {
+            ERR("value model step %" PRIu32 " (width %u, seed %" PRIu64
+                "): position %" PRIu64 " disagreed",
+                step, (unsigned)width, seed, p);
+            break;
+        }
+    }
+    return err;
+}
+
 int multiroarTest(int, char *[]) {
     int err = 0;
+
+    TEST("model: every public call against a bitmap and a value array") {
+        for (uint64_t seed = 1; seed <= 3; seed++) {
+            err += multiroarTestModelBits_(seed);
+        }
+        err += multiroarTestModelValues_(4, 40, 30, 7);
+        err += multiroarTestModelValues_(17, 100, 60, 8);
+        err += multiroarTestModelValues_(64, 50, 50, 9);
+    }
 
     TEST("runs: ranges up to 2^38 bits at distant places against an "
          "interval oracle, a few rows each") {
