@@ -608,11 +608,16 @@ bool multilistIndexNearWide(const multilist *ml, mflexState *state,
 
 /* After a tier's iterator init: a Small iterator keeps the list's handle
  * (none for a read-only one), so DelEntry can store a moved flex back */
+/* What a rewind reads back, recorded in every tier: the states and the
+ * mode (a Small or Medium init keeps neither itself, and a list that
+ * grew into Full since rewinds with them), and a Small's handle */
 DK_INLINE_ALWAYS void mlIterHandle_(multilistIterator *iter, multilist **handle,
-                                    const bool readOnly) {
+                                    mflexState *state[2], const bool readOnly) {
+    iter->state[0] = state[0];
+    iter->state[1] = state[1];
+    iter->readOnly = readOnly;
     if (iter->type == MULTILIST_TYPE_SMALL) {
         iter->ml = readOnly ? nullptr : handle;
-        iter->readOnly = readOnly;
     }
 }
 
@@ -621,14 +626,14 @@ void multilistIteratorInit(multilist **ml, mflexState *state[2],
                            bool readOnly) {
     iter->type = _multilistType(*ml);
     MULTILIST_NORETURN(*ml, IteratorInit, state, iter, forward, readOnly);
-    mlIterHandle_(iter, ml, readOnly);
+    mlIterHandle_(iter, ml, state, readOnly);
 }
 
 void multilistIteratorInitReadOnly(const multilist *ml, mflexState *state[2],
                                    multilistIterator *iter, bool forward) {
     iter->type = _multilistType(ml);
     MULTILIST_NORETURN(ml, IteratorInit, state, iter, forward, true);
-    mlIterHandle_(iter, nullptr, true);
+    mlIterHandle_(iter, nullptr, state, true);
 }
 
 bool multilistIteratorInitAtIdx(multilist **ml, mflexState *state[2],
@@ -638,7 +643,7 @@ bool multilistIteratorInitAtIdx(multilist **ml, mflexState *state[2],
     bool found;
     _MULTILIST(found =, *ml, IteratorInitAtIdx, state, iter, idx, forward,
                readOnly);
-    mlIterHandle_(iter, ml, readOnly);
+    mlIterHandle_(iter, ml, state, readOnly);
     return found;
 }
 
@@ -649,7 +654,7 @@ bool multilistIteratorInitAtIdxReadOnly(const multilist *ml,
     iter->type = _multilistType(ml);
     bool found;
     _MULTILIST(found =, ml, IteratorInitAtIdx, state, iter, idx, forward, true);
-    mlIterHandle_(iter, nullptr, true);
+    mlIterHandle_(iter, nullptr, state, true);
     return found;
 }
 
@@ -4843,6 +4848,36 @@ int multilistTest(int, char *[]) {
     TEST("model: every public call against an array of ids, every tier") {
         for (uint32_t seed = 1; seed <= 6; seed++) {
             err += multilistTestModel_(FLEX_CAP_LEVEL_512, seed % 3, seed);
+        }
+    }
+
+    TEST("an iterator records its states and mode in every tier, for a "
+         "rewind") {
+        /* Small (3 values) and Medium (100 at limit 6): a rewind reads the
+         * states and mode back, so an init records them whatever the tier */
+        for (int medium = 0; medium < 2; medium++) {
+            cleaner(multilistFree) multilist *ml = multilistNewLimit(6, 0);
+            const int64_t count = medium ? 100 : 3;
+            for (int64_t i = 0; i < count; i++) {
+                const databox box = databoxNewSigned(i);
+                multilistPushByTypeTail(&ml, s0, &box);
+            }
+            multilistIterator it;
+            memset(&it, 0xA5, sizeof(it));
+            multilistIteratorInit(&ml, s, &it, true, true);
+            multilistEntry e;
+            const bool walked =
+                multilistNext(&it, &e) && multilistNext(&it, &e);
+            if (!it.readOnly || it.state[0] != s[0] || it.state[1] != s[1] ||
+                !walked) {
+                ERR("tier %d: the init did not record its states and mode",
+                    medium);
+            }
+            multilistRewind(&ml, &it);
+            if (!multilistNext(&it, &e) || e.box.data.i != 0) {
+                ERR("tier %d: the rewind did not start at the head", medium);
+            }
+            multilistIteratorRelease(&it);
         }
     }
 
