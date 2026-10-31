@@ -972,95 +972,160 @@ static databox multitierTestKey_(char *buf, size_t len, uint64_t k) {
     return databoxNewBytes(buf, (size_t)n);
 }
 
+/* Walk's visits: each a live row of the model, once, at a level */
+typedef struct multitierTestWalk_ {
+    multimap *model;
+    multimap *seen;
+    size_t bad;
+} multitierTestWalk_;
+
+static bool multitierTestWalkVisit_(void *ctx, const databox *key,
+                                    const databox *value,
+                                    multitierLevel level) {
+    multitierTestWalk_ *w = ctx;
+    databox want = {};
+    databox *wantRow[1] = {&want};
+    const databox *row[1] = {key};
+    if (!multimapLookup(w->model, key, wantRow) ||
+        databoxCompare(&want, value) != 0 || level > MULTITIER_LEVEL_COLD ||
+        !multimapInsertIfAbsent(&w->seen, row)) {
+        w->bad++;
+    }
+    return true;
+}
+
+/* @model: src/multitier.h */
+/* Sets, Gets, Peeks and Deletes on 1500 keys with values of varying
+ * size, against a model of the live rows the sink takes rows out of;
+ * walks, flushes, the sink set again and a snapshot's restore along the
+ * way.  Each read must answer as the model does, the count must match it
+ * and the hot level must keep its limit. */
+static int multitierTestModel_(uint64_t hot, uint64_t cold, uint64_t seed) {
+    int err = 0;
+    cleaner(multimapFree) multimap *model = multimapNew(2);
+    const multitierConfig config = {
+        .hotMaxBytes = hot,
+        .coldMaxBytes = cold,
+        .demoteBatch = 16,
+        .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
+        .sink = multitierTestSink_,
+        .sinkCtx = &model,
+    };
+    cleaner(multitierFree) multitier *t = multitierNew(&config);
+    multitierConfig got = {};
+    multitierGetConfig(t, &got);
+    if (got.hotMaxBytes != hot || got.coldMaxBytes != cold ||
+        got.demoteBatch < 16 || !got.hotLevels) {
+        ERR("limits %" PRIu64 "/%" PRIu64 ": the config reads back wrong", hot,
+            cold);
+    }
+    uint64_t rng = seed;
+    char key[32];
+    char value[64];
+    for (size_t step = 0; step < 8000 && !err; step++) {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        const databox k =
+            multitierTestKey_(key, sizeof(key), (rng >> 8) % 1500);
+        const uint32_t op = (uint32_t)(rng % 13);
+        /* The expected value, owned: the sink edits the model during the
+         * call */
+        databox found = {};
+        databox *wantRow[1] = {&found};
+        const bool had = multimapLookup(model, &k, wantRow);
+        databox want = had ? databoxCopy(&found) : (databox){};
+        databox gotValue = {};
+        bool ok = true;
+        if (op < 4) {
+            const int vn = snprintf(
+                value, sizeof(value), "{\"step\":%zu,\"pad\":\"%.*s\"}", step,
+                (int)(step % 24), "xxxxxxxxxxxxxxxxxxxxxxxx");
+            const databox v = databoxNewBytes(value, (size_t)vn);
+            const databox *row[2] = {&k, &v};
+            multimapInsert(&model, row);
+            ok = multitierSet(t, &k, &v) == !had;
+        } else if (op < 7) {
+            const bool has = multitierGet(t, &k, &gotValue);
+            ok = has == had && (!has || databoxCompare(&gotValue, &want) == 0);
+        } else if (op < 9) {
+            const bool has = multitierPeek(t, &k, &gotValue);
+            ok = has == had && (!has || databoxCompare(&gotValue, &want) == 0);
+        } else if (op == 9) {
+            multimapDelete(&model, &k);
+            ok = multitierDelete(t, &k) == had;
+        } else if (op == 10 && step % 20 == 0) { /* every row, once */
+            cleaner(multimapFree) multimap *seen = multimapNew(1);
+            multitierTestWalk_ w = {.model = model, .seen = seen};
+            const size_t visited =
+                multitierWalk(t, multitierTestWalkVisit_, &w);
+            seen = w.seen;
+            ok = !w.bad && visited == multimapCount(model);
+        } else if (op == 11) { /* the batch into the cold level now */
+            multitierFlush(t);
+            multitierStats st;
+            multitierGetStats(t, &st);
+            ok = st.pendingRows == 0;
+        } else if (op == 12 && step % 50 == 0) {
+            multitierSetSink(t, multitierTestSink_, &model);
+        }
+        databoxFreeData(&want);
+        multitierStats st;
+        multitierGetStats(t, &st);
+        if (!ok || multitierCount(t) != multimapCount(model) ||
+            st.hotRows + st.pendingRows + st.coldRows != multimapCount(model) ||
+            (multimapCount(model) && !multitierBytes(t)) ||
+            (hot && st.hotBytes > hot)) {
+            ERR("limits %" PRIu64 "/%" PRIu64 " step %zu: op %" PRIu32
+                " (%zu rows, model %zu)",
+                hot, cold, step, op, multitierCount(t), multimapCount(model));
+            break;
+        }
+        /* A snapshot's restore holds the same rows (the recovery sink set
+         * around it, as multitierOpenP sets it) */
+        if (step % 997 == 996) {
+            size_t len = 0;
+            cleanerName(zfree, TierBytes) uint8_t *snap =
+                persistOpsMultitier.snapshot(t, &len);
+            multitierSetRecoverySink(multitierTestSink_, &model);
+            cleaner(multitierFree) multitier *back =
+                snap ? persistOpsMultitier.restore(snap, len) : nullptr;
+            multitierSetRecoverySink(nullptr, nullptr);
+            if (!back || multitierCount(back) != multimapCount(model)) {
+                ERR("limits %" PRIu64 "/%" PRIu64 " step %zu: a restore "
+                    "holds %zu rows, model %zu",
+                    hot, cold, step, back ? multitierCount(back) : 0,
+                    multimapCount(model));
+            }
+        }
+    }
+
+    /* Rows moved down at every limit, and sank when cold has one */
+    multitierStats st;
+    multitierGetStats(t, &st);
+    if ((hot && (!st.demotions || !st.coldHits)) || (cold && !st.sunkRows) ||
+        (!hot && st.demotions)) {
+        ERR("limits %" PRIu64 "/%" PRIu64 ": %" PRIu64 " demoted, %" PRIu64
+            " promoted, %" PRIu64 " sunk",
+            hot, cold, st.demotions, st.coldHits, st.sunkRows);
+    }
+    return err;
+}
+
 int multitierTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
 
-    TEST("every level, every move: Get, Peek, Set and Delete agree with a "
-         "model of the live rows") {
+    TEST("model: every public call agrees with a model of the live rows, "
+         "at every pair of limits") {
         static const struct {
             uint64_t hot;
             uint64_t cold;
         } limits[] = {{0, 0}, {4096, 0}, {4096, 16384}, {512, 4096}};
         for (size_t l = 0; l < countof(limits); l++) {
-            cleaner(multimapFree) multimap *model = multimapNew(2);
-            const multitierConfig config = {
-                .hotMaxBytes = limits[l].hot,
-                .coldMaxBytes = limits[l].cold,
-                .demoteBatch = 16,
-                .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
-                .sink = multitierTestSink_,
-                .sinkCtx = &model,
-            };
-            cleaner(multitierFree) multitier *t = multitierNew(&config);
-            uint64_t rng = 0x5EED + l;
-            char key[32];
-            char value[64];
-            for (size_t step = 0; step < 8000; step++) {
-                rng ^= rng << 13;
-                rng ^= rng >> 7;
-                rng ^= rng << 17;
-                const databox k =
-                    multitierTestKey_(key, sizeof(key), (rng >> 8) % 1500);
-                const uint32_t op = (uint32_t)(rng % 10);
-                /* The expected value, owned: the sink edits the model
-                 * during the call */
-                databox found = {};
-                databox *wantRow[1] = {&found};
-                const bool had = multimapLookup(model, &k, wantRow);
-                databox want = had ? databoxCopy(&found) : (databox){};
-                databox got = {};
-                if (op < 4) {
-                    const int vn = snprintf(
-                        value, sizeof(value), "{\"step\":%zu,\"pad\":\"%.*s\"}",
-                        step, (int)(step % 24), "xxxxxxxxxxxxxxxxxxxxxxxx");
-                    const databox v = databoxNewBytes(value, (size_t)vn);
-                    const databox *row[2] = {&k, &v};
-                    multimapInsert(&model, row);
-                    if (multitierSet(t, &k, &v) != !had) {
-                        ERR("limits %zu step %zu: Set new", l, step);
-                    }
-                } else if (op < 7) {
-                    const bool has = multitierGet(t, &k, &got);
-                    if (has != had || (has && databoxCompare(&got, &want))) {
-                        ERR("limits %zu step %zu: Get", l, step);
-                    }
-                } else if (op < 9) {
-                    const bool has = multitierPeek(t, &k, &got);
-                    if (has != had || (has && databoxCompare(&got, &want))) {
-                        ERR("limits %zu step %zu: Peek", l, step);
-                    }
-                } else {
-                    multimapDelete(&model, &k);
-                    if (multitierDelete(t, &k) != had) {
-                        ERR("limits %zu step %zu: Delete", l, step);
-                    }
-                }
-                databoxFreeData(&want);
-
-                multitierStats st;
-                multitierGetStats(t, &st);
-                if (multitierCount(t) != multimapCount(model) ||
-                    (limits[l].hot && st.hotBytes > limits[l].hot)) {
-                    ERR("limits %zu step %zu: %zu rows, model %zu; hot %" PRIu64
-                        " bytes",
-                        l, step, multitierCount(t), multimapCount(model),
-                        st.hotBytes);
-                    break;
-                }
-            }
-
-            /* Rows moved down at every limit, and sank when cold has one */
-            multitierStats st;
-            multitierGetStats(t, &st);
-            if ((limits[l].hot && (!st.demotions || !st.coldHits)) ||
-                (limits[l].cold && !st.sunkRows) ||
-                (!limits[l].hot && st.demotions)) {
-                ERR("limits %zu: %" PRIu64 " demoted, %" PRIu64
-                    " promoted, %" PRIu64 " sunk",
-                    l, st.demotions, st.coldHits, st.sunkRows);
-            }
+            err +=
+                multitierTestModel_(limits[l].hot, limits[l].cold, 0x5EED + l);
         }
     }
 
