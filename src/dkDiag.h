@@ -76,7 +76,8 @@ typedef enum dkDiagCode {
     /* a membound free of a pointer the pool does not hold out (outside
      * it, misaligned, freed already, or into a block's interior) */
     DK_DIAG_MEMBOUND_INVALID_FREE = 16,
-    /* a timer callback called its timer's ProcessTimerEvents (ignored) */
+    /* a timer callback called its timer's ProcessTimerEvents (ignored)
+     * or Free/Deinit (refused) */
     DK_DIAG_TIMER_REENTERED = 17,
     /* a multiarray index (or range) outside its elements: a Get answers
      * NULL, a change is refused */

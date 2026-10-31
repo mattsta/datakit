@@ -489,6 +489,13 @@ void timerWheelDeinit(timerWheel *tw) {
     if (!tw) {
         return;
     }
+    /* From one of its own callbacks a slot is being walked: refused */
+    if (tw->context == TIMER_WHEEL_CONTEXT_TIMER) {
+        DK_DIAG(DK_DIAG_TIMER_REENTERED,
+                "freed from a timer callback; refused (free it after "
+                "ProcessTimerEvents returns)");
+        return;
+    }
 
     freeAllWheelSlots(tw);
 
@@ -518,6 +525,10 @@ timerWheel *timerWheelNew(void) {
 }
 
 void timerWheelFree(timerWheel *tw) {
+    if (tw && tw->context == TIMER_WHEEL_CONTEXT_TIMER) {
+        timerWheelDeinit(tw); /* reports the refusal */
+        return;
+    }
     if (tw) {
         timerWheelDeinit(tw);
         zfree(tw);

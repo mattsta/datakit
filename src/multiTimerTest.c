@@ -116,6 +116,14 @@ static bool testReentrantProcessCallback(multiTimer *t, multiTimerId,
     return false;
 }
 
+static bool testFreeOwnTimerCallback(multiTimer *t, multiTimerId,
+                                     void *clientData) {
+    testCallbackState *state = clientData;
+    state->callCount++;
+    multiTimerFree(t); /* refused: the batch is still running */
+    return false;
+}
+
 /* Helper to sleep for microseconds (approximate) */
 static void sleepUs(uint64_t us) {
     usleep((useconds_t)us);
@@ -960,6 +968,25 @@ int multiTimerTest(int, char *[]) {
         if (fresh.callCount != 1) {
             ERR("Post-StopAll timer did not fire, callCount=%d",
                 fresh.callCount);
+        }
+    }
+
+    TEST("multiTimer: a free from within a callback is refused and reported") {
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
+        testCallbackState freeing = {};
+        testCallbackState later = {};
+        multiTimerRegister(t, 1000, 0, testFreeOwnTimerCallback, &freeing);
+        multiTimerRegister(t, 2000, 0, testCountingCallback, &later);
+        sleepUs(5000);
+        const uint64_t diagBefore = dkDiagCount();
+        multiTimerProcessTimerEvents(t);
+        dkDiagnostic d;
+        if (freeing.callCount != 1 || later.callCount != 1 ||
+            dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_TIMER_REENTERED || multiTimerCount(t) != 0) {
+            ERR("a free from a callback: %d and %d fired, diag %s",
+                freeing.callCount, later.callCount,
+                dkDiagCount() == diagBefore + 1 ? "reported" : "missing");
         }
     }
 

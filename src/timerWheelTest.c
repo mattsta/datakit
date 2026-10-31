@@ -114,6 +114,14 @@ static bool testReentrantProcessCallback(timerWheel *tw, timerWheelId,
     return false;
 }
 
+static bool testFreeOwnWheelCallback(timerWheel *tw, timerWheelId,
+                                     void *clientData) {
+    testCallbackState *state = clientData;
+    state->callCount++;
+    timerWheelFree(tw); /* refused: a slot is still being walked */
+    return false;
+}
+
 static bool testNestedTimerCallback(timerWheel *tw, timerWheelId,
                                     void *clientData) {
     testCallbackState *state = clientData;
@@ -416,6 +424,25 @@ int timerWheelTest(int, char *[]) {
             d.code != DK_DIAG_TIMER_REENTERED) {
             ERR("a re-entered ProcessTimerEvents must report "
                 "TIMER_REENTERED once");
+        }
+    }
+
+    TEST("timerWheel: a free from within a callback is refused and "
+         "reported") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState freeing = {};
+        testCallbackState later = {};
+        timerWheelRegister(tw, 1000, 0, testFreeOwnWheelCallback, &freeing);
+        timerWheelRegister(tw, 2000, 0, testCountingCallback, &later);
+        const uint64_t diagBefore = dkDiagCount();
+        timerWheelAdvanceTime(tw, 10000);
+        dkDiagnostic d;
+        if (freeing.callCount != 1 || later.callCount != 1 ||
+            dkDiagCount() != diagBefore + 1 || !dkDiagLast(&d) ||
+            d.code != DK_DIAG_TIMER_REENTERED) {
+            ERR("a free from a callback: %d and %d fired, diag %s",
+                freeing.callCount, later.callCount,
+                dkDiagCount() == diagBefore + 1 ? "reported" : "missing");
         }
     }
 

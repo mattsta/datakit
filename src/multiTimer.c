@@ -52,6 +52,13 @@ bool multiTimerInit(multiTimer *t) {
 }
 
 void multiTimerDeinit(multiTimer *t) {
+    /* From one of its own callbacks the maps are being walked: refused */
+    if (t && t->context == MULTI_TIMER_CONTEXT_TIMER) {
+        DK_DIAG(DK_DIAG_TIMER_REENTERED,
+                "freed from a timer callback; refused (free it after "
+                "ProcessTimerEvents returns)");
+        return;
+    }
     if (t) {
         multimapFree(t->scheduled);
         multimapFree(t->pendingScheduling);
@@ -76,6 +83,10 @@ size_t multiTimerCount(multiTimer *t) {
 }
 
 void multiTimerFree(multiTimer *t) {
+    if (t && t->context == MULTI_TIMER_CONTEXT_TIMER) {
+        multiTimerDeinit(t); /* reports the refusal */
+        return;
+    }
     if (t) {
         multiTimerDeinit(t);
         zfree(t);
