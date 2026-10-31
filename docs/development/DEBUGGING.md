@@ -331,9 +331,11 @@ gdb ./src/datakit-test
 3. **Add debug output:**
 
 ```c
-printf("DEBUG: Before operation, count=%d\n", count);
-result = flexDoSomething(f);
-printf("DEBUG: After operation, count=%d, result=%d\n", count, result);
+printf("DEBUG: before, %zu entries, %zu bytes\n", (size_t)flexCount(f),
+       flexBytes(f));
+flexPushByType(&f, &box, FLEX_ENDPOINT_TAIL);
+printf("DEBUG: after, %zu entries, %zu bytes\n", (size_t)flexCount(f),
+       flexBytes(f));
 ```
 
 4. **Simplify the test:**
@@ -663,23 +665,15 @@ When stuck:
 
 ### Data Structure Corruption
 
-1. **Add validation functions:**
+1. **Validate after each operation.** A flex checks itself
+   (`flexValidateBufferDeep` bounds every entry, as the snapshot readers
+   do), and test builds give the containers a full self-check
+   (`multimapVerify` asserts every inner map's order, middle and range
+   box):
 
 ```c
-bool flexValidate(flex *f) {
-    // Check structure invariants
-    if (flexCount(f) < 0) return false;
-    if (flexBytes(f) < FLEX_EMPTY_SIZE) return false;
-    // ... more checks ...
-    return true;
-}
-```
-
-2. **Call after each operation:**
-
-```c
-flexPush(&f, value);
-assert(flexValidate(f));
+flexPushByType(&f, &box, FLEX_ENDPOINT_TAIL);
+assert(flexValidateBufferDeep(f, flexBytes(f)));
 ```
 
 ### Race Conditions

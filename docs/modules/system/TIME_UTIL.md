@@ -672,6 +672,9 @@ saveToDatabase(timestamp, data);  /* Can't interpret later! */
 ### 3. Choose Appropriate Resolution
 
 ```c
+void fastOperation(void); /* yours */
+void slowOperation(void); /* yours */
+
 /* GOOD - Microsecond resolution for precise timing */
 uint64_t start = timeUtilMonotonicUs();
 fastOperation();

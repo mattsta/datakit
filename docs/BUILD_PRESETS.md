@@ -1,6 +1,6 @@
 # Build presets
 
-`CMakePresets.json` defines five named configurations so that "performance vs
+`CMakePresets.json` defines seven named configurations so that "performance vs
 safety vs debug" sessions are reproducible and discoverable. Each preset
 configures into its own `build/<name>/` directory so they coexist.
 
@@ -34,7 +34,7 @@ cmake --build --preset perf
 # Run a specific test directly:
 ./build/perf/src/datakit-test test blake3
 
-# Or run via ctest (auto-discovers every registered test, 159 today):
+# Or run via ctest (auto-discovers every registered test):
 ctest --preset perf
 ```
 

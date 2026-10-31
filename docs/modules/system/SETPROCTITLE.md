@@ -211,6 +211,8 @@ void workerSetState(int workerID, WorkerState state, const char *detail) {
     setproctitle(title);
 }
 
+Job *getNextJob(void); /* your queue */
+
 void workerMain(int workerID) {
     workerSetState(workerID, WORKER_IDLE, NULL);
 

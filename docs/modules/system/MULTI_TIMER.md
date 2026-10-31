@@ -485,7 +485,10 @@ void workerStop(Worker *worker) {
 typedef struct Server {
     int listenFd;
     multiTimer *timer;
+    bool running;
 } Server;
+
+void performMaintenance(Server *server); /* yours */
 
 bool periodicTaskCallback(multiTimer *t, multiTimerId id, void *clientData) {
     Server *server = clientData;

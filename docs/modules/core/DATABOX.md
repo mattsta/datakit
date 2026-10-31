@@ -429,6 +429,7 @@ double d = (pi.type == DATABOX_FLOAT_32) ? pi.data.f32 : pi.data.d64;
 printf("Pi: %.5f\n", d);
 
 /* Type-safe access with checking */
+databox getSomeBox(void); /* your code: a box of any type */
 databox unknown = getSomeBox();
 if (DATABOX_IS_SIGNED_INTEGER(&unknown)) {
     printf("Signed: %" PRId64 "\n", unknown.data.i64);
@@ -1131,6 +1132,8 @@ abort). Narrow values never reach the check.
 ### 1. Always Check Types
 
 ```c
+databox getSomeBox(void); /* your code: a box of any type */
+
 /* WRONG - no type checking */
 databox box = getSomeBox();
 int64_t val = box.data.i64;  /* What if it's not an integer? */
@@ -1238,14 +1241,14 @@ databox box = databoxNewBytesAllocateOrEmbed(data, len);
 databoxFree(&box);          /* frees a stack address! */
 
 /* RIGHT - release the owned data, leave the struct alone */
-databox box = databoxNewBytesAllocateOrEmbed(data, len);
+databox owned = databoxNewBytesAllocateOrEmbed(data, len);
 /* ... use it ... */
-databoxFreeData(&box);
+databoxFreeData(&owned);
 
 /* RIGHT - databoxFree() is for heap-allocated databoxes */
-databox *box = zcalloc(1, sizeof(*box));
-databoxCopyBytes(box, data, len);
-databoxFree(box);
+databox *heap = zcalloc(1, sizeof(*heap));
+databoxCopyBytes(heap, data, len);
+databoxFree(heap);
 ```
 
 ### 2. Using Offset Boxes Without Resolution

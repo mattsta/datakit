@@ -29,15 +29,15 @@ datakit achieves exceptional memory efficiency through:
 
 One of the most important patterns in datakit is **scale-aware design**. Many containers come in multiple size variants:
 
-```
-┌──────────────────┬──────────────┬─────────────────────────────┐
-│ Variant          │ Size Range   │ Optimization                │
-├──────────────────┼──────────────┼─────────────────────────────┤
-│ Small            │ < 1KB        │ Inline storage, simple      │
-│ Medium           │ 1KB - 100KB  │ Balanced performance        │
-│ Large/Full       │ > 100KB      │ Complex indexing, scalable  │
-└──────────────────┴──────────────┴─────────────────────────────┘
-```
+| Tier       | Holds (multimap; L is the size limit, 2048 bytes unless changed) | Searches by                                           |
+| ---------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
+| Small      | one flex, up to L bytes                                          | binary search of one flex                             |
+| Medium     | two flexes, up to about 3L                                       | a choice of flex, then a binary search                |
+| Large/Full | many inner flexes                                                | a search of the inner maps' first keys, then one flex |
+
+Each tiered family moves up as it grows past a tier's bound and back down
+as it drains; the rules and the per-family defaults
+(`dkTierSetDefaultLimit`) are in [Tiered containers](modules/core/TIERS.md).
 
 **Examples:**
 
@@ -578,40 +578,47 @@ into another (idempotent and commutative).
 ## Module Layering
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ Application Layer                                   │
-└─────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│ High-Level Containers                               │
-│ (multimap, multilist, multiarray, multilru, etc.)   │
-└─────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│ Mid-Level Structures                                │
-│ (flex, mflex, intset, hyperloglog, multiroar)       │
-└─────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│ Low-Level Utilities                                 │
-│ (str, databox, membound, ptrPrevNext)               │
-└─────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│ Platform Layer                                      │
-│ (config, datakit, OSRegulate, portableRandom)       │
-└─────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│ Dependencies                                        │
-│ (lz4, xxHash, sha1, imath, varint)                  │
-└─────────────────────────────────────────────────────┘
+Application
+ │
+ ├─ Replication   clusterRing (which nodes hold a key) · clusterMailbox (verified frames,
+ │                per-origin replay windows) · clusterReplicator (persisted structures between nodes)
+ ├─ Integrity     flexEnvelope (checksummed, MACed or encrypted frames) · hmacKeyring ·
+ │                aeadNonceLog · BLAKE3 · SHA-256 · HMAC · ChaCha20-Poly1305 · AES-GCM
+ ├─ Durability    persist (snapshots, write-ahead log, compaction, recovery) · persistCtx ·
+ │                the *P wrappers · one persistOps descriptor per type
+ ├─ Containers    tiered: multimap multilist multiarray multiOrderedSet intset
+ │                hashed: multidict multilru · interning: multimapAtom
+ │                cold: coldmap multitier idRows · sets: multiroar intsetBig hyperloglog linearBloom
+ │                indexes: Fenwick and segment trees
+ ├─ Encoding      flex (variable-width entries in one allocation) · mflex (LZ4) · varint ·
+ │                dod · xof · float16
+ ├─ Values        databox (16 bytes: integers to 128 bits, floats, bytes, references)
+ └─ Platform      dkPlatform · dkDiag · zmalloc / jebuf / membound · timeUtil · dkRandom ·
+                  ownedState · fastmutex · timerWheel · multiTimer · OSRegulate
+Vendored in deps/: lz4, xxHash, imath, varint, sha1
 ```
+
+How the layers meet:
+
+- **Values in and out.** Every container takes and returns `databox`es. A box holds a number or a
+  pointer to bytes; a byte value a read returns points into the container, valid until the next
+  change.
+- **Two storage paths.** flex's auto-convert writes (`flexPushBytes`, `flexPushByType`) store a string
+  that spells a number as the number; its exact writes (`flexPushByTypeExact` and every positional or
+  sorted insert) store what they are given. The containers and persistence use the exact path, so a
+  value comes back as it went in ([flex](modules/flex/FLEX.md#two-write-paths-auto-convert-and-exact)).
+- **Durability is per type.** A `persistOps` descriptor gives a type's snapshot format and the
+  operations its log replays; `persist` adds stores, checksums, compaction and recovery; a `*P`
+  wrapper logs each change before making it ([persist](modules/persist/PERSIST.md)).
+- **Integrity wraps bytes.** The envelope frames any bytes, a snapshot or a log entry included, with a
+  checksum, a MAC from the keyring, or AEAD encryption under a nonce the keyring issues
+  ([Hashes, HMAC, and the flex envelope](HASH_AND_ENVELOPE.md)).
+- **Replication moves frames.** clusterRing decides placement; a mailbox verifies frames and keeps
+  each origin's replay window; a replicator snapshots a structure through its `persistOps`, seals
+  it, and restores it on the other side.
+- **Misuse is reported, not printed.** A refused call returns its documented failure and records a
+  diagnostic the caller reads ([dkDiag](modules/core/DIAGNOSTICS.md)); no data structure writes to
+  stdout or stderr on its own.
 
 ## Choosing the Right Container
 
@@ -694,38 +701,12 @@ Need to store data?
 
 ## Thread Safety
 
-**General Rule**: datakit containers are **NOT thread-safe** by default.
-
-**Options for Concurrent Access:**
-
-1. **External Locking**: Use mutexes around container operations
-2. **Per-Thread Containers**: Each thread has its own instance
-3. **Copy-on-Write**: Clone containers for readers
-
-**Thread-Safe Modules:**
-
-- `membound` - Uses internal locking
-- `fastmutex` - Thread-safe mutex implementation
-- `OSRegulate` - Thread-safe resource limiting
-
-**Example with External Locking:**
-
-```c
-pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-multimap *m = multimapNew(2);
-
-/* Thread-safe insert */
-const databox *entry[2] = {&key, &val};
-pthread_mutex_lock(&lock);
-multimapInsert(&m, entry);
-pthread_mutex_unlock(&lock);
-
-/* Thread-safe lookup */
-databox value;
-pthread_mutex_lock(&lock);
-bool found = multimapLookupInto(m, &key, &value, 1);
-pthread_mutex_unlock(&lock);
-```
+No datakit container locks itself, a write can move a container's handle (the `X **` calls), and
+some reads write (every multidict find steps its incremental rehash). Use one lock per container
+(or per shard), or one container per thread; publish read-mostly state with
+[ownedState](modules/system/OWNED_STATE.md). The modules that synchronize internally (hmacKeyring,
+aeadNonceLog, clusterMailbox's observers, clusterRing's placements, membound by tier, ownedState) and
+the per-thread and process-wide state are listed in [Thread Safety](advanced/THREAD_SAFETY.md).
 
 ## Platform Abstraction
 
@@ -771,12 +752,17 @@ if (!found) {
     /* Handle not found */
 }
 
-/* Pointer returns (NULL = error) */
-flex *f = flexNew();
-if (!f) {
-    /* Allocation failed */
+/* NULL from a call that refuses its arguments or input */
+multimap *back = multimapNewFromDump(2, false, FLEX_CAP_LEVEL_2048, rows);
+if (!back) {
+    /* the rows did not ascend */
 }
 ```
+
+Allocation failure is not an error datakit returns: the library does not
+check its allocator's result, so a failed allocation crashes at once.
+Install an allocator that aborts with a message (`datakitConfigSet`) to
+make that failure explicit.
 
 ### 2. Output Parameters
 
@@ -788,7 +774,13 @@ if (!success) {
 }
 ```
 
-### 3. Assertions (Debug Mode)
+### 3. Diagnostics
+
+A call refused for misuse records a diagnostic on the calling thread
+(`dkDiagLast`), and a process-wide hook can collect them; see
+[Diagnostics](modules/core/DIAGNOSTICS.md).
+
+### 4. Assertions (Debug Mode)
 
 ```c
 /* In debug builds, assertions catch programming errors */
@@ -796,7 +788,7 @@ assert(m != NULL);  /* Catches NULL pointer bugs */
 assert(index < count);  /* Catches out-of-bounds access */
 ```
 
-### 4. Graceful Degradation
+### 5. Graceful Degradation
 
 ```c
 /* Some modules return best effort; 'invalid' separates a corrupt

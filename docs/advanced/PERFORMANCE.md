@@ -138,16 +138,20 @@ flexEntry *found = flexFindByTypeSortedWithMiddle(map, 2, &key, middle);
 #### Batch Inserts
 
 ```c
-/* Build flex externally, then bulk append */
-flex *batch = flexNew();
+/* Rows in key order into a new map: built in one pass, no per-row search
+ * (the rows are taken; NULL when they do not ascend) */
+flex *rows = flexNew();
 for (int i = 0; i < 1000; i++) {
-    databox k = databoxNewSigned(i);
-    databox v = databoxNewSigned(i * 2);
+    const databox k = databoxNewSigned(i);
+    const databox v = databoxNewSigned(i * 2);
     const databox *pair[2] = {&k, &v};
-    flexAppendMultiple(&batch, 2, pair);
+    flexAppendMultipleExact(&rows, 2, pair);
 }
-multimapBulkAppend(&m, batch);  // Single operation
+multimap *m = multimapNewFromDump(2, false, FLEX_CAP_LEVEL_2048, rows);
 ```
+
+Rows for an existing map that arrive in key order go through
+`multimapAppend`, which adds a row past the last key without a search.
 
 ### multilist Performance
 
@@ -235,29 +239,30 @@ multiarrayLarge *arr = multiarrayLargeNew(sizeof(int), 1024);
 #### Preallocate for Native
 
 ```c
-/* Fixed size - use Native */
-typedef struct Point { float x, y, z; } Point;
-Point *points = multiarrayNativeNew(points[10000]);
-// Zero overhead, auto-upgrades if needed
+/* Fixed-size elements with no container header: the native macros (one
+ * element at first, grown one per insert, promoted to Medium past rowMax) */
+typedef struct Point {
+    float x, y, z;
+} Point;
+multiarray *points = multiarrayNativeNew(Point);
 ```
 
 ### intset Performance
 
 #### Encoding Awareness
 
-```c
-/* GOOD: Add largest value first to force encoding */
-intset *is = intsetNew();
-is = intsetAdd(is, INT32_MAX, NULL);  // Force INT32
-for (int i = 0; i < 10000; i++) {
-    is = intsetAdd(is, rand() % INT32_MAX, NULL);  // No upgrades
-}
+intset keeps one sorted array per width (16, 32 and 64 bits), so each
+value costs only its own width and the order values arrive in does not
+change the encoding:
 
-/* BAD: Random order causes multiple upgrades */
+```c
 intset *is = intsetNew();
+bool added = false;
 for (int i = 0; i < 10000; i++) {
-    is = intsetAdd(is, rand(), NULL);  // Multiple upgrades possible
+    intsetAdd(&is, i, &added); /* 2 bytes each */
 }
+intsetAdd(&is, INT32_MAX, &added); /* 4 bytes, for itself only */
+intsetFree(is);
 ```
 
 #### Binary Search is Fast
@@ -413,12 +418,13 @@ void *ptr = memboundAlloc(m, 300);  // Allocates 512, wastes 212 bytes
 #### fibbuf Growth Strategy
 
 ```c
-/* Fibonacci growth: 1, 2, 3, 5, 8, 13, 21, 34, 55, 89... */
-fibbuf *fb = fibbufNew();
-
-/* More aggressive than 2x doubling early on */
-/* Less aggressive than 2x doubling later */
-/* Reduces memory waste while maintaining amortized O(1) */
+/* The buffer size after 'size' along the Fibonacci sequence (34, 55, 89,
+ * 144, ...; past the tables, 20% more): less over-allocation than
+ * doubling, still amortized O(1) growth */
+size_t size = 34;
+while (size < want) {
+    size = fibbufNextSizeBuffer(size);
+}
 ```
 
 ## Algorithmic Complexity Reference
@@ -562,18 +568,11 @@ void runPerfTest(PerfTest *test) {
 
 ### 1. Ignoring Variant Overhead
 
-```c
-/* WRONG: Using Full variant for tiny data */
-multimap *tiny = multimapNew(2);
-for (int i = 0; i < 5; i++) {
-    multimapInsert(&tiny, ...);
-}
-// Forces upgrade eventually, but 5 entries don't need Full
-
-/* RIGHT: Force Small variant */
-multimapSmall *tiny = multimapSmallNew();
-// 16 bytes overhead vs 40+ bytes
-```
+`multimapNew` starts Small and changes tier only past its size limit, so
+a map of a few rows stays one flex: there is no need to pick a tier.
+Pinning one (`multimapSmallNew`, `multimapFullNew`) gives up the moves
+both ways: a pinned Full holds a few rows at Full's cost, and a pinned
+Small pays a whole-flex move for every insert as it grows.
 
 ### 2. Not Using Iterators
 

@@ -50,7 +50,7 @@ for size.
 - **Medium**: Two-way branching, ~50% search space reduction
 - **Full**: Dynamic multi-way branching, unlimited scalability
 
-**Upgrade Triggers** (from `multimapUpgradeIfNeeded` in `multimap.c`):
+**Upgrade Triggers** (from `multimapUpgradeIfNecessary_` in `multimap.c`):
 
 - Small → Medium: `bytes > sizeLimit && count > elementsPerEntry * 2`.
   The count guard exists because a Medium split needs two complete
@@ -341,8 +341,8 @@ multimapSmall *ms = multimapSmallNew(2, false /* isSet */);
 multimapMedium *mm = multimapMediumNew(2);
 multimapFull *mf = multimapFullNew(2);
 
-/* multilist - Direct creation */
-multilistSmall *ls = multilistSmallCreate();
+/* multilist - Direct creation (a Small list is a view inside a
+ * multilist and has no constructor of its own) */
 multilistMedium *lm = multilistMediumCreate();
 multilistFull *lf = multilistFullNew(FLEX_CAP_LEVEL_4096, 2);
 
@@ -362,46 +362,45 @@ unless you have measured a reason not to.
 
 ### intset Variable Encoding
 
-intset uses a different type of scale-awareness: **variable-width encoding**.
-
-```c
-intset *is = intsetNew();  // Starts as INT16 (2 bytes per element)
-
-is = intsetAdd(is, 100, NULL);      // Still INT16
-is = intsetAdd(is, 50000, NULL);    // Upgrades to INT32 (4 bytes)!
-is = intsetAdd(is, 5000000000L, NULL);  // Upgrades to INT64 (8 bytes)!
-
-// All elements now use 8 bytes each, even value '100'
-// No downgrade - encoding is permanent
-```
-
-**Guideline**: If you know you'll have large values, add them first:
+intset adds a second kind of scale-awareness: **one sorted array per
+width**. Each value is stored at the narrowest width that holds it, so a
+large value costs its own bytes and nothing else:
 
 ```c
 intset *is = intsetNew();
-is = intsetAdd(is, INT32_MAX, NULL);  // Force INT32 upfront
-// Now all subsequent adds use INT32, no surprise upgrades
+bool added = false;
+intsetAdd(&is, 100, &added);                  /* int16_t array: 2 bytes */
+intsetAdd(&is, 50000, &added);                /* int32_t array: 4 bytes */
+intsetAdd(&is, INT64_C(5000000000), &added);  /* int64_t array: 8 bytes */
+/* 100 still takes 2 bytes; removing 50000 empties the int32_t array */
+intsetFree(is);
 ```
+
+`intsetAdd` takes `intset **`: adding a value can move the set to another
+tier and reallocate it. The order values arrive in does not matter.
 
 ### flex Compression
 
 flex itself doesn't have variants, but can be compressed:
 
 ```c
-/* Large flex */
-flex *f = /* ... 100KB of data ... */;
+/* 'f' is a flex of about 100 KB: compress it into a buffer of its size
+ * (the conversion is refused when the compressed form does not fit) */
+const size_t cap = flexBytes(f);
+cflex *c = zmalloc(cap);
+if (flexConvertToCFlex(f, c, cap)) {
+    printf("Compression: %.1fx\n",
+           (double)flexBytes(f) / (double)cflexBytesCompressed(c));
 
-/* Convert to compressed form */
-cflex *c = /* allocate buffer */;
-if (flexConvertToCFlex(f, c, bufferSize)) {
-    size_t compressed = cflexBytesCompressed(c);
-    size_t original = flexBytes(f);
-    printf("Compression: %.1fx\n", (double)original / compressed);
+    /* Decompress when needed */
+    flex *restored = nullptr;
+    size_t restoredLen = 0;
+    if (cflexConvertToFlex(c, &restored, &restoredLen)) {
+        /* 'restored' holds f's entries */
+    }
+    flexFree(restored);
 }
-
-/* Decompress when needed */
-flex *restored = NULL;
-cflexConvertToFlex(c, &restored, &restoredSize);
+zfree(c);
 ```
 
 ## Best Practices
@@ -413,8 +412,8 @@ cflexConvertToFlex(c, &restored, &restoredSize);
 multimap *m = multimapNew(2);
 // Starts optimal, grows as needed
 
-/* AVOID: Premature optimization */
-multimap *m = multimapNewFull();  // Overkill for small data
+/* AVOID: pinning the largest tier for small data */
+multimapFull *pinned = multimapFullNew(2);  // never changes tier
 ```
 
 ### 2. Set Appropriate Size Limits
@@ -487,11 +486,12 @@ Full:     24 + 100×24 + 160,000 = 162,424 bytes  (1.5% overhead)
 ### Pattern 1: Configuration Storage
 
 ```c
-// Always stays Small
+// A few short rows: stays Small
 multimap *config = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
-multimapInsert(&config, "timeout", 7, "30", 2);
-multimapInsert(&config, "retries", 7, "3", 1);
-// ~50 bytes total
+const databox timeout = databoxNewBytesString("timeout");
+const databox thirty = databoxNewBytesString("30");
+const databox *row[2] = {&timeout, &thirty};
+multimapInsert(&config, row);
 ```
 
 ### Pattern 2: Growing Cache
@@ -499,20 +499,22 @@ multimapInsert(&config, "retries", 7, "3", 1);
 ```c
 // Starts Small, grows to Medium/Full as needed
 multimap *cache = multimapNew(2);
-for (each request) {
-    multimapInsertOrUpdate(&cache, key, klen, value, vlen);
-    // Transparent upgrades
-}
+/* for each request: */
+const databox *row[2] = {&key, &value};
+multimapInsert(&cache, row);  // replaces the row when the key exists
 ```
 
 ### Pattern 3: Large-Scale Index
 
 ```c
-// Skip Small/Medium, go straight to Full
-multimap *index = multimapNew(2);
-multimapReserve(&index, 1000000);  // Hint: will be large
-// Efficient from the start
+// A million sorted rows: built straight into the right tier, no
+// insert-by-insert growth ('rows' is a flex of key, value pairs in key
+// order, taken by the call; NULL if they do not ascend)
+multimap *index = multimapNewFromDump(2, false, FLEX_CAP_LEVEL_2048, rows);
 ```
+
+Rows that arrive in key order one at a time go through `multimapAppend`,
+which skips the search when a row lands past the last key.
 
 ## See Also
 

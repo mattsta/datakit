@@ -102,6 +102,9 @@ multiroarFree(online);
 multimapAtomFree(users);
 ```
 
+`multimapAtomCopy(ma)` copies a table whole: its settings, every atom at the same id with the same
+count, and the same next id, so references into the original read the same in the copy.
+
 ## Plain-id calls
 
 | Call                                                                            | Does                                                                         |

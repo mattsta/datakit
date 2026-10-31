@@ -265,6 +265,9 @@ typedef struct postingList {
     size_t count;
 } postingList;
 
+postingList *getPostingList(const char *term); /* your index */
+void freePostingList(postingList *list);
+
 postingList *searchMultiTermAND(const char **terms, size_t numTerms) {
     if (numTerms == 0) {
         return NULL;

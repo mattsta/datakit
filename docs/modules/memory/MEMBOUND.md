@@ -182,9 +182,7 @@ memory work across `fork()`. (After fork, a pointer freed in one process is free
 for both — the pool is shared, not copied.)
 
 ENTERPRISE uses the same single global lock as STANDARD — there is **no**
-per-extent locking. See
-[MEMBOUND_MT_STRATEGY_DECISION.md](../../MEMBOUND_MT_STRATEGY_DECISION.md) for why
-the thread cache is the scaling mechanism instead.
+per-extent locking: the thread cache is the scaling mechanism instead.
 
 **Fully thread-safe** (concurrent from any thread): alloc/calloc/realloc/free,
 every query and stats call, strategy and threshold setters, and
@@ -367,5 +365,3 @@ module `membound`); the multithreaded comparison lives in the separate
 - [jebuf](JEBUF.md) — jemalloc size classes (**not** applicable to membound;
   use `memboundGoodSize` / `memboundUsableSize` instead)
 - [Architecture Overview](../../ARCHITECTURE.md) — memory-management design
-- [MEMBOUND_MT_STRATEGY_DECISION.md](../../MEMBOUND_MT_STRATEGY_DECISION.md) —
-  why the thread cache, not lock sharding

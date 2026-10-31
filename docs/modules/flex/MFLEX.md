@@ -199,6 +199,15 @@ size_t mflexBytesActual(const mflex *m);
 /* Check if currently compressed */
 bool mflexIsCompressed(const mflex *m);
 
+/* The bytes kept, compressed or plain, and a block rebuilt from them
+ * (copied; NULL unless they are a whole flex or a whole compressed
+ * envelope): how a container stores an mflex in its own format */
+const void *mflexStoredBytes(const mflex *m, size_t *len);
+mflex *mflexNewFromStored(const void *bytes, size_t len, bool compressed);
+
+/* Memory a state holds: its two scratch buffers and itself */
+size_t mflexStateBytes(const mflexState *state);
+
 /* Example: Check compression */
 printf("Uncompressed: %zu bytes\n", mflexBytesUncompressed(m));
 printf("Compressed: %zu bytes\n", mflexBytesCompressed(m));

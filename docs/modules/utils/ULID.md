@@ -16,6 +16,8 @@ Independent generators are independent; one generator is single-threaded.
 
 ulidGen gen;
 ulidGenInit(&gen, ULID_CLOCK_REALTIME); /* or zero-init: self-seeds, REALTIME */
+/* ulidGenSetClockSource(&gen, ULID_CLOCK_MONOTONIC_OFFSET) switches a live
+ * generator's clock; its ids keep strictly increasing */
 
 ulid_t id;
 ulidGenerate(&gen, &id);

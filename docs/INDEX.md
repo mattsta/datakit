@@ -85,6 +85,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 - [intsetU32](modules/intset/INTSET_U32.md) - Fixed 32-bit unsigned integer set
 - [intsetBig](modules/intset/INTSET_BIG.md) - Bucketed wide-range integer set (128-bit inputs)
 - [hyperloglog](modules/intset/HYPERLOGLOG.md) - Probabilistic cardinality estimation
+- [linearBloom and linearBloomCount](modules/intset/LINEAR_BLOOM.md) - Fixed-size Bloom filters: membership, and counts with decay
 
 `src/intsetBig.h` adds 128-bit-backed integer sets; it is compiled only
 where the toolchain provides `__int128`, and its `intsetBig` test is
@@ -97,7 +98,7 @@ dropped from the CTest list otherwise.
 
 ### Compression and Encoding
 
-- [xof](modules/compression/XOF.md) - XOR filter for double compression (delta-of-delta)
+- [xof](modules/compression/XOF.md) - Lossless double compression: each value XORed with the one before (Gorilla)
 - [dod](modules/compression/DOD.md) - Delta-of-delta encoding for int64 values
 - [float16](modules/compression/FLOAT16.md) - Half-precision floating point (F16C)
 
@@ -147,10 +148,17 @@ installed. They carry their own upstream documentation:
   `deps/lz4/lz4frame.h`
 - sha1 - SHA-1 digest; API in `deps/sha1/sha1.h`
 
-## Hashing, Integrity, and Encryption
+## Hashing, Integrity, Encryption and Replication
 
 - [Hashes, HMAC, and the flex envelope](HASH_AND_ENVELOPE.md) - Usage guide for
-  BLAKE3, SHA-256, HMAC, the keyring, AEAD, and the envelope wire format
+  BLAKE3, SHA-256, HMAC, the keyring, AEAD, and the envelope wire format.
+  Within it:
+  - [hmacKeyring](HASH_AND_ENVELOPE.md#hmac-keyring--multiple-keys-rotation-friendly) - keys by id, rotation, per-key AEAD nonce counters
+  - [aeadNonceLog](HASH_AND_ENVELOPE.md#aead-nonce-reuse-detector-defense-in-depth) - refuses a (key, nonce) seen before
+  - [ChaCha20-Poly1305 and AES-GCM](HASH_AND_ENVELOPE.md#streaming-aead-state-machine) - one-shot and streaming AEAD
+  - [flexEnvelope](HASH_AND_ENVELOPE.md#flex-envelope--integrity-checked-wrapper) - checksummed, MACed or encrypted frames around any bytes
+  - [clusterMailbox](HASH_AND_ENVELOPE.md#cluster-mailbox--verified-frame-router) - verified frames from many origins with replay protection
+  - [clusterReplicator](HASH_AND_ENVELOPE.md#clusterreplicatorh) - ship any persisted structure through a mailbox
 - [Hash / envelope performance profile](HASH_PERFORMANCE.md) - Throughput and
   latency reference for those paths
 
@@ -168,6 +176,7 @@ installed. They carry their own upstream documentation:
 
 - [Running Tests](development/TESTING.md) - Test suite guide
 - [Building from Source](development/BUILDING.md) - Detailed build instructions
+- [Build presets](BUILD_PRESETS.md) - dev, debug, perf, safe, tsan, fuzz and coverage
 - [Contributing Guidelines](development/CONTRIBUTING.md) - How to contribute
 - [Change Runbook](development/RUNBOOK.md) - The checklist every change follows
 - [Debugging Tips](development/DEBUGGING.md) - Common issues and solutions
@@ -184,11 +193,7 @@ installed. They carry their own upstream documentation:
 - **License**: The Sovereign Individual's Covenant License, v1.0 ([LICENSE](../LICENSE))
 - **Author**: Matt Stancliff
 
-## Quick Stats
+## Platforms
 
-- **170+ header files** under `src/` with comprehensive APIs
-- **140+ registered tests** in `src/datakit-test.c`, each also a CTest target
-- **13 module categories** under `docs/modules/`
-- **POSIX platforms**: Linux, macOS, and the BSD family (there is no
-  Windows/MSVC support)
-- **Performance-focused** with aggressive optimizations and minimal overhead
+Linux, macOS and the BSD family, built with clang or gcc (C23); there is
+no Windows/MSVC support. See [Platform Support](advanced/PLATFORMS.md).

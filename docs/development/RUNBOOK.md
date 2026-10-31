@@ -52,7 +52,10 @@ For every change:
    - `build ok, 0 warning lines`, and the `also` line the same;
    - `ctest ok`;
    - `sanitizer ok`;
-   - `alloc`, `atomic`, `output` and `format` all `ok`.
+   - every gate line `ok`: `alloc`, `atomic`, `output`, `spell`, `idioms`,
+     `magic`, `models`, `headers`, `checks`, `docs` (every doc's C
+     examples compile against the headers, no doc names a missing call,
+     no link is broken) and `format`.
 
    Any `FAILED` line blocks the commit, whatever caused it.
 
@@ -104,8 +107,9 @@ uv run --project tools dktools validate --full   # also the slow tests
 ```
 
 validate exports the commit and builds clang 22 dev, clang 22 debug and
-gcc 15 release. It runs every test plus every gate: allocation
-ownership, atomic ordering, library output, formatting and leakage.
+gcc 15 release. It runs every test plus every gate verify runs (the
+docs gate included), and the leakage gate over the commits since the
+base.
 Read `summary.md` in its work directory: `PASS` on the first line, and
 every section clean. Never pipe validate or coverage into `head` (the
 pipe kills the run while the exit status still looks successful). Start

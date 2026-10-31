@@ -469,66 +469,60 @@ multilist *archive = multilistNewLimit(FLEX_CAP_LEVEL_4096, 1);
 
 /* Move old data to archive */
 while (multilistCount(recent) > 10000) {
-    databox item;
-    multilistPopByTypeHead(&recent, state, &item);
+    databox item = {}; /* Pop needs a zeroed box */
+    multilistPopHead(&recent, state, &item);
     multilistPushByTypeTail(&archive, state, &item);
+    databoxFreeData(&item);
 }
 ```
 
 ### Pattern 3: Native Arrays for Fixed-Size Data
 
 ```c
-/* AVOID: Dynamic array for known size */
-multiarraySmall *arr = multiarraySmallNew(sizeof(Point), 1000);
-// 16 bytes overhead
-
-/* USE: Native array */
-typedef struct Point { float x, y, z; } Point;
-Point *points = multiarrayNativeNew(points[1000]);
-// 0 bytes overhead
-// Auto-upgrades to Medium if you exceed 1000
+/* Fixed-size elements with no container header: the native macros.  The
+ * array starts as one element, grows by exactly one per insert, and is
+ * promoted to Medium past rowMax (see multiarray/VARIANTS.md) */
+typedef struct Point {
+    float x, y, z;
+} Point;
+multiarray *points = multiarrayNativeNew(Point);
 ```
 
 ### Pattern 4: Batch Operations to Reduce Allocations
 
 ```c
-/* BAD: Individual inserts */
+/* One push per value: the flex is reallocated for each one */
 flex *f = flexNew();
 for (int i = 0; i < 1000; i++) {
-    databox box = databoxNewSigned(i);
+    const databox box = databoxNewSigned(i);
     flexPushByType(&f, &box, FLEX_ENDPOINT_TAIL);
-    // Potential realloc each time
 }
 
-/* GOOD: Build batch, append once */
-flex *batch = flexNew();
-batch = zrealloc(batch, expected_size);  // Preallocate
+/* From an array of values: one reallocation per 64 values */
+databox values[1000];
 for (int i = 0; i < 1000; i++) {
-    databox box = databoxNewSigned(i);
-    flexPushByType(&batch, &box, FLEX_ENDPOINT_TAIL);
-    // No reallocs
+    values[i] = databoxNewSigned(i);
 }
-flexBulkAppendFlex(&f, batch);
+flex *g = flexNewFromDataboxes(values, 1000);
 ```
+
+A flex records its own size, so growing its buffer with `zrealloc`
+reserves nothing: the next push reallocates to the size it needs.
+`flexAppendMultiple` appends a row of values in one move, and
+`flexBulkAppendFlex` appends one flex's entries to another.
 
 ### Pattern 5: Choose Encoding Based on Value Range
 
 ```c
-/* Small values: use intset */
-intset *small_ids = intsetNew();
-for (int i = 1; i <= 30000; i++) {
-    small_ids = intsetAdd(small_ids, i, NULL);
-}
-// Uses INT16: 8 + 30,000*2 = 60,008 bytes
-
-/* Large values: add largest first to force encoding */
-intset *large_ids = intsetNew();
-large_ids = intsetAdd(large_ids, 5000000000L, NULL);  // Force INT64
+/* intset keeps one sorted array per width: each value takes 2, 4 or 8
+ * bytes by its own range, whatever else the set holds */
+intset *ids = intsetNew();
+bool added = false;
 for (int64_t i = 1; i <= 30000; i++) {
-    large_ids = intsetAdd(large_ids, i, NULL);
+    intsetAdd(&ids, i, &added); /* 2 bytes each */
 }
-// Uses INT64: 8 + 30,001*8 = 240,016 bytes
-// But all values are representable
+intsetAdd(&ids, INT64_C(5000000000), &added); /* 8 bytes, for itself only */
+intsetFree(ids);
 ```
 
 ## Memory Profiling

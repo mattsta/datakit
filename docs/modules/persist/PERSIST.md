@@ -10,8 +10,8 @@ fresh snapshot, and **recovery** restores the snapshot and replays the WAL.
 There are two layers:
 
 - **P wrappers** (`flexP`, `intsetP`, `multimapP`, `multilistP`, `multidictP`,
-  `multiOrderedSetP`, `multilruP`, `multiroarP`): a structure plus a
-  `persistCtx`. Each mutator logs the operation, then applies it, so the
+  `multiOrderedSetP`, `multilruP`, `multiroarP`, `coldmapP`, `multitierP`): a
+  structure plus a `persistCtx`. Each mutator logs the operation, then applies it, so the
   files always describe the structure in memory. This is the layer most
   code wants.
 - **The core** (`persist.h`): a `persist` handle bound to a `persistOps`
@@ -487,9 +487,9 @@ states), `persistOpsFenwick<T>` / `persistOpsFenwick2d<T>` for the typed
 Fenwick trees (`fenwick/fenwickPersist.h`) and `persistOpsMultiFenwick`,
 `persistOpsMultiFenwickFlat`, `persistOpsMultiFenwick2d` for the databox
 ones (see FENWICK.md), `persistOpsSegment<T>` for the typed segment trees
-(`segment/segmentPersist.h`; see SEGMENT.md), and `persistOpsMultimapAtom`,
-`persistOpsMultimapAtomDense`, `persistOpsStringPool` and `persistOpsAtomPool`
-for atom tables (`atomPersist.h`; see multimap/VARIANTS.md),
+(`segment/segmentPersist.h`; see SEGMENT.md), `persistOpsMultimapAtom` for
+atom tables of every index, id and store kind (`atomPersist.h`; see
+multi/ATOMS.md),
 `persistOpsIdRows` for rows addressed by id (`idRows.h`), `persistOpsColdmap`
 for sorted maps in compressed blocks (`coldmap.h`; see multi/COLDMAP.md) and
 `persistOpsMultitier` for key-value maps in levels (`multitier.h`; see

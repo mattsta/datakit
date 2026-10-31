@@ -12,22 +12,25 @@ cache's cold level (see [MULTITIER.md](MULTITIER.md)), an archive, a reference t
 
 ## API
 
-| Call                                                                     | Does                                                                       |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `coldmapNew(epe, config)` / `coldmapFree(cm)`                            | an empty coldmap of rows of `epe` elements (config NULL: defaults)         |
-| `coldmapNewFromDump(epe, config, rows)`                                  | packed from a dump (multimapDump form: whole rows, keys ascending)         |
-| `coldmapLookup(cm, state, key, values)`                                  | the values of `key`'s row (false: absent)                                  |
-| `coldmapExists(cm, state, key)`                                          | whether `key` has a row                                                    |
-| `coldmapIteratorInit` / `InitAt(…, forward, key)` / `Next`               | rows in key order or reverse, from an end or from a key                    |
-| `coldmapInsert(cm, row)`                                                 | insert, replacing the row with its key (true: replaced)                    |
-| `coldmapInsertMany(cm, rows, &replaced)`                                 | a sorted batch: one recompression per block it touches                     |
-| `coldmapDelete(cm, key)` / `coldmapDeleteMany(cm, keys, &n)`             | one key / a sorted batch of keys                                           |
-| `coldmapDeleteRange(cm, lo, hi)`                                         | every row with key in `[lo, hi]` (NULL: open); whole blocks undecompressed |
-| `coldmapRemoveIf(cm, remove, ctx, &removed)`                             | every row the test names, each block rewritten once                        |
-| `coldmapSweepBlock(cm, i, fn, ctx, &removed, &next)`                     | one block's rows kept, removed or given a new last element; the next block |
-| `coldmapRemoveBlock(cm, i)` / `coldmapBlockCount(cm)`                    | take one block out whole, its rows returned as a dump                      |
-| `coldmapDump(cm, state)`                                                 | every row, as one flex                                                     |
-| `coldmapCount` / `coldmapBytes` / `coldmapGetStats` / `coldmapGetConfig` | rows, memory held, per-block totals, the config in force                   |
+| Call                                                                                     | Does                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coldmapNew(epe, config)` / `coldmapFree(cm)`                                            | an empty coldmap of rows of `epe` elements (config NULL: defaults)                                                                                                          |
+| `coldmapNewFromDump(epe, config, rows)`                                                  | packed from a dump (multimapDump form: whole rows, keys ascending)                                                                                                          |
+| `coldmapLookup(cm, state, key, values)`                                                  | the values of `key`'s row (false: absent)                                                                                                                                   |
+| `coldmapExists(cm, state, key)`                                                          | whether `key` has a row                                                                                                                                                     |
+| `coldmapIteratorInit` / `coldmapIteratorInitAt(…, forward, key)` / `coldmapIteratorNext` | rows in key order or reverse, from an end or from the first row at or past `key` (forward; at or before, reverse)                                                           |
+| `coldmapInsert(cm, row)`                                                                 | insert, replacing the row with its key (true: replaced)                                                                                                                     |
+| `coldmapInsertMany(cm, rows, &replaced)`                                                 | a sorted batch: one recompression per block it touches                                                                                                                      |
+| `coldmapDelete(cm, key)` / `coldmapDeleteMany(cm, keys, &n)`                             | one key / a sorted batch of keys                                                                                                                                            |
+| `coldmapDeleteRange(cm, lo, hi)`                                                         | every row with key in `[lo, hi]` (NULL: open); whole blocks undecompressed                                                                                                  |
+| `coldmapRemoveIf(cm, remove, ctx, &removed)`                                             | every row the test names, each block rewritten once                                                                                                                         |
+| `coldmapSweepBlock(cm, i, fn, ctx, &removed, &next)`                                     | one block's rows kept, removed or given a new last element; the next block                                                                                                  |
+| `coldmapRemoveBlock(cm, i)` / `coldmapBlockCount(cm)`                                    | take one block out whole, its rows returned as a dump                                                                                                                       |
+| `coldmapDump(cm, state)`                                                                 | every row, as one flex                                                                                                                                                      |
+| `coldmapCount` / `coldmapBytes` / `coldmapGetStats` / `coldmapGetConfig`                 | rows, memory held, per-block totals, the config in force                                                                                                                    |
+| `coldmapElementsPerEntry(cm)`                                                            | the row width                                                                                                                                                               |
+| `coldmapBlockFor(cm, key)` / `coldmapBlockFirstKey(cm, i)`                               | the block whose range holds `key`; a block's first key (an owned flex), NULL past the last: a position kept as a key survives the splits and merges that move block numbers |
+| `coldmapRowsAscend(rows, epe)`                                                           | whether a flex is whole rows with strictly ascending keys (what `coldmapNewFromDump` and `coldmapInsertMany` take)                                                          |
 
 `coldmapConfig`:
 
@@ -139,7 +142,8 @@ or compressing again, so the restored coldmap has the same blocks, the same stor
 same totals, and WAL replay over it makes the same splits and merges the live coldmap made. It
 refuses a block that does not open whole (a compressed one is decompressed and checked), holds no
 row or a partial row, or whose keys do not strictly ascend from past the block before. WAL ops: INSERT a row, DELETE a key or a sorted batch of keys,
-BULK_INSERT a sorted batch, BULK_DELETE a key range. `coldmapP` (`persist/coldmapP.h`) logs
-each change before making it: a refused log changes nothing, and a change that would change
+BULK_INSERT a sorted batch, BULK_DELETE a key range. `coldmapP` (`persist/coldmapP.h`:
+`coldmapNewP`, `coldmapNewFromDumpP`, `coldmapOpenP`, `coldmapInsertP`, `coldmapInsertManyP`,
+`coldmapDeleteP`, `coldmapDeleteManyP`, `coldmapDeleteRangeP`) logs each change before making it: a refused log changes nothing, and a change that would change
 nothing (a missing key, an empty batch, a range holding no row) logs nothing; a batch of
 deletes is logged as given (a key with no row is skipped on replay).

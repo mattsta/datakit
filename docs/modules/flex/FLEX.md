@@ -228,7 +228,7 @@ persisted. datakit's containers and persistence write through the exact path.
 #### The auto-convert path
 
 The auto-convert path runs the byte string through `databoxCanonical` (see
-[databox](../core/DATABOX.md#canonical-numerals)). A string that spells a
+[databox](../core/DATABOX.md#canonical-numerals-and-minimal-storage)). A string that spells a
 number is stored in its **numeric** encoding, not as bytes, so pushing `"42"`
 and reading it back yields `DATABOX_UNSIGNED_64`, not `DATABOX_BYTES`:
 
@@ -578,7 +578,7 @@ To force a 16-bit float encoding at a position, insert through a databox or
 use the endpoint pushes `flexPushFloat16` / `flexPushFloatB16`.
 
 `flexInsertBytes` runs the same numeral canonicalisation as `flexPushBytes`
-(see [Automatic Value Canonicalisation](#automatic-value-canonicalisation)).
+(see [Two Write Paths](#two-write-paths-auto-convert-and-exact)).
 
 ### Insert Examples
 
@@ -636,6 +636,20 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
     flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
     const databox *boxInsertKey, flexEntry **middleEntry,
     bool compareUsingKeyElementOnly,
+    const struct multimapAtom *referenceContainer);
+/* The set form: the row goes in under 'boxInsertKey' only when no row
+ * equals it (every element compared, references resolved); true when one
+ * did */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeySet(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    const databox *boxInsertKey, flexEntry **middleEntry,
+    const struct multimapAtom *referenceContainer);
+/* 'storeRow' placed where 'compareRow' sorts (full width, duplicates
+ * allowed): a row holding references goes where the values they stand
+ * for sort */
+void flexInsertByTypeSortedWithMiddleMultiWithReferenceStoring(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **compareRow,
+    const databox **storeRow, flexEntry **middleEntry,
     const struct multimapAtom *referenceContainer);
 
 /* Long keys are promoted to pointers; the recovered pointer is returned */
@@ -1206,6 +1220,13 @@ void flexDeleteUpToInclusivePlusN(flex **ff, flexEntry *fe,
 /* Delete from sorted flex with middle tracking */
 void flexDeleteSortedValueWithMiddle(flex **ff, uint_fast32_t elementsPerEntry,
                                      flexEntry *fe, flexEntry **middleEntry);
+
+/* Every row whose key is in [lo, hi] (NULL: open at that end), in one
+ * search and one move; returns the rows deleted ('middleEntry' is stale
+ * afterwards: recompute it with flexMiddle) */
+size_t flexDeleteSortedKeyRange(flex **ff, uint_fast32_t elementsPerEntry,
+                                const databox *lo, const databox *hi,
+                                const flexEntry *middleEntry);
 ```
 
 ### Drain Variants (No Realloc)
@@ -1399,13 +1420,18 @@ for (int i = 1; i <= 10; i++) {
     flexPushSigned(&numbers, i, FLEX_ENDPOINT_TAIL);
 }
 
-/* Sum: 1 + 2 + 3 + ... + 10 = 55 */
-int64_t sum = flexAddSigned(numbers);
-assert(sum == 55);
+/* Sum: 1 + 2 + 3 + ... + 10 = 55 (false, '*result' unset, for an entry
+ * that is not an integer or a result outside int64_t) */
+int64_t sum = 0;
+if (flexAddSigned(numbers, &sum)) {
+    assert(sum == 55);
+}
 
 /* Product: 1 * 2 * 3 * ... * 10 = 3628800 */
-int64_t product = flexMultiplySigned(numbers);
-assert(product == 3628800);
+int64_t product = 0;
+if (flexMultiplySigned(numbers, &product)) {
+    assert(product == 3628800);
+}
 
 flexFree(numbers);
 ```
@@ -1436,6 +1462,11 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen);
 
 /* Convert compressed flex back to regular flex */
 bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen);
+
+/* Whether 'buf' is a whole compressed flex: its header, then the
+ * compressed length and data ending where the buffer does (for bytes
+ * from disk or a peer, before cflexConvertToFlex) */
+bool cflexValidateBuffer(const uint8_t *buf, size_t buflen);
 ```
 
 `flexConvertToCFlex` returns false — and leaves `cBuffer` untouched — when

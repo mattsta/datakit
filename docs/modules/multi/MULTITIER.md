@@ -161,10 +161,13 @@ as it is: the hot level with its use history (each key's LRU level and order), t
 shadowed keys, and the cold blocks byte for byte with their rows' recent marks. A restore is the
 snapshotted multitier again, and refuses levels that disagree. WAL ops: INSERT `[key, value]`,
 DELETE `[key]`, BULK_DELETE of the keys a sink took, and with `logUses` USE `[key]` (a Get)
-and FLUSH. `multitierP` (`persist/multitierP.h`) logs a Set before making it, a Delete only of
+and FLUSH. `multitierP` (`persist/multitierP.h`: `multitierSetP`, `multitierDeleteP`,
+`multitierGetP`, `multitierPeekP`, `multitierFlushP`, as their multitier calls) logs a Set before making it, a Delete only of
 a present key, the rows its sink takes as they leave (whichever call pushed them out), and with
 `logUses` each Get and Flush before making it; `multitierCloseP` writes a snapshot.
-`multitierOpenP` (or `multitierSetSinkP`) takes the sink, which the files cannot hold.
+`multitierOpenP` (or `multitierSetSinkP`) takes the sink, which the files cannot hold; for a
+restore made without the wrapper, `multitierSetRecoverySink` names the sink the next restores on
+this thread give their replay.
 
 So a clean close and reopen restores everything, use history included. After a crash, with
 `logUses` replay repeats every move the live multitier made and the restore is exact; without

@@ -7,7 +7,8 @@ This guide will help you build and start using the datakit library.
 ### Prerequisites
 
 - CMake 3.10 or higher (3.21+ to use the build presets)
-- clang or gcc with C11 support
+- clang or gcc with C23 support (`constexpr`, `nullptr`, `[[attributes]]`,
+  `<stdbit.h>`); the tree is built and tested with clang 22 and gcc 15
 - Make (the presets use Unix Makefiles)
 - Linux, macOS, or a BSD. Windows/MSVC is not supported.
 
@@ -25,7 +26,9 @@ cmake --build --preset dev
 
 That produces `build/dev/`. The other presets are `debug` (-O0 +
 symbols + sanitizers), `perf` (native + LTO, no sanitizers — use this
-for every benchmark), and `safe` (sanitizers, for CI).
+for every benchmark), `safe` (sanitizers, for CI), `tsan`
+(ThreadSanitizer), `fuzz` (libFuzzer targets) and `coverage` (source
+coverage, as `dktools coverage` builds it).
 
 A hand-configured out-of-source build also works:
 
@@ -95,86 +98,12 @@ ctest --test-dir build/dev -j8 -R '^(flex|mflex|multimap)$'
 
 ### Available Tests
 
-A representative slice; run `datakit-test list` for the complete set
-with aliases.
-
-**Core Data Structures:**
-
-- `flex` - Flexible compressed array
-- `mflex` - Compressed flex wrapper
-- `multimap`, `multimapMedium`, `multimapFull`, `multimapAtom` (`atom`)
-- `multilist` (`ml`), `multilistFull`
-- `multiarray`, `multiarraySmall`, `multiarrayMedium`, `multiarrayLarge`
-- `multidict` - Hash table
-- `list`, `ptrPrevNext` (`ppn`)
-
-**Integer Sets and Trees:**
-
-- `intset` - Tiered variable-width integer set
-- `intsetU32` - 32-bit unsigned integer set
-- `intsetBig` - 128-bit-backed sets; registered only where the
-  toolchain provides `__int128`
-- `hyperloglog` (`hll`) - Cardinality estimation
-- `linearBloom` (`bloom`) - Bloom filter
-- `fenwickI64` (`fw`), `segmentI64` (`seg`), `multiFenwick` (`mfw`),
-  `multiFenwickFlat` (`mfwf`), `fenwick2d` (`fw2d`), `multiFenwick2d`
-  (`mfw2d`); `fenwickTypes` and `segmentTypes` test every typed tree;
-  `fenwickBench` (`fwbench`) prints their speed and size matrix
-
-**Specialized Containers:**
-
-- `multiroar` - Roaring bitmap
-- `multilru` (`lru`) - LRU cache
-- `multiOrderedSet` (`mos`) - Ordered set
-
-**Compression/Encoding:**
-
-- `xof` - XOR filter float compression
-- `dod` - Delta-of-delta integer encoding
-- `float16` (`f16`) - Half-precision floats
-- `compressionBench` (`compress`)
-
-**String/Buffer:**
-
-- `str` - String utilities
-- `mds` - Full string buffer (benchmark: `bench mdsbench`)
-- `mdsc` - Compact string buffer (benchmark: `bench mdscbench`)
-- `strDoubleFormat` - Double-to-string formatting
-
-**Memory/System:**
-
-- `membound` - Bounded arena allocator
-- `memtest` - Memory subsystem checks
-- `fibbuf` - Fibonacci buffer sizing
-- `jebuf` - Jemalloc size classes
-- `ptrlib`, `bigmath`, `bbits`, `ulid`
-
-**Timers:**
-
-- `timerWheel` (`tw`), `multiTimer` (`timer`), `timeUtil` (`time`)
-
-**Persistence:**
-
-- `persist`, `persistCtx` (`pctx`), plus per-type codec tests
-  (`multimapP`, `multilistP`, `multidictP`, `flexP`, `intsetP`,
-  `multiOrderedSetP`, `multiroarP`, `multilruP`)
-
-**Hashing / Integrity / Cluster:**
-
-- `blake3` (`b3`), `sha256`, `sha1`, `hmac`, `hmacKeyring` (`keyring`)
-- `chacha20poly1305` (`c20`), `aesGcm` (`aes`), `x25519` (`ecdh`),
-  `rapidhash` (`rh`)
-- `flexEnvelope` (`fenv`), `aeadNonceLog` (`noncelog`)
-- `clusterRing` (`ring`), `clusterMailbox` (`mb`),
-  `clusterReplicator` (`rep`)
-
-**Utilities:**
-
-- `databox`, `databoxLinear` - Universal container
-- `offsetArray` - Offset-based arrays
-- `util` - General utilities
-- `intersectInt` - Integer set intersection
-- `perfRegression` (`perf-baseline`) - Regression gate
+`datakit-test list` prints every test with its aliases; it is the
+complete set, and every name is also a CTest target. Each module's test
+is named after it (`flex`, `multimap`, `coldmap`, `persist`,
+`hmacKeyring`, ...), its tiers have their own (`multimapFull`,
+`multilistFull`, `multiarrayLarge`), and `perfRegression` is the speed
+regression gate.
 
 ## Your First datakit Program
 
@@ -449,8 +378,11 @@ brew install cmake          # macOS
 
 ## Performance Tips
 
-1. **Choose the Right Variant**: Use small/medium/large variants based on expected data size
-2. **Pre-allocate**: Some containers support capacity hints to avoid reallocation
-3. **Batch Operations**: Group insertions together when possible
-4. **Profile First**: Use the built-in test benchmarks as reference
-5. **Read the Source**: The implementation often contains performance notes
+1. **Pick the container by measurement**: [Choosing a Container](CHOOSING_A_CONTAINER.md) and the
+   [performance matrix](PERFORMANCE_MATRIX.md) give operations per second and bytes per element for
+   every container, element kind and size.
+2. **Let the tiered containers choose their tier**: `multimapNew` and its kin start small and move up
+   and down as they fill and drain ([Tiered containers](modules/core/TIERS.md)).
+3. **Build from sorted rows in one call**: `multimapNewFromDump` and `multimapAppend` skip the search an
+   insert makes; `flexNewFromDataboxes` grows a flex once per 64 values.
+4. **Measure with the `perf` preset**: sanitizers slow code unevenly and can reorder results.

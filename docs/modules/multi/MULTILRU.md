@@ -199,6 +199,13 @@ typedef struct multilruStats {
 } multilruStats;
 
 void multilruGetStats(const multilru *mlru, multilruStats *stats);
+
+/* The lifetime counters (inserts, evictions, demotions, promotions,
+ * deletes) back to zero */
+void multilruResetCounters(multilru *mlru);
+
+/* Whether levels have no share limits (multilruSetUnboundedLevels) */
+bool multilruGetUnboundedLevels(const multilru *mlru);
 ```
 
 The snapshot is O(1) — every counter is maintained incrementally.
@@ -333,6 +340,8 @@ This is **not** an unconditional removal. Given the current coldest entry:
 Distinguish the two outcomes with `multilruIsPopulated()`:
 
 ```c
+void freeData(multilruPtr handle); /* yours: releases what you stored for it */
+
 multilruPtr victim;
 if (multilruRemoveMinimum(mlru, &victim)) {
     if (multilruIsPopulated(mlru, victim)) {
@@ -360,7 +369,8 @@ size_t multilruEvictN(multilru *mlru, multilruPtr out[], size_t n);
 size_t multilruEvictToSize(multilru *mlru, uint64_t targetWeight,
                            multilruPtr out[], size_t maxN);
 
-/* Example: make room for 100 entries in one batch */
+/* Example: make room for 100 entries in one batch (freeData is yours) */
+void freeData(multilruPtr handle);
 multilruPtr evicted[100];
 const size_t n = multilruEvictN(mlru, evicted, 100);
 for (size_t i = 0; i < n; i++) {

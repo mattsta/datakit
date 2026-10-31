@@ -496,8 +496,10 @@ FLEX_CAP_LEVEL_8192       8 KB                   24 KB
 
 ### About Direct Variant Construction
 
-The per-variant headers do expose constructors (`multilistSmallCreate()`,
-`multilistMediumCreate()`, `multilistFullCreate()`, `multilistFullNew()`), but
+The Medium and Full headers expose constructors (`multilistMediumCreate()`,
+`multilistFullCreate()`, `multilistFullNew()`; a Small list has none: it
+is a view over the flex a `multilist *` holds, set up with
+`multilistSmallInit()`), but
 there is **no public way to wrap one in a `multilist *` handle**: the tagging
 macros (`_MULTILIST_TAG`, `SET_COMPRESS_DEPTH_LIMIT`) are private to
 `multilist.c`. A directly-created variant can only be used through that
@@ -513,7 +515,7 @@ Medium take no `mflexState`, while Full takes one (or two):
 ### Small-Specific (`multilistSmall.h`)
 
 ```c
-multilistSmall *multilistSmallCreate(void);
+void multilistSmallInit(multilistSmall *ml); /* a view: no allocation */
 void multilistSmallPushByTypeHead(multilistSmall *ml, const databox *box);
 void multilistSmallPushByTypeTail(multilistSmall *ml, const databox *box);
 bool multilistSmallPop(multilistSmall *ml, databox *box, bool fromTail);
@@ -607,8 +609,8 @@ multilist *ml = multilistNewLimit(FLEX_CAP_LEVEL_2048, 0);
 multilistPushByTypeTail(&ml, state, &item);
 
 /* AVOID: cannot auto-upgrade, cannot be used as a multilist * */
-multilistSmall *mls = multilistSmallCreate();
-multilistSmallPushByTypeTail(mls, &item);
+multilistMedium *mlm = multilistMediumCreate();
+multilistMediumPushByTypeTail(mlm, &item);
 ```
 
 ### 2. Set Appropriate Size Limits

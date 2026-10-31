@@ -64,14 +64,16 @@ introspect + force-override hooks (see "test-only override" below).
 | Algorithm                                 | Backends (preferred → fallback)                                 | Source files                                                               | Introspect                        | Force-override (test)       |
 | ----------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------- | --------------------------- |
 | BLAKE3 (single-block + multi-chunk batch) | AVX2 (8-way) → SSE4.1 (4-way) → NEON (4-way) → scalar           | `hash/blake3AVX2.c`, `hash/blake3SSE41.c`, `hash/blake3Neon.c`, `blake3.c` | `blake3DispatcherActiveBackend()` | `blake3SetForceImpl()`      |
-| SHA-256                                   | SHA-NI (x86) → ARMv8-Crypto → scalar                            | `hash/sha256ShaNi.c`, `hash/sha256ArmCrypto.c`, `sha256.c`                 | `sha256ActiveBackend()`           | `sha256SetForceBackend()`   |
+| SHA-256                                   | SHA-NI (x86) → ARMv8-Crypto → scalar                            | `hash/sha256ShaNi.c`, `hash/sha256ArmCrypto.c`, `sha256.c`                 | the backends' `*Available()`      | none (see below)            |
 | AES-GCM                                   | AES-NI + PCLMUL (x86-64) → ARMv8-AES + PMULL (AArch64) → scalar | `hash/aesGcmNi.c`, `hash/aesGcmArmCrypto.c`, `aesGcm.c`                    | `aesGcmActiveBackend()`           | `aesGcmSetForceBackend()`   |
 | ChaCha20 (keystream)                      | AVX2 (8-block) → NEON (4-block) → scalar                        | `hash/chacha20AVX2.c`, `hash/chacha20Neon.c`, `chacha20poly1305.c`         | `chacha20ActiveBackend()`         | `chacha20SetForceBackend()` |
 | Poly1305 (one-shot + streaming Update)    | AVX2 (4-block parallel r²/r³/r⁴) → NEON (2-block) → scalar      | `hash/poly1305AVX2.c`, `hash/poly1305Neon.c`, `chacha20poly1305.c`         | `poly1305ActiveBackend()`         | `poly1305SetForceBackend()` |
 
-Each backend exports an availability probe and its compression entry
-points, which the dispatcher calls; call them directly only from a parity
-test or a benchmark: `sha256ShaNiAvailable`, `sha256ShaNiCompressBlocks`,
+SHA-256 has no override: it runs the first backend whose availability
+probe answers true, and its parity test calls each backend's compression
+directly. Each backend exports an availability probe and its compression
+entry points, which the dispatcher calls; call them directly only from a
+parity test or a benchmark: `sha256ShaNiAvailable`, `sha256ShaNiCompressBlocks`,
 `sha256ShaNiCompressBlocksMulti4` (four independent states at once);
 `sha256ArmCryptoAvailable`, `sha256ArmCryptoCompressBlocks`,
 `sha256ArmCryptoCompressBlocksMulti4`; `blake3AVX2Available`,
@@ -164,20 +166,21 @@ AEAD `keystream_buf` remnants, and Poly1305 / SHA-256 intermediate
 state **MUST** go through `dkSecureZero(ptr, n)` from `ctmem.h`.
 
 ```c
+#include "aesGcm.h"
 #include "ctmem.h"
 
-uint8_t round_keys[176];
-aesKeySchedule(round_keys, key);
-/* ... use round_keys ... */
-dkSecureZero(round_keys, sizeof(round_keys));   /* correct */
+aesGcmKey k; /* the expanded round keys: key-equivalent material */
+if (aesGcmInit(&k, key, 32)) {
+    /* ... aesGcmSeal / aesGcmOpen with &k ... */
+}
+dkSecureZero(&k, sizeof(k)); /* correct */
 ```
 
-Plain `memset(round_keys, 0, sizeof(round_keys))` is **forbidden** on
+Plain `memset(&k, 0, sizeof(k))` is **forbidden** on
 end-of-life secret material in this codebase: under `-O3 -flto` the
 compiler is allowed to prove that the buffer is dead after the
-`memset` and eliminate the writes entirely (this is a documented
-hazard, not a theoretical one; see CVE-2017-14159 for the canonical
-case). `dkSecureZero` uses a volatile-pointer byte loop followed by
+`memset` and eliminate the writes entirely (dead-store elimination,
+the reason `explicit_bzero` and C11's `memset_s` exist). `dkSecureZero` uses a volatile-pointer byte loop followed by
 an inline-asm `"memory"` barrier so the writes survive every
 optimization level we ship.
 
@@ -1035,19 +1038,20 @@ storage.
 
 ### `hmacKeyring.h` (beyond the lifecycle calls above)
 
-| Call                                             | What it does                                                                                                              |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `hmacKeyringSize`                                | Keys installed and not retired.                                                                                           |
-| `hmacKeyringGetRaw`                              | Borrow a key's bytes and algorithm: valid only until the next mutation of that slot, on any thread.                       |
-| `hmacKeyringGetRawCopy`                          | Copy a key's bytes out under the keyring lock; the copy is yours to wipe.                                                 |
-| `hmacKeyringGetAesGcmKey`                        | Borrow the cached AES-GCM schedule of a 16- or 32-byte key (NULL for other lengths); same lifetime as `GetRaw`.           |
-| `hmacKeyringGetAesGcmKeyCopy`                    | Copy that schedule out under the lock.                                                                                    |
-| `hmacKeyringMinValidKeyId`                       | The revoked-key floor (0: none); `hmacKeyringSetMinValidKeyId` only raises it.                                            |
-| `hmacKeyringPeekAeadCounter`                     | The next AEAD counter a slot will issue, to store before shutdown.                                                        |
-| `hmacKeyringSetAeadReservation`                  | Make nonce issue wait on a durable reservation every `window` nonces (fail-closed when the reservation fails).            |
-| `hmacKeyringReserveThroughPersist`               | The reservation function for a keyring persisted with `persistOpsHmacKeyring`: logs and syncs the limit before returning. |
-| `hmacKeyringSnapshotSize`, `hmacKeyringSnapshot` | Serialize every slot (floor, ids, algorithms, salts, counters, raw keys) to a flex; seal it before it leaves the process. |
-| `hmacKeyringRestore`                             | Load such a snapshot all or nothing: any bad entry leaves the keyring as it was.                                          |
+| Call                                                        | What it does                                                                                                                                |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hmacKeyringSize`                                           | Keys installed and not retired.                                                                                                             |
+| `hmacKeyringGetRaw`                                         | Borrow a key's bytes and algorithm: valid only until the next mutation of that slot, on any thread.                                         |
+| `hmacKeyringGetRawCopy`                                     | Copy a key's bytes out under the keyring lock; the copy is yours to wipe.                                                                   |
+| `hmacKeyringGetAesGcmKey`                                   | Borrow the cached AES-GCM schedule of a 16- or 32-byte key (NULL for other lengths); same lifetime as `GetRaw`.                             |
+| `hmacKeyringGetAesGcmKeyCopy`                               | Copy that schedule out under the lock.                                                                                                      |
+| `hmacKeyringGetRawCopyAt` / `hmacKeyringGetAesGcmKeyCopyAt` | The two copies with the slot's generation, read under the same lock: a caller can tell the key it copied is the one a nonce was issued for. |
+| `hmacKeyringMinValidKeyId`                                  | The revoked-key floor (0: none); `hmacKeyringSetMinValidKeyId` only raises it.                                                              |
+| `hmacKeyringPeekAeadCounter`                                | The next AEAD counter a slot will issue, to store before shutdown.                                                                          |
+| `hmacKeyringSetAeadReservation`                             | Make nonce issue wait on a durable reservation every `window` nonces (fail-closed when the reservation fails).                              |
+| `hmacKeyringReserveThroughPersist`                          | The reservation function for a keyring persisted with `persistOpsHmacKeyring`: logs and syncs the limit before returning.                   |
+| `hmacKeyringSnapshotSize`, `hmacKeyringSnapshot`            | Serialize every slot (floor, ids, algorithms, salts, counters, raw keys) to a flex; seal it before it leaves the process.                   |
+| `hmacKeyringRestore`                                        | Load such a snapshot all or nothing: any bad entry leaves the keyring as it was.                                                            |
 
 ### `blake3.h`, `sha256.h`, `x25519.h`
 
