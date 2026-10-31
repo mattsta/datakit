@@ -177,11 +177,12 @@ def _without_comments(src: bytes, start: int, stop: int) -> bytes:
     return bytes(out)
 
 
-def definitions(src: bytes) -> list[tuple[int, bytes, tuple[bytes, ...]]]:
+def function_bodies(src: bytes) -> list[tuple[int, bytes, int, int]]:
     """Each file-scope function definition in 'src': the offset of its
-    name, the name, and its body's tokens (braces included)."""
+    name, the name, and its body as [start, stop) offsets (braces
+    included)."""
     mask = code_mask(src)
-    found: list[tuple[int, bytes, tuple[bytes, ...]]] = []
+    found: list[tuple[int, bytes, int, int]] = []
     depth = 0
     body_start = -1
     head: tuple[int, bytes] | None = None
@@ -196,11 +197,20 @@ def definitions(src: bytes) -> list[tuple[int, bytes, tuple[bytes, ...]]]:
         elif c == 0x7D:  # }
             depth -= 1
             if depth == 0 and head is not None:
-                text = _without_comments(src, body_start, i + 1)
-                tokens = tuple(m.group() for m in _TOKEN.finditer(text))
-                found.append((head[0], head[1], tokens))
+                found.append((head[0], head[1], body_start, i + 1))
                 head = None
             depth = max(depth, 0)
+    return found
+
+
+def definitions(src: bytes) -> list[tuple[int, bytes, tuple[bytes, ...]]]:
+    """Each file-scope function definition in 'src': the offset of its
+    name, the name, and its body's tokens (braces included)."""
+    found: list[tuple[int, bytes, tuple[bytes, ...]]] = []
+    for offset, name, start, stop in function_bodies(src):
+        text = _without_comments(src, start, stop)
+        tokens = tuple(m.group() for m in _TOKEN.finditer(text))
+        found.append((offset, name, tokens))
     return found
 
 

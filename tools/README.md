@@ -778,6 +778,30 @@ uv run --project tools dktools idioms [FILE ...]
   the tracked `src/**/*.c` and `*.h`. Exits 0 clean, 1 for hits or
   stale allow lines.
 
+## magic — numbers that should have a name
+
+```sh
+uv run --project tools dktools magic [FILE ...]
+```
+
+- `repeated-limit`: one integer (10 or more) used as a limit in two or
+  more checks, where a check is an `if` that refuses (its statement ends
+  in a return, perhaps after freeing what it holds) or clamps (sets the
+  value it compared against). A limit belongs to one module: name it
+  there and use the name everywhere, or use the standard's name for a
+  fact of the language (`UINT64_WIDTH`).
+- `positional-fields`: a snapshot, restore or persist function that reads
+  one array at three or more literal positions. Name the format's fields
+  with one enum, used by both the writer and the reader.
+- Only code counts: comments, literals and `DATAKIT_TEST` sections never
+  match. The whole tree is read (a limit repeats across files); the named
+  files are the ones reported.
+- Exceptions are `PATH RULE KEY REASON` lines in `tools/magic-allow.txt`
+  (KEY: the number, `function:array`, or `*` for every hit of the rule in
+  that file); a line without a reason or naming no rule is an input
+  error (exit 2), and a line that no longer matches fails, so the list
+  stays true. Exits 0 clean, 1 for hits or stale allow lines.
+
 ## headers — every header compiles on its own
 
 ```sh

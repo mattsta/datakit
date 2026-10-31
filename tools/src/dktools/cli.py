@@ -35,6 +35,7 @@ from . import (
     idioms,
     irdups,
     leakcheck,
+    magic,
     matrix,
     objdiff,
     outputaudit,
@@ -374,6 +375,14 @@ def main(argv: list[str] | None = None) -> int:
         "(exit 0, 1 for hits not in tools/idioms-allow.txt or stale allow lines)",
     )
     idm.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    mgc = sub.add_parser(
+        "magic",
+        help="find numbers that should have a name: a limit repeated across "
+        "files, a format's fields read by position (exit 0, 1 for hits not "
+        "in tools/magic-allow.txt or stale allow lines)",
+    )
+    mgc.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
 
     hnd = sub.add_parser(
         "handles",
@@ -1500,6 +1509,8 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "idioms":
         return idioms.run(args.repo, tuple(args.paths))
+    if args.command == "magic":
+        return magic.run(args.repo, tuple(args.paths))
     if args.command == "docgaps":
         return docgaps.run(args.repo, tuple(args.headers), args.names)
     if args.command == "handles":
