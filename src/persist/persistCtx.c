@@ -268,8 +268,11 @@ void persistCtxRelease(persistCtx *ctx) {
 
 bool persistCtxStartNew(persistCtx *ctx, void *structure,
                         const persistOps *ops) {
+    /* A compaction, not a lone snapshot: a WAL left by earlier files on
+     * this path would otherwise replay its old ops into the new
+     * structure.  The snapshot and a fresh WAL are this structure's. */
     if (!ctx || !structure || !persistCtxInitForType(ctx, ops) ||
-        !persistCtxSaveSnapshot(ctx, structure, ops)) {
+        !persistCompact(ctx->p, structure)) {
         return false;
     }
 

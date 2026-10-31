@@ -1017,6 +1017,42 @@ int flexPTest(int, char *[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("flexP new on a path with files: the old WAL does not come back") {
+        /* Files from an earlier flexP (a snapshot and a WAL of writes);
+         * a new, empty flexP on the same path is its own structure: a
+         * reopen holds what the new one wrote, nothing of the old */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, nullptr);
+        flexP *old = flexNewP(ctx);
+        for (int i = 0; i < 50; i++) {
+            databox box = DATABOX_SIGNED(i);
+            PTEST_LOGGED(flexPushTailP(old, &box));
+        }
+        flexCloseP(old);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxNew(basePath, nullptr);
+        flexP *fresh = flexNewP(ctx);
+        databox y = DATABOX_SIGNED(777);
+        PTEST_LOGGED(flexPushTailP(fresh, &y));
+        flexCloseP(fresh);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, nullptr);
+        flexP *back = flexOpenP(ctx);
+        databox got = {};
+        if (back && flexCountP(back) == 1) {
+            flexGetByType(flexHead(flexGetP(back)), &got);
+        }
+        if (!back || flexCountP(back) != 1 || got.data.i != 777) {
+            ERR("a reopen holds %zu values, the new flexP wrote one",
+                back ? flexCountP(back) : 0);
+        }
+        flexCloseP(back);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST("flexP statistics tracking") {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, nullptr);
