@@ -1741,9 +1741,11 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountFree(copy);
     }
 
-    TEST("linearBloomCount: decay factor 0.5 uses optimized half") {
-        /* Verify that factor=0.5 produces same results as linearBloomCountHalf
-         */
+    TEST("linearBloomCount: deterministic decay by 0.5 is Half; "
+         "probabilistic decay rounds at every factor") {
+        /* The deterministic decay's 0.5 is linearBloomCountHalf (both
+         * round down); the probabilistic decay rounds 1 * 0.5 up half the
+         * time and 7 * 0.125 up seven times in eight */
         linearBloomCount *bloom1 = linearBloomCountNew();
         linearBloomCount *bloom2 = linearBloomCountNew();
         uint64_t hash[2];
@@ -1757,11 +1759,33 @@ int linearBloomTest(int, char *[]) {
 
         /* Apply half to one, factor 0.5 to other */
         linearBloomCountHalf(bloom1);
-        linearBloomCountDecayByFactor(bloom2, 0.5, 0);
+        linearBloomCountDecayByFactorDeterministic(bloom2, 0.5);
 
-        /* They should match exactly (factor=0.5 delegates to Half) */
+        /* They should match exactly (both round down) */
         TEST_BYTES(err, bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES,
                    "Factor 0.5 should produce same result as Half");
+
+        static const struct {
+            uint8_t value;
+            double factor;
+        } cases[] = {{1, 0.5}, {3, 0.25}, {7, 0.125}, {7, 0.1}};
+        for (size_t c = 0; c < countof(cases); c++) {
+            linearBloomCountReset(bloom1);
+            for (size_t i = 0; i < 20000; i++) {
+                varintPacked3Set(bloom1, i, cases[c].value);
+            }
+            linearBloomCountDecayByFactor(bloom1, cases[c].factor, 77 + c);
+            size_t sum = 0;
+            for (size_t i = 0; i < 20000; i++) {
+                sum += varintPacked3Get(bloom1, i);
+            }
+            const double avg = (double)sum / 20000;
+            const double want = cases[c].value * cases[c].factor;
+            if (fabs(avg - want) > 0.03) {
+                ERR("%u * %.3f averaged %.4f, want %.4f",
+                    (unsigned)cases[c].value, cases[c].factor, avg, want);
+            }
+        }
 
         linearBloomCountFree(bloom1);
         linearBloomCountFree(bloom2);
@@ -2226,8 +2250,9 @@ int linearBloomTest(int, char *[]) {
         linearBloomCountFree(reference);
     }
 
-    TEST("linearBloomCount: decay auto-detects power-of-2 factors") {
-        /* Verify decay with factor 0.25 uses optimized quarter */
+    TEST("linearBloomCount: deterministic decay auto-detects power-of-2 "
+         "factors") {
+        /* The deterministic decay with factor 0.25 uses the quarter */
         linearBloomCount *bloom1 = linearBloomCountNew();
         linearBloomCount *bloom2 = linearBloomCountNew();
 
@@ -2237,13 +2262,13 @@ int linearBloomTest(int, char *[]) {
             varintPacked3Set(bloom2, i, 6);
         }
 
-        /* One via DecayByFactor(0.25), other via Quarter directly */
-        linearBloomCountDecayByFactor(bloom1, 0.25, 0);
+        /* One via the deterministic decay by 0.25, other via Quarter */
+        linearBloomCountDecayByFactorDeterministic(bloom1, 0.25);
         linearBloomCountQuarter(bloom2);
 
-        /* Should be identical (DecayByFactor delegates to Quarter) */
+        /* Should be identical (both round down) */
         TEST_BYTES(err, bloom1, bloom2, LINEARBLOOMCOUNT_EXTENT_BYTES,
-                   "DecayByFactor(0.25) should produce same result as Quarter");
+                   "the deterministic decay by 0.25 should match Quarter");
 
         linearBloomCountFree(bloom1);
         linearBloomCountFree(bloom2);

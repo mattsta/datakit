@@ -411,7 +411,11 @@ DK_INLINE_ALWAYS uint8_t linearBloomCountProbRound(double value,
 /* Apply decay by a factor (0.0 to 1.0) to all entries.
  * new_value = old_value * decay_factor
  *
- * Uses probabilistic rounding for statistical accuracy with discrete counters.
+ * Uses probabilistic rounding for statistical accuracy with discrete
+ * counters, at every factor (0.5 turns a 1 into 0 or 1 equally often; 0.1
+ * keeps a 7 as 1 seven times in ten).
+ * linearBloomCountDecayByFactorDeterministic rounds down instead, with fast
+ * paths for 0.5 and 0.25.
  *
  * @param bloom The counting bloom filter
  * @param decay_factor Multiplier between 0.0 and 1.0 (e.g., 0.5 halves values)
@@ -430,20 +434,8 @@ linearBloomCountDecayByFactor(linearBloomCount *restrict const bloom,
         return;
     }
 
-    /* Check for power-of-2 factors - use SWAR-optimized implementations */
-    if (decay_factor == 0.5) {
-        linearBloomCountHalf(bloom);
-        return;
-    }
-    if (decay_factor == 0.25) {
-        linearBloomCountQuarter(bloom);
-        return;
-    }
-    if (decay_factor <= 0.125) {
-        linearBloomCountReset(bloom);
-        return;
-    }
-
+    /* No shortcut for any factor: Half, Quarter and Reset round down,
+     * which is the deterministic decay's rounding, not this one's */
     linearBloomCountRNG rng;
     linearBloomCountRNGInit(&rng, rng_seed);
 
