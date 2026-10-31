@@ -1778,6 +1778,7 @@ void multidictFree(multidict *d) {
         return;
     }
 
+    multidictDisableLRU(d); /* its multilru, key index and handle table */
     _multidictClearHt(d, HT(d, 0));
     _multidictClearHt(d, HT(d, 1));
     zfree(d);
@@ -3454,11 +3455,20 @@ uint64_t multidictScan(multidict *d, uint64_t v, multidictScanFunction *fn,
 }
 
 void multidictEmpty(multidict *d) {
+    /* LRU tracking starts over empty, with its level count and the
+     * eviction policy kept: the tracked keys are gone */
+    const size_t lruLevels = multidictLRULevels(d);
+    const multidictEvictPolicy policy = d->evictPolicy;
+    multidictDisableLRU(d);
     _multidictClearHt(d, HT(d, 0));
     _multidictClearHt(d, HT(d, 1));
     d->rehashidx = MULTIDICT_REHASHIDX_INVALID;
     d->rehashing = false;
     d->iterators = 0;
+    if (lruLevels) {
+        multidictEnableLRU(d, lruLevels);
+        d->evictPolicy = policy;
+    }
 }
 
 void multidictResizeEnable(multidict *d) {
@@ -5963,6 +5973,73 @@ static void testCiRemove_(testCiOracle *o, int32_t at) {
 
 /* The dict holds exactly the oracle: same count, every entry under the
  * oracle's spelling with its value, each once, and key bytes adding up */
+/* Counts the keys an LRU walk visits */
+static bool mdTestCountVisit_(void *ctx, const databox *key, size_t level) {
+    (void)key;
+    (void)level;
+    (*(size_t *)ctx)++;
+    return true;
+}
+
+/* An LRU-tracked dict emptied and refilled tracks only what it holds,
+ * and freeing it gives back every byte it took */
+static int multidictTestLRUEmptyFree_(void) {
+    int err = 0;
+    /* The class outlives the meter */
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    ctestHeapMeterStart();
+    multidict *d = multidictNew(&multidictTypeExactKey, qdc, 7);
+    multidictEnableLRU(d, 4);
+    multidictSetEvictPolicy(d, MULTIDICT_EVICT_LFU);
+    char key[32];
+    for (int cycle = 0; cycle < 6; cycle++) {
+        for (int i = 0; i < 150; i++) {
+            const int n = snprintf(key, sizeof(key), "c%d-key-%d", cycle, i);
+            const databox k = databoxNewBytes(key, (size_t)n);
+            const databox v = databoxNewSigned(i);
+            (void)multidictAdd(d, &k, &v);
+        }
+        multidictEmpty(d);
+        size_t tracked = 0;
+        multidictLRUWalk(d, mdTestCountVisit_, &tracked);
+        if (tracked || !multidictHasLRU(d) || multidictLRULevels(d) != 4 ||
+            multidictGetEvictPolicy(d) != MULTIDICT_EVICT_LFU) {
+            ERR("cycle %d: an emptied dict tracks %zu keys (LRU %d, %zu "
+                "levels, policy %d)",
+                cycle, tracked, multidictHasLRU(d), multidictLRULevels(d),
+                (int)multidictGetEvictPolicy(d));
+        }
+    }
+
+    /* Refilled: tracking, a repack and a snapshot see only the new keys */
+    for (int i = 0; i < 100; i++) {
+        const int n = snprintf(key, sizeof(key), "after-%d", i);
+        const databox k = databoxNewBytes(key, (size_t)n);
+        const databox v = databoxNewSigned(i);
+        (void)multidictAdd(d, &k, &v);
+    }
+    (void)multidictLRURepack(d);
+    size_t tracked = 0;
+    multidictLRUWalk(d, mdTestCountVisit_, &tracked);
+    size_t len = 0;
+    uint8_t *snap = persistOpsMultidict.snapshot(d, &len);
+    multidict *back = snap ? persistOpsMultidict.restore(snap, len) : nullptr;
+    if (tracked != 100 || !back || multidictCount(back) != 100) {
+        ERR("after refilling: %zu tracked, restore %s", tracked,
+            back ? "held the keys" : "failed");
+    }
+    if (back) {
+        persistOpsMultidict.free(back);
+    }
+    zfree(snap);
+    multidictFree(d);
+    const int64_t left = ctestHeapMeterStop();
+    if (left != 0) {
+        ERR("an LRU-tracked dict left %" PRId64 " bytes behind", left);
+    }
+    return err;
+}
+
 /* @model: src/multidict.h */
 static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
                          uint32_t step) {
@@ -8913,6 +8990,11 @@ int multidictTest(int, char *[]) {
 
     TEST("9.9 LRU tracking turned on and off") {
         err += multidictTestLRUToggle_();
+    }
+
+    TEST("9.9b an emptied LRU dict tracks only what it holds; a freed one "
+         "gives back every byte") {
+        err += multidictTestLRUEmptyFree_();
     }
 
     /* ================================================================
