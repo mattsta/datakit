@@ -951,6 +951,9 @@ promote: /* Promote to dense representation. */
     [[maybe_unused]] const bool grew =
         hyperloglogDenseSet(hdr->registers, index, count);
     assert(grew);
+    /* The conversion copied the header, the cached count included: the
+     * register just set makes it stale */
+    HLL_INVALIDATE_CACHE(hdr);
     return HYPERLOGLOG_ADD_CHANGED;
 }
 
@@ -2060,6 +2063,27 @@ approximationDone:
             ERR("dense into sparse: merged %d, dense %d, count %" PRIu64
                 " want %" PRIu64,
                 merged, isDense(few), got, want);
+        }
+    }
+
+    TEST("a cached count stays exact across the sparse to dense promotion") {
+        /* Count after every add (it caches), and against a recount: an
+         * add that promotes the sketch to dense must drop the cache */
+        cleaner(hyperloglogFree) hyperloglog *sk = hyperloglogNewSparse();
+        char item[32];
+        int stale = 0;
+        for (int i = 0; i < 20000 && !stale; i++) {
+            const int n = snprintf(item, sizeof(item), "item-%d", i);
+            (void)hyperloglogAdd(&sk, item, (size_t)n);
+            const uint64_t cached = hyperloglogCount(sk, nullptr);
+            hyperloglogInvalidateCache(sk);
+            const uint64_t recount = hyperloglogCount(sk, nullptr);
+            if (cached != recount) {
+                ERR("after %d adds the count is %" PRIu64
+                    ", a recount %" PRIu64,
+                    i + 1, cached, recount);
+                stale = 1;
+            }
         }
     }
 
