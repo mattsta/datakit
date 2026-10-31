@@ -198,9 +198,185 @@ DEFINE_TIER_DIFFERENTIAL(intsetTestSmallDiff_, intsetSmall, uint32_t, 1)
 DEFINE_TIER_DIFFERENTIAL(intsetTestMediumDiff_, intsetMedium, uint64_t, 2)
 DEFINE_TIER_DIFFERENTIAL(intsetTestFullDiff_, intsetFull, uint64_t, 3)
 
+/* ====================================================================
+ * The model test: random sequences of every public call against a sorted
+ * array, every read checked, through every tier (values drawn across the
+ * 16-, 32- and 64-bit ranges, so sets move up and compact down)
+ * ==================================================================== */
+static constexpr uint32_t IS_MODEL_CAP = 6000;
+
+typedef struct isModel_ {
+    uint32_t n;
+    uint32_t events[3];
+    int64_t v[IS_MODEL_CAP];
+} isModel_;
+
+defcleanerName(isModel_ *, zfree, IsModel);
+
+static uint64_t isModelRng_;
+
+/* A value of the width 'wide' asks (0: 16-bit, 1: 32-bit, 2: 64-bit) */
+static int64_t isModelValue_(uint32_t wide) {
+    const uint64_t r = dkSplitmix64Next(&isModelRng_);
+    switch (wide) {
+    case 0:
+        return (int64_t)(int16_t)(r % 2000) - 1000 + (int64_t)(r % 3) * 9000;
+    case 1:
+        return (int64_t)(int32_t)r % 5000000 + (r % 2 ? 100000 : -100000);
+    default:
+        return (int64_t)(r % 4000) + (r % 2 ? INT64_C(1) << 40 : INT64_MIN + 9);
+    }
+}
+
+/* Where 'x' is or would go */
+static uint32_t isModelLower_(const isModel_ *M, int64_t x) {
+    uint32_t lo = 0;
+    uint32_t hi = M->n;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (M->v[mid] < x) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/* @model: src/intset.h */
+/* The set holds exactly the model's values, in order */
+static int isModelVerify_(const intset *is, const isModel_ *M, uint32_t step) {
+    int err = 0;
+    intsetIterator it;
+    intsetIteratorInit(&it, is);
+    int64_t x;
+    uint32_t i = 0;
+    bool same = true;
+    while (intsetIteratorNext(&it, &x)) {
+        same = same && i < M->n && x == M->v[i];
+        i++;
+    }
+    dkTierStats st = {};
+    intsetStats(is, &st);
+    int64_t lo = 0;
+    int64_t hi = 0;
+    const bool ends = M->n ? intsetMin(is, &lo) && intsetMax(is, &hi) &&
+                                 lo == M->v[0] && hi == M->v[M->n - 1]
+                           : !intsetMin(is, &lo) && !intsetMax(is, &hi);
+    if (!same || i != M->n || intsetCount(is) != M->n || st.count != M->n ||
+        !ends || (M->n && !intsetBytes(is))) {
+        ERR("model step %" PRIu32 ": the set holds %" PRIu32 " values (%s), "
+            "the model %" PRIu32,
+            step, i, same ? "in order" : "not the model's", M->n);
+    }
+    return err;
+}
+
+/* @model: src/intset.h */
+static int intsetTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, IsModel) isModel_ *M = zcalloc(1, sizeof(*M));
+    cleaner(intsetFree) intset *is = intsetNew();
+    isModelRng_ = seed;
+    uint32_t tiers = 0;
+    const uint32_t steps = 12000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&isModelRng_);
+        /* Mostly narrow values, wider ones now and then, the widest
+         * rare: the set climbs the tiers and compacts back down */
+        const uint32_t wide = r % 20 == 0 ? 2 : r % 6 == 0 ? 1 : 0;
+        const bool draining = step >= steps * 2 / 3;
+        const uint32_t op = (uint32_t)(r >> 8) % 8;
+        bool ok = true;
+        if (op < (draining ? 1u : 3u) && M->n < IS_MODEL_CAP) {
+            const int64_t x = isModelValue_(wide);
+            const uint32_t at = isModelLower_(M, x);
+            const bool fresh = at == M->n || M->v[at] != x;
+            bool added = !fresh;
+            intsetAdd(&is, x, &added);
+            ok = added == fresh;
+            if (fresh) {
+                memmove(&M->v[at + 1], &M->v[at],
+                        (M->n - at) * sizeof(M->v[0]));
+                M->v[at] = x;
+                M->n++;
+            }
+        } else if (op < 5) { /* a member half the time, else any value */
+            const int64_t x =
+                M->n && r % 2 ? M->v[(r >> 16) % M->n] : isModelValue_(wide);
+            const uint32_t at = isModelLower_(M, x);
+            const bool there = at < M->n && M->v[at] == x;
+            bool removed = !there;
+            intsetRemove(&is, x, &removed);
+            ok = removed == there;
+            if (there) {
+                memmove(&M->v[at], &M->v[at + 1],
+                        (M->n - at - 1) * sizeof(M->v[0]));
+                M->n--;
+            }
+        } else if (op == 5) {
+            const int64_t x =
+                M->n && r % 2 ? M->v[(r >> 16) % M->n] : isModelValue_(wide);
+            const uint32_t at = isModelLower_(M, x);
+            ok = intsetFind(is, x) == (at < M->n && M->v[at] == x);
+        } else if (op == 6) { /* a position, in range or one past */
+            const uint32_t pos = M->n ? (uint32_t)(r >> 16) % (M->n + 1) : 0;
+            int64_t got = 0;
+            const bool found = intsetGet(is, pos, &got);
+            ok = found == (pos < M->n) && (!found || got == M->v[pos]);
+        } else if (M->n) {
+            const int64_t pick = intsetRandom(is);
+            const uint32_t at = isModelLower_(M, pick);
+            ok = at < M->n && M->v[at] == pick;
+        }
+        if (!ok) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " disagreed (%" PRIu32
+                " values, tier %d, seed %" PRIu64 ")",
+                step, op, M->n, (int)INTSET_TYPE(is), seed);
+            break;
+        }
+        tiers |= 1u << INTSET_TYPE(is);
+        if (step % 50 == 49) {
+            err += isModelVerify_(is, M, step);
+        }
+        if (step % 211 != 210) {
+            continue;
+        }
+        const uint32_t event = (uint32_t)(r >> 32) % countof(M->events);
+        M->events[event]++;
+        if (event == 0) {
+            cleaner(intsetFree) intset *copy = intsetCopy(is);
+            err += isModelVerify_(copy, M, step);
+        } else if (event == 1) {
+            intsetCompact(&is);
+        } else if ((r >> 40) % 3 == 0) {
+            intsetReset(&is);
+            M->n = 0;
+        }
+        err += isModelVerify_(is, M, step);
+    }
+    err += isModelVerify_(is, M, steps);
+    if (tiers != ((1u << INTSET_TYPE_SMALL) | (1u << INTSET_TYPE_MEDIUM) |
+                  (1u << INTSET_TYPE_FULL))) {
+        ERR("the model did not run through every tier (seen %#x)", tiers);
+    }
+    for (size_t e = 0; e < countof(M->events); e++) {
+        if (!M->events[e]) {
+            ERR("configuration event %zu never ran", e);
+        }
+    }
+    return err;
+}
+
 /* Run tests */
 int intsetTest(int, char *[]) {
     int err = 0;
+
+    TEST("model: every public call against a sorted array, every tier") {
+        for (uint64_t seed = 1; seed <= 3; seed++) {
+            err += intsetTestModel_(seed);
+        }
+    }
 
     TEST("basic small tier operations") {
         cleaner(intsetFree) intset *is = intsetNew();
