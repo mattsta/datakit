@@ -539,7 +539,10 @@ void mflexCloseShrink(mflex **mm, mflexState *const state, flex *const f) {
              * we're going to make the original '*mm' the new
              * STATE_UNCOMPRESSED_FLEX space now. */
             STATE_UNCOMPRESSED_FLEX = mff(*mm);
-            STATE_UNCOMPRESSED_SIZE = mflexBytesActual(*mm);
+            /* The size measured before the attempt: a failed attempt has
+             * already written the new flex's header into '*mm', so the
+             * size it states is no longer this buffer's */
+            STATE_UNCOMPRESSED_SIZE = mmSize;
 
             /* compression failed, so tag as not compressed and update
              * in-place for the caller. */
@@ -1068,6 +1071,57 @@ int mflexTest(int, char *[]) {
             mflexNewFromStored(bytes, len, false);
         if (asPlain) {
             ERR("%s", "a compressed block taken as plain");
+        }
+    }
+
+    TEST("a failed recompression after a delete that narrows the header "
+         "records the scratch buffer's own size") {
+        /* 200 random entries and 100 repeated ones compress (the repeats);
+         * deleting the repeats leaves 200 entries (a narrower count in the
+         * header) that cannot save the policy's 30%, so the recompression
+         * into the old block fails part way, after writing the new
+         * header.  The state then takes the old block as its scratch
+         * buffer, and must record that block's size, not a size read back
+         * from the half-written header */
+        cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
+        if (!mflexStateSetPolicy(s, 30, 0)) {
+            ERR("%s", "the policy was refused");
+        }
+        cleaner(mflexFree) mflex *m = mflexNew();
+        uint64_t rng = 0x5eedc1a55ULL;
+        for (int i = 0; i < 200; i++) {
+            const uint64_t z = dkSplitmix64Next(&rng);
+            mflexPushBytes(&m, s, &z, sizeof(z), FLEX_ENDPOINT_TAIL);
+        }
+        char same[200];
+        memset(same, 'r', sizeof(same));
+        for (int i = 0; i < 100; i++) {
+            mflexPushBytes(&m, s, same, sizeof(same), FLEX_ENDPOINT_TAIL);
+        }
+        const size_t compressedBytes = mflexBytesActual(m);
+        if (!mflexIsCompressed(m)) {
+            ERR("%s", "the mixed block did not compress");
+        }
+        mflexDeleteOffsetCount(&m, s, 200, 100);
+        if (mflexCount(m) != 200 || mflexIsCompressed(m)) {
+            ERR("%zu entries left, %s", mflexCount(m),
+                mflexIsCompressed(m) ? "compressed" : "plain");
+        }
+        if (s->buf[UNCOMPRESSED].len > compressedBytes) {
+            ERR("the scratch buffer is recorded as %zu bytes; the block it "
+                "took holds %zu",
+                s->buf[UNCOMPRESSED].len, compressedBytes);
+        }
+
+        /* A larger compressed block opened through the same state must
+         * decompress into a buffer that holds it */
+        cleaner(mflexFree) mflex *big = mflexNew();
+        for (int i = 0; i < 2000; i++) {
+            mflexPushBytes(&big, s, same, sizeof(same), FLEX_ENDPOINT_TAIL);
+        }
+        const flex *open = mflexOpenReadOnly(big, s);
+        if (flexCount(open) != 2000) {
+            ERR("the larger block opened with %zu entries", flexCount(open));
         }
     }
 
