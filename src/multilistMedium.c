@@ -603,9 +603,10 @@ void multilistMediumRotate(multilistMedium *ml) {
         return;
     }
 
-    /* If F0 or F1 have just one element, swap their
-     * positions so the ml head/tail exchange places. */
-    if (countF0 == 1 || countF1 == 1) {
+    /* A one-element F1 is the tail alone: swapping the halves puts it at
+     * the head.  (A one-element F0 is not: the swap would move the head
+     * to the tail, so it takes the general path below.) */
+    if (countF1 == 1) {
         swapF();
         return;
     }

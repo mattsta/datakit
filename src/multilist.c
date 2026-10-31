@@ -1696,6 +1696,50 @@ static const char *mlfDequeFuzz(mflexState *state, const uint64_t seed,
 
 int multilistTest(int, char *[]) {
     uint32_t err = 0;
+
+    TEST("Medium rotate moves the tail to the head whatever each half "
+         "holds") {
+        /* Halves of 1 and 3, 3 and 1, 2 and 2 (a list built by head and
+         * tail pushes): every rotate is the last element first */
+        static const struct {
+            int head; /* pushed at the head, so they lead */
+            int tail; /* pushed at the tail */
+        } shapes[] = {{1, 3}, {3, 1}, {2, 2}, {1, 1}, {1, 5}};
+        for (size_t sh = 0; sh < countof(shapes); sh++) {
+            multilistMedium *mm = multilistMediumCreate();
+            int64_t model[16];
+            int n = 0;
+            for (int i = shapes[sh].head; i > 0; i--) {
+                const databox b = databoxNewSigned(100 + i);
+                multilistMediumPushByTypeHead(mm, &b);
+            }
+            for (int i = 1; i <= shapes[sh].head; i++) {
+                model[n++] = 100 + i;
+            }
+            for (int i = 0; i < shapes[sh].tail; i++) {
+                const databox b = databoxNewSigned(200 + i);
+                multilistMediumPushByTypeTail(mm, &b);
+                model[n++] = 200 + i;
+            }
+            for (int turn = 0; turn < n + 1; turn++) {
+                multilistMediumRotate(mm);
+                const int64_t last = model[n - 1];
+                memmove(&model[1], &model[0], (size_t)(n - 1) * sizeof(*model));
+                model[0] = last;
+            }
+            for (int i = 0; i < n; i++) {
+                databox got = {};
+                if (!multilistMediumPopFromHead(mm, &got) ||
+                    got.data.i != model[i]) {
+                    ERR("shape %zu: element %d is %" PRIdMAX ", want %" PRId64,
+                        sh, i, got.data.i, model[i]);
+                    break;
+                }
+            }
+            multilistMediumFree(mm);
+        }
+    }
+
     cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
     cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();
     mflexState *s[2] = {s0, s1};
