@@ -5963,6 +5963,7 @@ static void testCiRemove_(testCiOracle *o, int32_t at) {
 
 /* The dict holds exactly the oracle: same count, every entry under the
  * oracle's spelling with its value, each once, and key bytes adding up */
+/* @model: src/multidict.h */
 static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
                          uint32_t step) {
     int bad = 0; /* entries the oracle does not hold as iterated */
@@ -6000,6 +6001,7 @@ static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
     return err;
 }
 
+/* @model: src/multidict.h */
 /* An eviction the dict makes takes its entry out of the oracle too */
 static bool testCiEvicted_(void *privdata, const databox *key,
                            const databox *val) {
@@ -6013,6 +6015,7 @@ static bool testCiEvicted_(void *privdata, const databox *key,
     return true;
 }
 
+/* @model: src/multidict.h */
 /* One configuration call, chosen at random, made with the dict in
  * whatever state the run left it (holding keys, part way through a
  * rehash, tracking LRU or not): the dict must still hold exactly the
@@ -6138,6 +6141,7 @@ static int testCiConfigure_(multidict *d, testCiOracle *o, bool *tracking,
     return err;
 }
 
+/* @model: src/multidict.h */
 static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
                                           bool lru) {
     int err = 0;

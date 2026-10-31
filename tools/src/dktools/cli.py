@@ -37,6 +37,7 @@ from . import (
     leakcheck,
     magic,
     matrix,
+    modelcover,
     objdiff,
     outputaudit,
     perfcompare,
@@ -384,6 +385,14 @@ def main(argv: list[str] | None = None) -> int:
         "in tools/magic-allow.txt or stale allow lines)",
     )
     mgc.add_argument("paths", nargs="*", help="repo-relative files (default: src)")
+
+    mcv = sub.add_parser(
+        "modelcover",
+        help="list the public calls of each modeled header that its model "
+        "test (functions marked @model: HEADER) never makes (exit 0, 1 for "
+        "calls not in tools/modelcover-allow.txt or stale allow lines)",
+    )
+    mcv.add_argument("headers", nargs="*", help="repo-relative headers")
 
     tya = sub.add_parser(
         "typeaudit",
@@ -1522,6 +1531,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return idioms.run(args.repo, tuple(args.paths))
     if args.command == "magic":
         return magic.run(args.repo, tuple(args.paths))
+    if args.command == "modelcover":
+        return modelcover.run(args.repo, tuple(args.headers))
     if args.command == "typeaudit":
         return typeaudit.run(args.repo, tuple(args.headers), args.concept, args.min)
     if args.command == "docgaps":

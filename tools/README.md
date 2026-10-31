@@ -819,6 +819,26 @@ uv run --project tools dktools typeaudit [--concept WORD] [--min N] [HEADER ...]
   candidate for a typedef; a count or length named for what it counts
   is not. A report: exits 0.
 
+## modelcover — public calls a container's model test never makes
+
+```sh
+uv run --project tools dktools modelcover [HEADER ...]
+```
+
+- A model test drives a container through random sequences of its calls
+  and checks every read against a plain model. Line coverage cannot tell
+  whether a configuration call ever ran in the state that breaks it (a
+  seed change on a dict holding keys), so each container's model test
+  should make every public call.
+- The model test's functions carry a marker comment right before them,
+  `/* @model: src/multidict.h */`; the calls their bodies make count for
+  that header. Each public call of a modeled header that no marked
+  function makes is reported, unless `tools/modelcover-allow.txt` has a
+  `HEADER CALL REASON` line for it; a line that no longer matches fails
+  too. The summary counts the headers with no model test yet.
+- Exits 0 when every gap is allowed and every allow line is used, 1
+  otherwise.
+
 ## headers — every header compiles on its own
 
 ```sh
