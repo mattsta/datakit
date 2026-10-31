@@ -1237,19 +1237,15 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
     /* Check if we should expand before adding */
     multidictExpandIfNeeded_(d);
 
-    /* During rehashing, check if key exists in ht[0] and remove it first.
-     * This prevents duplicate keys across tables and keeps counts accurate:
-     * multidictNewestSlotForKey looks only in ht[1]. */
-    bool removedFromOldTable = false;
+    /* During rehashing the key goes to ht[1] (multidictNewestSlotForKey
+     * looks only there), and a copy in ht[0] is removed once the insert
+     * lands: one key in one table, and a refused insert keeps the old */
+    const bool rehashing = multidictIsRehashing(d);
     uint32_t hash = 0;
     const uint32_t *knownHash = nullptr;
-    if (multidictIsRehashing(d)) {
-        /* Remove the key from ht[0] in one search; the hash serves the
-         * slot lookup below */
+    if (rehashing) {
         hash = multidictHashOfKey_(d, keybox);
         knownHash = &hash;
-        removedFromOldTable = multidictRemoveFromTable_(
-            d, 0, keybox, hash, mdBoxSize_(keybox), nullptr, false, nullptr);
     }
 
     multidictOp op;
@@ -1274,6 +1270,14 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
 
     /* Adjust 'usedBytes' by actual slot size change */
     op.ht->usedBytes += (lenAfter - lenBefore);
+
+    /* New to ht[1] while rehashing: an ht[0] copy is the one replaced.  A
+     * rehash step on the way here that finished the rehash moved every
+     * key to the table now ht[0], this one included: nothing to remove */
+    const bool removedFromOldTable =
+        rehashing && multidictIsRehashing(d) && insertResult == 1 &&
+        multidictRemoveFromTable_(d, 0, keybox, hash, keySize, nullptr, false,
+                                  nullptr);
 
     /* Convert to typed result */
     multidictResult result;
@@ -10685,6 +10689,35 @@ int multidictTest(int, char *[]) {
         if (multidictCount(d) != 15) {
             ERR("after the merge the count should be 15, got %" PRIu64,
                 multidictCount(d));
+        }
+    }
+
+    TEST("a refused add mid-rehash keeps the key it would have replaced") {
+        cleaner(multidictMmClassFree) multidictClass *refusing =
+            multidictMmClassNew();
+        refusing->insertByType = mdTestRefusingInsert;
+        mdTestRefuse = MD_TEST_REFUSE_NONE;
+        cleaner(multidictFree) multidict *rd =
+            multidictNew(&multidictTypeExactKey, refusing, 9);
+        for (int64_t i = 0; i < 200; i++) {
+            const databox key = DATABOX_SIGNED(i);
+            const databox val = DATABOX_SIGNED(-i);
+            MULTIDICT_TEST_OK(multidictAdd(rd, &key, &val));
+        }
+        multidictExpand(rd, 2000);
+        mdTestRefuse = MD_TEST_REFUSE_UNSIGNED;
+        uint64_t kept = 0;
+        for (int64_t i = 0; i < 200; i++) {
+            const databox key = DATABOX_SIGNED(i);
+            const databox val = DATABOX_UNSIGNED(UINT64_C(1) << 40);
+            (void)multidictAdd(rd, &key, &val);
+            databox got = {};
+            kept += multidictFind(rd, &key, &got) && got.data.i == -i;
+        }
+        mdTestRefuse = MD_TEST_REFUSE_NONE;
+        if (kept != 200 || multidictCount(rd) != 200) {
+            ERR("%" PRIu64 " of 200 keys kept their value, count %" PRIu64,
+                kept, multidictCount(rd));
         }
     }
 
