@@ -1,6 +1,7 @@
 #include "OSRegulate.h"
 #include "cleaner.h"
 #include "dkEndian.h"
+#include "dkExit.h"
 #include "timeUtil.h"
 #include "versionOSRuntime.h"
 
@@ -8,12 +9,13 @@
 #include <fcntl.h>        /* open */
 #include <limits.h>       /* INT_MAX (poll timeout width) */
 #include <poll.h>         /* poll on a process-exit watch fd */
+#include <signal.h>       /* SIGTERM */
 #include <stdio.h>        /* snprintf */
 #include <stdlib.h>       /* strtoull */
 #include <sys/file.h>     /* flock */
 #include <sys/resource.h> /* getrlimit */
 #include <sys/wait.h>     /* waitpid / WNOHANG */
-#include <unistd.h>       /* _exit */
+#include <unistd.h>       /* fork, getpid */
 
 /* rusage */
 #include <sys/resource.h>
@@ -282,7 +284,7 @@ OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
         break;
     }
     /* The foreground parent: wait for the child's readiness, then exit
-     * with a status a service manager can act on.  _exit() on both
+     * with a status a service manager can act on.  dkExitNow on both
      * paths: the parent must not run atexit handlers or flush stdio
      * buffers it shares with the child after the fork.  The write end is
      * closed before the wait so the child's end-of-file can be seen. */
@@ -293,7 +295,7 @@ OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
     if (verdict == OS_REGULATE_READY_AWAIT_READY) {
         OSRegulateExitClean();
     }
-    _exit(EXIT_FAILURE);
+    dkExitNow(EXIT_FAILURE);
 }
 
 void OSRegulateDaemonizeSignalReady(void) {
@@ -349,7 +351,7 @@ bool OSRegulateWritePidToFile(const char *path) {
 }
 
 [[noreturn]] void OSRegulateExitClean(void) {
-    _exit(0);
+    dkExitNow(0);
 }
 
 bool OSRegulateRequestSignalChildWhenParentExits([[maybe_unused]] int sig) {
@@ -1596,6 +1598,38 @@ int OSRegulateTest(int, char *[]) {
     TEST("this process has a resident set") {
         if (OSRegulateRSSGet() == 0) {
             ERR("OSRegulateRSSGet returned 0 for a running process");
+        }
+    }
+
+    TEST("ExitClean, DaemonizeThenExitNoWait and the parent-exit signal, "
+         "each in a child") {
+        /* ExitClean ends a child with status 0.  DaemonizeThenExitNoWait
+         * ends the calling child (status 0) and goes on in its daemon,
+         * which leaves at once.  The parent-exit signal is set on Linux
+         * and refused elsewhere */
+        static const int jobs = 3;
+        for (int job = 0; job < jobs; job++) {
+            fflush(stdout);
+            fflush(stderr);
+            const pid_t child = fork();
+            if (child == 0) {
+                if (job == 0) {
+                    OSRegulateExitClean();
+                }
+                if (job == 1) {
+                    OSRegulateDaemonizeThenExitNoWait();
+                    ctestChildExit(0); /* the daemon */
+                }
+                ctestChildExit(OSRegulateRequestSignalChildWhenParentExits(
+                                   SIGTERM) == (bool)DK_OS_LINUX
+                                   ? 0
+                                   : 1);
+            }
+            int status = 0;
+            if (child < 0 || waitpid(child, &status, 0) != child ||
+                !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+                ERR("job %d: the child ended with status %d", job, status);
+            }
         }
     }
 

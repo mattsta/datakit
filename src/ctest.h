@@ -11,22 +11,15 @@
 
 #include "datakit.h"  /* datakitConfig: the heap meter's allocator */
 #include "dkEndian.h" /* dkStoreLe64: replayed bytes in one order */
+#include "dkExit.h"   /* dkExitNow */
 #include "dkRandom.h" /* dkSplitmix64Next: the tests' replayable stream */
 #include <stdio.h>
 #include <string.h> /* strchr */
-#include <unistd.h> /* _exit */
 
-/* Leave a forked test child.  _exit skips the exit handlers, where a
- * coverage build writes its profile, so the child writes it first (one
- * file per process) and the calls it made are counted */
-#ifdef DATAKIT_COVERAGE
-int __llvm_profile_write_file(void);
-#endif
+/* Leave a forked test child (dkExitNow: the calls it made are counted in
+ * a coverage build) */
 [[noreturn]] [[maybe_unused]] static void ctestChildExit(int status) {
-#ifdef DATAKIT_COVERAGE
-    (void)__llvm_profile_write_file();
-#endif
-    _exit(status);
+    dkExitNow(status);
 }
 
 /* The heap meter: the net heap bytes allocated through datakit's
