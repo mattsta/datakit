@@ -39,7 +39,7 @@ typedef struct multitierConfig {
     /* The hot level's limit of key and value bytes (0: no limit, so no
      * key ever leaves it) */
     uint64_t hotMaxBytes;
-    /* The hot level's LRU levels, 1-64 (0: 4) */
+    /* The hot level's LRU levels, 1 .. MULTILRU_LEVELS_MAX (0: 4) */
     uint32_t hotLevels;
     /* Rows waiting for the cold level before they go in together: at
      * least this many (0: 64), and at least 4 per cold block, so each
@@ -58,8 +58,8 @@ typedef struct multitierConfig {
 } multitierConfig;
 
 /* NULL config: the defaults (no limits: a multidict with LRU tracking).
- * NULL when the config is out of range (hotLevels past 64, a cold config
- * coldmapNew refuses) */
+ * NULL when the config is out of range (hotLevels past MULTILRU_LEVELS_MAX,
+ * a cold config coldmapNew refuses) */
 [[nodiscard]] multitier *multitierNew(const multitierConfig *config);
 void multitierFree(multitier *t);
 /* The sink rows leaving the cold level go to (NULL: dropped); a restored

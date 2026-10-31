@@ -20,14 +20,16 @@ void mflexStateFree(mflexState *state);
 /* Memory a state holds: its two scratch buffers and itself */
 size_t mflexStateBytes(const mflexState *state);
 
+/* The most a compress policy can require a block to save, in percent */
+static constexpr uint8_t MFLEX_SAVING_PERCENT_MAX = 99;
 /* The compress policy of closes through 'state': a block stays compressed
- * only when that saves at least minSavingPercent (0-99) of its bytes, so
- * a block that barely compresses is kept plain and opens without
- * decompressing; 'level' 0 is LZ4, 1-12 LZ4HC (smaller, slower to
- * compress).  A new state: 0% (any saving) at level 0.  False, unchanged,
- * for a value out of range. */
+ * only when that saves at least minSavingPercent (0 ..
+ * MFLEX_SAVING_PERCENT_MAX) of its bytes, so a block that barely compresses
+ * is kept plain and opens without decompressing; at LZ4 level 'level' (0 ..
+ * CFLEX_LEVEL_MAX).  A new state: 0% (any saving) at level 0.  False,
+ * unchanged, for a value out of range. */
 bool mflexStateSetPolicy(mflexState *state, uint8_t minSavingPercent,
-                         uint8_t level);
+                         cflexLevel level);
 
 /* What the opens and closes through a state did: opens of compressed
  * blocks (each a decompression) and of plain ones; closes that kept the
@@ -43,7 +45,7 @@ typedef struct mflexStateStats {
 } mflexStateStats;
 void mflexStateGetStats(const mflexState *state, mflexStateStats *out);
 void mflexStateGetPolicy(const mflexState *state, uint8_t *minSavingPercent,
-                         uint8_t *level);
+                         cflexLevel *level);
 
 /* mflex creation */
 [[nodiscard]] mflex *mflexNew(void);

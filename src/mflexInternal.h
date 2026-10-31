@@ -21,9 +21,9 @@ struct mflexState {
 
     /* Compress policy for closes through this state: keep the compressed
      * form only when it saves at least minSavingPercent of the block, at
-     * LZ4 level 'level' (0 fast, 1-12 LZ4HC) */
+     * LZ4 level 'level' */
     uint8_t minSavingPercent;
-    uint8_t level;
+    cflexLevel level;
 
     /* What this state has done (mflexStateGetStats) */
     mflexStateStats stats;

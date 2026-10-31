@@ -3,6 +3,7 @@
 #include "cleaner.h"
 #include "dkTierLimit.h"
 #include "multidict.h"
+#include "multilru.h"
 #include "multimap.h"
 #include "persist.h"
 
@@ -204,8 +205,8 @@ static void multitierHotPressure_(multitier *t, const databox *keep) {
 multitier *multitierNew(const multitierConfig *config) {
     const multitierConfig defaults = {};
     const multitierConfig *c = config ? config : &defaults;
-    if (c->hotLevels > 64) {
-        return nullptr; /* multilru holds at most 64 levels */
+    if (c->hotLevels > MULTILRU_LEVELS_MAX) {
+        return nullptr;
     }
     /* @own: container; free=coldmapFree */
     coldmap *cold = coldmapNew(multitierColdElements_(c), &c->cold);
@@ -593,9 +594,10 @@ static void *multitierPersistRestore_(const uint8_t *data, size_t len) {
             return nullptr;
         }
     }
-    if (v[1] == 0 || v[1] > 64 || v[2] == 0 || v[2] > UINT32_MAX || v[4] > 1 ||
-        v[5] < FLEX_CAP_LEVEL_64 || v[5] > FLEX_CAP_LEVEL_65536 || v[6] == 0 ||
-        v[6] > UINT32_MAX || v[7] > 99 || v[8] > 12 ||
+    if (v[1] == 0 || v[1] > MULTILRU_LEVELS_MAX || v[2] == 0 ||
+        v[2] > UINT32_MAX || v[4] > 1 || v[5] < FLEX_CAP_LEVEL_64 ||
+        v[5] > FLEX_CAP_LEVEL_65536 || v[6] == 0 || v[6] > UINT32_MAX ||
+        v[7] > MFLEX_SAVING_PERCENT_MAX || v[8] > CFLEX_LEVEL_MAX ||
         flexCount(f) != countof(v) + MULTITIER_PERSIST_PARTS) {
         return nullptr;
     }
@@ -609,7 +611,7 @@ static void *multitierPersistRestore_(const uint8_t *data, size_t len) {
         .cold = {.rawLimit = (flexCapSizeLimit)v[5],
                  .storedTarget = (uint32_t)v[6],
                  .minSavingPercent = (uint8_t)v[7],
-                 .level = (uint8_t)v[8]},
+                 .level = (cflexLevel)v[8]},
     };
     cleaner(multitierFree) multitier *t = multitierNew(&config);
     if (!t) {

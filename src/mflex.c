@@ -131,8 +131,9 @@ void mflexStateReset(mflexState *state) {
 }
 
 bool mflexStateSetPolicy(mflexState *state, uint8_t minSavingPercent,
-                         uint8_t level) {
-    if (!state || minSavingPercent > 99 || level > 12) {
+                         cflexLevel level) {
+    if (!state || minSavingPercent > MFLEX_SAVING_PERCENT_MAX ||
+        level > CFLEX_LEVEL_MAX) {
         return false;
     }
 
@@ -142,7 +143,7 @@ bool mflexStateSetPolicy(mflexState *state, uint8_t minSavingPercent,
 }
 
 void mflexStateGetPolicy(const mflexState *state, uint8_t *minSavingPercent,
-                         uint8_t *level) {
+                         cflexLevel *level) {
     *minSavingPercent = state->minSavingPercent;
     *level = state->level;
 }
@@ -958,10 +959,11 @@ int mflexTest(int, char *[]) {
         }
         cleaner(mflexStateFree) mflexState *ps = mflexStateCreate();
         uint8_t minSaving = 1;
-        uint8_t level = 1;
+        cflexLevel level = 1;
         mflexStateGetPolicy(ps, &minSaving, &level);
         if (stored[2] > stored[0] || minSaving != 0 || level != 0 ||
-            mflexStateSetPolicy(ps, 100, 0) || mflexStateSetPolicy(ps, 0, 13)) {
+            mflexStateSetPolicy(ps, MFLEX_SAVING_PERCENT_MAX + 1, 0) ||
+            mflexStateSetPolicy(ps, 0, CFLEX_LEVEL_MAX + 1)) {
             ERR("LZ4HC %zu vs %zu bytes, or a bad policy taken", stored[2],
                 stored[0]);
         }

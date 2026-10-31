@@ -45,10 +45,11 @@ typedef struct coldmapConfig {
     flexCapSizeLimit rawLimit;
     /* The stored bytes a block aims for (0: a quarter of the raw limit) */
     uint32_t storedTarget;
-    /* A block stays compressed only when that saves this share (0-99) */
+    /* A block stays compressed only when that saves this share (0 ..
+     * MFLEX_SAVING_PERCENT_MAX) */
     uint8_t minSavingPercent;
-    /* LZ4 level: 0 fast, 1-12 LZ4HC (smaller, slower to build) */
-    uint8_t level;
+    /* LZ4 level (0 .. CFLEX_LEVEL_MAX; flex.h) */
+    cflexLevel level;
 } coldmapConfig;
 
 /* A coldmap of the rows of 'rows' (a flex of whole rows of

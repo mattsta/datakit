@@ -6320,6 +6320,9 @@ bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
 #include "../deps/lz4/lz4.h"
 #include "../deps/lz4/lz4hc.h"
 
+static_assert(CFLEX_LEVEL_MAX == LZ4HC_CLEVEL_MAX,
+              "cflexLevel's top is LZ4HC's most compressing level");
+
 static constexpr int CFLEX_MINIMUM_COMPRESS_BYTES = 64;
 
 size_t cflexBytesCompressed(const cflex *const c) {
@@ -6388,7 +6391,7 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen) {
 }
 
 bool flexConvertToCFlexLevel(const flex *f, cflex *cBuffer, size_t cBufferLen,
-                             int level) {
+                             cflexLevel level) {
     /* Discover current flex metadata. */
     const size_t totalBytes = flexTotalBytes_(f);
     const varintWidth bytesWidth = FLEX_TOTAL_BYTES_WIDTH(f);

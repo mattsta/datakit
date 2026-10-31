@@ -2145,6 +2145,9 @@ void memboundFlushThreadCache(membound *m) {
     }
 }
 
+/* The largest request the STANDARD and ENTERPRISE tiers take (1 GiB) */
+static constexpr size_t MEMBOUND_REQUEST_MAX = (size_t)1 << 30;
+
 void *memboundAlloc(membound *m, size_t nBytes) {
     if (!m || nBytes == 0) {
         return nullptr;
@@ -2160,7 +2163,7 @@ void *memboundAlloc(membound *m, size_t nBytes) {
     }
 
     /* STANDARD and ENTERPRISE tiers use full membound struct */
-    if (nBytes > 0x40000000) {
+    if (nBytes > MEMBOUND_REQUEST_MAX) {
         return nullptr;
     }
 
@@ -2235,7 +2238,7 @@ void *memboundRealloc(membound *m, void *pPrior, size_t nBytes) {
         return nullptr;
     }
 
-    if (!m || nBytes > 0x40000000) {
+    if (!m || nBytes > MEMBOUND_REQUEST_MAX) {
         return nullptr;
     }
 

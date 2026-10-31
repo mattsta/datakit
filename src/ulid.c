@@ -22,7 +22,9 @@
 /* ====================================================================
  * Base36 Character Set (0-9A-Z)
  * ==================================================================== */
-static constexpr char BASE36_CHARS[36] = {
+/* Digit values run 0 .. ULID_B36_RADIX - 1 */
+static constexpr uint8_t ULID_B36_RADIX = 36;
+static constexpr char BASE36_CHARS[ULID_B36_RADIX] = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B',
     'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
     'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
@@ -55,6 +57,18 @@ static constexpr uint8_t base36ValuePlus1_[256] = {
 };
 #undef ULID_B36_LETTER_
 #undef ULID_B36_
+
+/* Whether all 25 values a vector conversion gave are Base36 digits (it
+ * gives a value of ULID_B36_RADIX or more for any other character) */
+DK_INLINE_ALWAYS bool
+ulidB36DigitsValid_(const uint8_t values[ULID_ENCODED_LENGTH]) {
+    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
+        if (values[i] >= ULID_B36_RADIX) {
+            return false;
+        }
+    }
+    return true;
+}
 
 /* The Base36 value of character 'c', or -1 when it is not one */
 DK_INLINE_ALWAYS int ulidB36Value_(const char c) {
@@ -201,8 +215,8 @@ static void ulidDigits128_(const ulid_t *id, uint8_t d[ULID_ENCODED_LENGTH]) {
     uint64_t chains[4] = {mid / pow6, mid % pow6, low / pow6, low % pow6};
     for (int k = 5; k >= 0; k--) {
         for (int c = 0; c < 4; c++) {
-            d[1 + c * 6 + k] = (uint8_t)(chains[c] % 36);
-            chains[c] /= 36;
+            d[1 + c * 6 + k] = (uint8_t)(chains[c] % ULID_B36_RADIX);
+            chains[c] /= ULID_B36_RADIX;
         }
     }
 }
@@ -214,10 +228,10 @@ static bool ulidFromDigits128_(const uint8_t d[ULID_ENCODED_LENGTH],
     uint64_t mid = 0;
     uint64_t low = 0;
     for (int i = 1; i <= 12; i++) {
-        mid = mid * 36 + d[i];
+        mid = mid * ULID_B36_RADIX + d[i];
     }
     for (int i = 13; i < ULID_ENCODED_LENGTH; i++) {
-        low = low * 36 + d[i];
+        low = low * ULID_B36_RADIX + d[i];
     }
     __uint128_t v = (__uint128_t)d[0] * ULID_B36_POW12_ + mid;
     if (ckd_mul(&v, v, (__uint128_t)ULID_B36_POW12_) ||
@@ -430,11 +444,8 @@ bool ulidDecodeSSE2(const char *str, ulid_t *out) {
     _mm_storeu_si128((__m128i *)tempVals, vals2);
     memcpy(values + 16, tempVals, 9);
 
-    /* Validate: check for values >= 36 (invalid) */
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        if (values[i] >= 36) {
-            return false;
-        }
+    if (!ulidB36DigitsValid_(values)) {
+        return false;
     }
 
     return ulidFromDigits128_(values, out);
@@ -544,11 +555,8 @@ bool ulidDecodeAVX2(const char *str, ulid_t *out) {
     uint8_t values[32];
     _mm256_storeu_si256((__m256i *)values, vals);
 
-    /* Validate */
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        if (values[i] >= 36) {
-            return false;
-        }
+    if (!ulidB36DigitsValid_(values)) {
+        return false;
     }
 
     return ulidFromDigits128_(values, out);
@@ -664,11 +672,8 @@ bool ulidDecodeNEON(const char *str, ulid_t *out) {
     vst1q_u8(tempVals, vals2);
     memcpy(values + 16, tempVals, 9);
 
-    /* Validate */
-    for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        if (values[i] >= 36) {
-            return false;
-        }
+    if (!ulidB36DigitsValid_(values)) {
+        return false;
     }
 
     return ulidFromDigits128_(values, out);
@@ -953,7 +958,7 @@ DK_INLINE_ALWAYS uint64_t ulidPack64_(uint64_t time, uint64_t low,
 /* The span of a layout's time field in ns, saturating at UINT64_MAX */
 static uint64_t ulidLayoutSpanNs_(const ulidLayout_ *l) {
     uint64_t span = 0;
-    if (l->timeBits >= 64 ||
+    if (l->timeBits >= UINT64_WIDTH ||
         ckd_mul(&span, UINT64_C(1) << l->timeBits, l->unitNs)) {
         return UINT64_MAX;
     }

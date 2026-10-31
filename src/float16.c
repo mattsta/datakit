@@ -16,13 +16,19 @@
  * values (signed zeros and subnormals included), two infinities and 2046
  * NaNs. */
 
+/* binary32's exponent bits, all set: infinity (a magnitude above it is a
+ * NaN) */
+static constexpr uint32_t FLOAT32_EXPONENT_BITS = 0x7F800000u;
+/* binary32 without its sign bit: the magnitude */
+static constexpr uint32_t FLOAT32_MAGNITUDE_BITS = 0x7FFFFFFFu;
+
 uint16_t float16Encode_(const float value) {
     uint32_t bits;
     memcpy(&bits, &value, sizeof(bits));
     const uint16_t sign = (uint16_t)((bits >> 16) & 0x8000);
-    const uint32_t abs = bits & 0x7FFFFFFFu;
+    const uint32_t abs = bits & FLOAT32_MAGNITUDE_BITS;
 
-    if (abs > 0x7F800000u) {
+    if (abs > FLOAT32_EXPONENT_BITS) {
         /* NaN: quiet, the top of its payload kept */
         return sign | 0x7E00 | (uint16_t)((abs >> 13) & 0x03FF);
     }
@@ -62,7 +68,7 @@ float float16Decode_(const uint16_t value) {
     uint32_t bits;
     if (exponent == 0x1F) {
         /* Infinity, or a NaN with its payload kept */
-        bits = sign | 0x7F800000u | (mantissa << 13);
+        bits = sign | FLOAT32_EXPONENT_BITS | (mantissa << 13);
     } else if (exponent != 0) {
         /* Normal: rebias the exponent from 15 to 127 */
         bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
@@ -93,7 +99,8 @@ uint16_t bfloat16Encode_(const float value) {
     const uint16_t high = (uint16_t)(bits >> 16);
     /* A NaN whose payload is all in the low half would truncate to
      * infinity: keep it a NaN (the quiet bit, its sign kept) */
-    if ((bits & 0x7FFFFFFFu) > 0x7F800000u && (high & 0x007F) == 0) {
+    if ((bits & FLOAT32_MAGNITUDE_BITS) > FLOAT32_EXPONENT_BITS &&
+        (high & 0x007F) == 0) {
         return high | 0x0040;
     }
     return high;

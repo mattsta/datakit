@@ -229,7 +229,7 @@ persistLogResult multiroarValueSetP(multiroarP *r, uint64_t position,
     default:
         return PERSIST_LOG_REFUSED;
     }
-    if (width < 64 && v >> width) {
+    if (width < UINT64_WIDTH && v >> width) {
         return PERSIST_LOG_REFUSED;
     }
 

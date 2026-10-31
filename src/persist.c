@@ -3961,7 +3961,7 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
         }
 
         /* A value must fit the width and its position the dimensions */
-        if ((width < 64 && words[1] >> width) ||
+        if ((width < UINT64_WIDTH && words[1] >> width) ||
             !multiroarValueInBounds(*r, words[0])) {
             return false;
         }
@@ -4909,6 +4909,7 @@ const persistOps persistOpsMultilist = {
  * ============================================================================
  */
 #include "multidict.h"
+#include "multilru.h"
 
 /* A multidict snapshot is a flex of [keys, key, val, key, val, ...]:
  * 'keys' (mdPersistKeys) records how the dict matches keys, then the
@@ -5133,7 +5134,8 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
             return nullptr;
         }
     }
-    if (s[3] > MULTIDICT_EVICT_SIZE_LRU || s[4] > 1 || s[7] > 64) {
+    if (s[3] > MULTIDICT_EVICT_SIZE_LRU || s[4] > 1 ||
+        s[7] > MULTILRU_LEVELS_MAX) {
         return nullptr;
     }
     count -= 2 + MD_PERSIST_SETTINGS;

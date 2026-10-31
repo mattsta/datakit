@@ -228,9 +228,13 @@ typedef enum multilruEntryWidth {
     MLRU_WIDTH_16 = 16, /* 60-bit indices, max ~1 quintillion entries */
 } multilruEntryWidth;
 
+/* The most levels a multilru keeps (one bit each in its 64-bit level
+ * mask); a config asking for more gets this many */
+static constexpr size_t MULTILRU_LEVELS_MAX = 64;
+
 /* Full configuration for creating a new multilru */
 typedef struct multilruConfig {
-    size_t maxLevels;      /* Number of LRU levels (default: 7, max: 64) */
+    size_t maxLevels; /* LRU levels (default: 7, max: MULTILRU_LEVELS_MAX) */
     size_t startCapacity;  /* Initial entry capacity (0 = auto) */
     uint64_t maxWeight;    /* Max total weight in bytes (0 = unlimited) */
     uint64_t maxCount;     /* Max entries (0 = unlimited) */

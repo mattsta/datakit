@@ -151,6 +151,9 @@ struct multilru {
     uint64_t statDeletes;    /* Direct delete operations */
 };
 
+static_assert(MULTILRU_LEVELS_MAX <= sizeof(((multilru *)0)->levelMask) * 8,
+              "every level has a bit in the level mask");
+
 /* ====================================================================
  * Entry Accessor Functions
  * ====================================================================
@@ -833,8 +836,8 @@ multilru *multilruNewWithConfig(const multilruConfig *config) {
     multilru *mlru = zcalloc(1, sizeof(*mlru));
 
     mlru->maxLevels = config->maxLevels > 0 ? config->maxLevels : 7;
-    if (mlru->maxLevels > 64) {
-        mlru->maxLevels = 64;
+    if (mlru->maxLevels > MULTILRU_LEVELS_MAX) {
+        mlru->maxLevels = MULTILRU_LEVELS_MAX;
     }
 
     mlru->policy = config->policy;

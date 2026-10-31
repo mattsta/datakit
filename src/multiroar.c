@@ -197,7 +197,7 @@ multiroar *multiroarValueNew(const uint8_t bitWidth, const uint64_t rows,
     /* A value multiroar stores fixed-width unsigned values; zero-width
      * values don't exist and anything wider than 64 can't round-trip
      * through the databox integer we accept. */
-    if (bitWidth == 0 || bitWidth > 64) {
+    if (bitWidth == 0 || bitWidth > UINT64_WIDTH) {
         return nullptr;
     }
 
@@ -2963,7 +2963,7 @@ DK_STATIC uint64_t readVarint(const uint8_t *buf, uint64_t bufSize,
         }
 
         shift += 7;
-        if (shift >= 64) {
+        if (shift >= UINT64_WIDTH) {
             return 0; /* Overflow */
         }
     }
@@ -3060,8 +3060,7 @@ static uint64_t multiroarChunksSize(const multiroar *r) {
         }
 
         case CHUNK_TYPE_FULL_BITMAP:
-            /* 1024 bytes */
-            size += 1024;
+            size += BITMAP_SIZE_IN_BYTES;
             break;
 
         case CHUNK_TYPE_RUN_ALL_1:
@@ -3184,13 +3183,13 @@ static bool multiroarWriteChunks(const multiroar *r, uint8_t **pOut,
 
         case CHUNK_TYPE_FULL_BITMAP: {
             /* Write bitmap data */
-            if (end - p < 1024) {
+            if (end - p < BITMAP_SIZE_IN_BYTES) {
                 return false;
             }
 
             const uint8_t *bitmap = GET_CHUNK_BITMAP_START(value);
-            memcpy(p, bitmap, 1024);
-            p += 1024;
+            memcpy(p, bitmap, BITMAP_SIZE_IN_BYTES);
+            p += BITMAP_SIZE_IN_BYTES;
             break;
         }
 
@@ -3254,7 +3253,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
  * rows x cols */
 static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
                                       const uint8_t *end) {
-    if (width > 64) {
+    if (width > UINT64_WIDTH) {
         return nullptr;
     }
 
@@ -3289,7 +3288,7 @@ static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
         }
         p += n;
         n = readVarint(p, (uint64_t)(end - p), &value);
-        if (n == 0 || (width < 64 && value >> width) ||
+        if (n == 0 || (width < UINT64_WIDTH && value >> width) ||
             !multiroarValueInBounds(r, position)) {
             return nullptr;
         }
@@ -3453,18 +3452,19 @@ static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
 
         case CHUNK_TYPE_FULL_BITMAP: {
             /* Read bitmap data */
-            if (p + 1024 > end) {
+            if (end - p < BITMAP_SIZE_IN_BYTES) {
                 return nullptr;
             }
 
-            /* Create chunk: 1 type + 1024 bitmap */
-            cleanerName(zfree, Bytes) uint8_t *chunk = zcalloc(1025, 1);
+            /* Create chunk: its type byte, then the bitmap */
+            cleanerName(zfree, Bytes) uint8_t *chunk =
+                zcalloc(1 + BITMAP_SIZE_IN_BYTES, 1);
             if (!chunk) {
                 return nullptr;
             }
             chunk[0] = CHUNK_TYPE_FULL_BITMAP;
-            memcpy(chunk + 1, p, 1024);
-            p += 1024;
+            memcpy(chunk + 1, p, BITMAP_SIZE_IN_BYTES);
+            p += BITMAP_SIZE_IN_BYTES;
 
             databox key = databoxNewUnsigned(chunkId);
 

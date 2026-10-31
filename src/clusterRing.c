@@ -100,6 +100,9 @@ CLUSTER_AFFINITY_SPREADS_(CLUSTER_AFFINITY_REGION_SPREAD);
 
 static constexpr int INITIAL_NODE_CAPACITY = 16;
 static constexpr int INITIAL_VNODE_CAPACITY = 256;
+/* The most replicas a placement selects: every replica count is a
+ * quorum's uint8_t, and the selection's picked-node scratch holds them */
+static constexpr uint32_t CLUSTER_REPLICAS_MAX = UINT8_MAX + 1;
 static constexpr int INITIAL_KEYSPACE_CAPACITY = 8;
 static constexpr int DEFAULT_VNODE_MULTIPLIER = 150;
 static constexpr int MIN_VNODES_PER_NODE = 10;
@@ -1944,8 +1947,9 @@ static uint32_t clusterSelectReplicas(const clusterNode *const *cand,
     bool *chosen = count > 64 ? chosenHeap : chosenStack;
     memset(chosen, 0, (count > 64 ? count : 64) * sizeof(bool));
 
-    uint32_t distinct[256] = {}; /* per rule, distinct values chosen */
-    const clusterNode *picked[256];
+    /* per rule (a uint8_t count), distinct values chosen */
+    uint32_t distinct[UINT8_MAX + 1] = {};
+    const clusterNode *picked[CLUSTER_REPLICAS_MAX];
     uint32_t pickedCount = 0;
 
     /* Spread pass: take what a rule still needs */
@@ -2016,9 +2020,9 @@ clusterRingPlace(const clusterRing *ring, clusterStrategyType strategy,
 
     /* With affinity rules the strategy ranks every node, so the selection
      * can reach past the first replicaCount for the spread it needs.
-     * Replica sets are bounded by the picked-node scratch (256). */
-    if (replicaCount > 256) {
-        replicaCount = 256;
+     * Replica sets are bounded by the picked-node scratch. */
+    if (replicaCount > CLUSTER_REPLICAS_MAX) {
+        replicaCount = CLUSTER_REPLICAS_MAX;
     }
     const bool spread = rules && ruleCount > 0;
     uint32_t maxReplicas = spread ? ring->nodeCount : replicaCount;
@@ -2898,10 +2902,7 @@ static void clusterArcsRelease_cleanup(clusterArcs *a) {
 /* The arcs of `r`'s own placement (its replica count and rules) */
 static void clusterArcsBuild(const clusterRing *r, clusterArcs *a) {
     const clusterKetamaData *v = &r->vnodes;
-    uint32_t replicaCount = r->defaultQuorum.replicaCount;
-    if (replicaCount > 256) {
-        replicaCount = 256;
-    }
+    const uint32_t replicaCount = r->defaultQuorum.replicaCount;
     const bool spread = r->affinityRules && r->affinityRuleCount > 0;
     const uint32_t maxReplicas = spread ? r->nodeCount : replicaCount;
 

@@ -842,10 +842,13 @@ size_t cflexBytes(const cflex *c);
 bool cflexValidateBuffer(const uint8_t *buf, size_t buflen);
 cflex *cflexDuplicate(const cflex *c);
 bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen);
-/* flexConvertToCFlex at an LZ4 level: 0 is LZ4 (fastest), 1-12 LZ4HC at
- * that level (smaller, slower to compress; decompression is the same) */
+/* An LZ4 level: 0 is LZ4 (fastest), 1 .. CFLEX_LEVEL_MAX LZ4HC at that
+ * level (smaller, slower to compress; decompression is the same) */
+typedef uint8_t cflexLevel;
+static constexpr cflexLevel CFLEX_LEVEL_MAX = 12; /* LZ4HC's most compressing */
+/* flexConvertToCFlex at 'level' (past CFLEX_LEVEL_MAX: CFLEX_LEVEL_MAX) */
 bool flexConvertToCFlexLevel(const flex *f, cflex *cBuffer, size_t cBufferLen,
-                             int level);
+                             cflexLevel level);
 bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen);
 
 #ifdef DATAKIT_TEST

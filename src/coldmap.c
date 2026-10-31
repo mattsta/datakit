@@ -217,7 +217,8 @@ coldmap *coldmapNewFromDump(multimapElements elementsPerEntry,
     const coldmapConfig defaults = {};
     const coldmapConfig *c = config ? config : &defaults;
     if (elementsPerEntry > UINT16_MAX || c->rawLimit > FLEX_CAP_LEVEL_65536 ||
-        c->minSavingPercent > 99 || c->level > 12 ||
+        c->minSavingPercent > MFLEX_SAVING_PERCENT_MAX ||
+        c->level > CFLEX_LEVEL_MAX ||
         !coldmapRowsAscend_(rows, elementsPerEntry)) {
         flexFree(rows);
         return nullptr;
@@ -1043,7 +1044,8 @@ static void *coldmapPersistRestore_(const uint8_t *data, size_t len) {
     const size_t blockEntries = count - COLDMAP_PERSIST_HEADER;
     if (v[0] == 0 || v[0] > UINT16_MAX || v[1] < FLEX_CAP_LEVEL_64 ||
         v[1] > FLEX_CAP_LEVEL_65536 || v[2] == 0 || v[2] > UINT32_MAX ||
-        v[3] > 99 || v[4] > 12 || blockEntries % COLDMAP_PERSIST_BLOCK ||
+        v[3] > MFLEX_SAVING_PERCENT_MAX || v[4] > CFLEX_LEVEL_MAX ||
+        blockEntries % COLDMAP_PERSIST_BLOCK ||
         v[5] != blockEntries / COLDMAP_PERSIST_BLOCK) {
         return nullptr;
     }
@@ -1051,7 +1053,7 @@ static void *coldmapPersistRestore_(const uint8_t *data, size_t len) {
     const coldmapConfig config = {.rawLimit = (flexCapSizeLimit)v[1],
                                   .storedTarget = (uint32_t)v[2],
                                   .minSavingPercent = (uint8_t)v[3],
-                                  .level = (uint8_t)v[4]};
+                                  .level = (cflexLevel)v[4]};
     /* @own: caller; free=coldmapFree */
     coldmap *cm = coldmapNew((multimapElements)v[0], &config);
     if (cm && !coldmapPersistRestoreBlocks_(cm, f, fe, v[5])) {
