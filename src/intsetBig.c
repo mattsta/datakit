@@ -1036,6 +1036,284 @@ void intsetBigRepr(const intsetBig *isb) {
     }
 }
 
+/* ====================================================================
+ * The model test: random sequences of every public call against a sorted
+ * array of 128-bit values, every read checked: values from a few buckets
+ * either side of zero and from buckets past 64 bits
+ * ==================================================================== */
+static constexpr uint32_t IB_MODEL_CAP = 3000;
+
+typedef struct ibModel_ {
+    uint32_t n;
+    uint32_t events[2];
+    __int128_t v[IB_MODEL_CAP];
+} ibModel_;
+
+defcleanerName(ibModel_ *, zfree, IbModel);
+
+static uint64_t ibModelRng_;
+/* Where the last check parted from the model, for its report */
+static char ibModelWhy_[160];
+static uint64_t ibModelRand_(void) {
+    return splitmix64(&ibModelRng_);
+}
+
+/* A value in one of the model's buckets (2^20 values each) */
+static __int128_t ibModelValue_(void) {
+    const uint64_t r = ibModelRand_();
+    static const int64_t buckets[] = {-3, -1, 0, 1, 2, 5};
+    __int128_t bucket = buckets[r % countof(buckets)];
+    if (r % 13 == 0) { /* past 64 bits, inside intsetBig's range */
+        bucket = (__int128_t)((r >> 8) % 2 ? 1 : -1) * ((__int128_t)1 << 60);
+    }
+    return bucket * ((__int128_t)1 << 20) + (__int128_t)((r >> 16) % 300) * 3;
+}
+
+static void ibModelBox_(__int128_t v, databoxBig *box) {
+    if (v >= INT64_MIN && v <= INT64_MAX) {
+        *box = DATABOX_BIG_SIGNED((int64_t)v);
+    } else {
+        DATABOX_BIG_SIGNED_128(box, v);
+    }
+}
+
+static bool ibModelRead_(const databoxBig *box, __int128_t *v) {
+    switch (box->type) {
+    case DATABOX_SIGNED_64:
+        *v = box->data.i64;
+        return true;
+    case DATABOX_UNSIGNED_64:
+        *v = box->data.u64;
+        return true;
+    case DATABOX_SIGNED_128:
+        *v = *box->data.i128;
+        return true;
+    case DATABOX_UNSIGNED_128:
+        *v = (__int128_t)*box->data.u128;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static uint32_t ibModelLower_(const ibModel_ *M, __int128_t x) {
+    uint32_t lo = 0;
+    uint32_t hi = M->n;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (M->v[mid] < x) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+static bool ibModelHas_(const ibModel_ *M, __int128_t x) {
+    const uint32_t at = ibModelLower_(M, x);
+    return at < M->n && M->v[at] == x;
+}
+
+static bool ibModelPut_(ibModel_ *M, __int128_t x) {
+    const uint32_t at = ibModelLower_(M, x);
+    if (at < M->n && M->v[at] == x) {
+        return false;
+    }
+    memmove(&M->v[at + 1], &M->v[at], (M->n - at) * sizeof(M->v[0]));
+    M->v[at] = x;
+    M->n++;
+    return true;
+}
+
+static bool ibModelTake_(ibModel_ *M, __int128_t x) {
+    const uint32_t at = ibModelLower_(M, x);
+    if (at == M->n || M->v[at] != x) {
+        return false;
+    }
+    memmove(&M->v[at], &M->v[at + 1], (M->n - at - 1) * sizeof(M->v[0]));
+    M->n--;
+    return true;
+}
+
+static __uint128_t ibModelMagnitude_(__int128_t v) {
+    const __uint128_t mag =
+        v < 0 ? (__uint128_t)0 - (__uint128_t)v : (__uint128_t)v;
+    return mag >> 20;
+}
+
+/* @model: src/intsetBig.h */
+/* The set holds exactly the model's values, in ascending order, in as
+ * many buckets as they span */
+static bool ibModelSame_(const intsetBig *isb, const ibModel_ *M) {
+    intsetBigIterator it;
+    intsetBigIteratorInit(isb, &it);
+    databoxBig got;
+    DATABOX_BIG_INIT(&got);
+    uint32_t i = 0;
+    uint32_t buckets = 0;
+    while (intsetBigIteratorNextBox(&it, &got)) {
+        __int128_t x = 0;
+        if (i >= M->n || !ibModelRead_(&got, &x) || x != M->v[i]) {
+            snprintf(ibModelWhy_, sizeof(ibModelWhy_),
+                     "value %" PRIu32 " of %" PRIu32 ": type %d, got %" PRId64
+                     " want %" PRId64,
+                     i, M->n, (int)got.type, (int64_t)x,
+                     i < M->n ? (int64_t)M->v[i] : 0);
+            return false;
+        }
+        /* Buckets by sign and magnitude: a value's |v| / 2^20, negatives
+         * apart (so -1 .. -(2^20 - 1) share a bucket of their own) */
+        if (i == 0 || (M->v[i] < 0) != (M->v[i - 1] < 0) ||
+            ibModelMagnitude_(M->v[i]) != ibModelMagnitude_(M->v[i - 1])) {
+            buckets++;
+        }
+        i++;
+        DATABOX_BIG_INIT(&got);
+    }
+    snprintf(ibModelWhy_, sizeof(ibModelWhy_),
+             "walked %" PRIu32 " of %" PRIu32 ", %zu elements, %zu buckets "
+             "(model %" PRIu32 ")",
+             i, M->n, intsetBigCountElements(isb), intsetBigCountBuckets(isb),
+             buckets);
+    return i == M->n && intsetBigCountElements(isb) == M->n &&
+           intsetBigCountBuckets(isb) == buckets &&
+           (M->n == 0 || intsetBigBytes(isb) > 0);
+}
+
+/* @model: src/intsetBig.h */
+static int intsetBigTestModel_(uint64_t seed) {
+    int err = 0;
+    cleanerName(zfree, IbModel) ibModel_ *M = zcalloc(1, sizeof(*M));
+    cleanerName(zfree, IbModel) ibModel_ *B = zcalloc(1, sizeof(*B));
+    cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+    ibModelRng_ = seed;
+    const uint32_t steps = 6000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        const uint64_t r = ibModelRand_();
+        const bool draining = step >= steps * 2 / 3;
+        const uint32_t op = (uint32_t)(r % 14);
+        const __int128_t x =
+            M->n && r % 3 == 0 ? M->v[(r >> 8) % M->n] : ibModelValue_();
+        databoxBig box;
+        ibModelBox_(x, &box);
+        bool ok = true;
+        if (op < (draining ? 2u : 5u) && M->n < IB_MODEL_CAP - 64) {
+            ok = intsetBigAdd(isb, &box) == ibModelPut_(M, x);
+        } else if (op < 7) {
+            ok = intsetBigRemove(isb, &box) == ibModelTake_(M, x);
+        } else if (op == 7) {
+            ok = intsetBigExists(isb, &box) == ibModelHas_(M, x) &&
+                 intsetBigCanHold(&box);
+            /* Not an integer, or out of range: refused, nothing changed */
+            const databoxBig bytes = {.type = DATABOX_BYTES_EMBED, .len = 1};
+            databoxBig far;
+            DATABOX_BIG_SIGNED_128(&far, (__int128_t)1 << 100);
+            ok = ok && !intsetBigAdd(isb, &bytes) && !intsetBigCanHold(&far);
+        } else if (op == 8) { /* a member, or one taken out */
+            databoxBig got;
+            DATABOX_BIG_INIT(&got);
+            __int128_t g = 0;
+            if (r % 2) {
+                const bool took = intsetBigRandomDelete(isb, &got);
+                ok = took == (M->n > 0) &&
+                     (!took || (ibModelRead_(&got, &g) && ibModelTake_(M, g)));
+            } else {
+                const bool picked = intsetBigRandom(isb, &got);
+                ok = picked == (M->n > 0) &&
+                     (!picked || (ibModelRead_(&got, &g) && ibModelHas_(M, g)));
+            }
+        } else if (op <= 10) { /* intersections: fresh, in place on a, on b */
+            cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+            B->n = 0;
+            for (uint32_t i = 0; i < M->n; i += 2) { /* every other one */
+                databoxBig bb;
+                ibModelBox_(M->v[i], &bb);
+                intsetBigAdd(b, &bb);
+                ibModelPut_(B, M->v[i]);
+            }
+            for (uint32_t i = 0; i < 1 + r % 20; i++) { /* and others */
+                const __int128_t y = ibModelValue_();
+                databoxBig bb;
+                ibModelBox_(y, &bb);
+                intsetBigAdd(b, &bb);
+                ibModelPut_(B, y);
+            }
+            /* What both hold */
+            uint32_t both = 0;
+            for (uint32_t i = 0; i < M->n; i++) {
+                both += ibModelHas_(B, M->v[i]);
+            }
+            const uint32_t how = (uint32_t)(r >> 32) % 4;
+            if (how == 0) {
+                cleaner(intsetBigFree) intsetBig *into = intsetBigNew();
+                ok = intsetBigIntersect(isb, b, into) == both &&
+                     intsetBigCountElements(into) == both &&
+                     intsetBigSubset(into, isb) && intsetBigSubset(into, b);
+            } else if (how == 1) {
+                ok = intsetBigIntersect(isb, isb, isb) == M->n;
+            } else {
+                intsetBig *in = how == 2 ? isb : b;
+                ok = intsetBigIntersect(isb, b, in) == both;
+                if (how == 2) { /* the model keeps what both held */
+                    for (uint32_t i = M->n; i-- > 0;) {
+                        if (!ibModelHas_(B, M->v[i])) {
+                            ibModelTake_(M, M->v[i]);
+                        }
+                    }
+                } else {
+                    ok = ok && intsetBigCountElements(b) == both;
+                }
+            }
+        } else if (op == 11 && M->n + 40 < IB_MODEL_CAP) {
+            /* a merge of a few others */
+            cleaner(intsetBigFree) intsetBig *from = intsetBigNew();
+            for (uint32_t i = 0; i < 1 + r % 30; i++) {
+                const __int128_t y = ibModelValue_();
+                databoxBig bb;
+                ibModelBox_(y, &bb);
+                intsetBigAdd(from, &bb);
+                ibModelPut_(M, y);
+            }
+            intsetBigMergeInto(isb, from);
+        } else if (op == 12) { /* a copy: equal, and each a subset */
+            cleaner(intsetBigFree) intsetBig *copy = intsetBigCopy(isb);
+            ok = intsetBigEqual(copy, isb) && intsetBigSubset(copy, isb) &&
+                 intsetBigSubset(isb, copy) && ibModelSame_(copy, M);
+            if (ok && M->n) {
+                databoxBig first;
+                ibModelBox_(M->v[0], &first);
+                intsetBigRemove(copy, &first);
+                ok = !intsetBigEqual(copy, isb) && intsetBigSubset(copy, isb) &&
+                     !intsetBigSubset(isb, copy);
+            }
+        } else if (op == 13) { /* rebuilt from its members in walk order */
+            cleaner(flexFree) flex *members = flexNew();
+            for (uint32_t i = 0; i < M->n; i++) {
+                databoxBig mb;
+                ibModelBox_(M->v[i], &mb);
+                flexPushByTypeExact(&members, (const databox *)&mb,
+                                    FLEX_ENDPOINT_TAIL);
+            }
+            cleaner(intsetBigFree) intsetBig *back =
+                intsetBigNewFromMembers(members);
+            ok = back && ibModelSame_(back, M) && intsetBigEqual(back, isb);
+        }
+        if (!ok || (step % 40 == 39 && !ibModelSame_(isb, M))) {
+            ERR("model step %" PRIu32 ": op %" PRIu32 " disagreed (%" PRIu32
+                " values, seed %" PRIu64 "): %s",
+                step, op, M->n, seed, ibModelWhy_);
+            break;
+        }
+    }
+    if (!ibModelSame_(isb, M)) {
+        ERR("the model run ended with %" PRIu32 " values the set does not "
+            "hold",
+            M->n);
+    }
+    return err;
+}
+
 DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
     int err = 0;
 
@@ -1502,6 +1780,13 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int, char *[]) {
 
         if (intsetBigSubset(a, b)) {
             ERR("a with extra element should not be subset of b!");
+        }
+    }
+
+    TEST("model: every public call against a sorted array of 128-bit "
+         "values") {
+        for (uint64_t seed = 1; seed <= 4; seed++) {
+            err += intsetBigTestModel_(seed);
         }
     }
 
