@@ -32,10 +32,16 @@ defcleanerName(uint8_t *, zfree, Wire);
  * keeps retransmitting the same frame and we keep refusing it", not
  * "any rejection anywhere within a session". */
 typedef struct replicatorRejectState {
-    uint32_t origin_id;
+    uint32_t origin_id; /* 0: a free tracker (origin 0 is reserved) */
     uint64_t sequence;
     uint32_t consecutive_rejects;
 } replicatorRejectState;
+
+/* One tracker per origin with a rejected frame, so frames between
+ * retransmissions (another origin's, accepted or not) leave each
+ * origin's count alone; past this many origins the one with the fewest
+ * rejects gives up its tracker */
+static constexpr size_t REPLICATOR_REJECT_TRACKERS = 16;
 
 struct clusterReplicator {
     clusterMailbox *mb;                  /* OWNED — freed in Free */
@@ -45,7 +51,8 @@ struct clusterReplicator {
     void *apply_ctx;
     uint32_t
         max_apply_retries; /* CLUSTER_REPLICATOR_RETRY_FOREVER: never drop */
-    replicatorRejectState last_reject; /* trampoline-local, sole writer */
+    /* trampoline-local, sole writer */
+    replicatorRejectState rejects[REPLICATOR_REJECT_TRACKERS];
     _Atomic uint64_t dropped_count;
     _Atomic uint64_t format_refused_count;
 };
@@ -71,6 +78,29 @@ static size_t replicatorAuditTypeTable(const persistOps *const *table,
 }
 
 /* Mailbox apply trampoline. The ctx is the replicator itself. */
+/* The tracker of 'origin': its own, else a free one, else the one with
+ * the fewest rejects (handed over empty) */
+static replicatorRejectState *replicatorRejectTracker_(clusterReplicator *rep,
+                                                       uint32_t origin) {
+    replicatorRejectState *free = nullptr;
+    replicatorRejectState *least = &rep->rejects[0];
+    for (size_t i = 0; i < REPLICATOR_REJECT_TRACKERS; i++) {
+        replicatorRejectState *t = &rep->rejects[i];
+        if (t->origin_id == origin) {
+            return t;
+        }
+        if (!t->origin_id && !free) {
+            free = t;
+        }
+        if (t->consecutive_rejects < least->consecutive_rejects) {
+            least = t;
+        }
+    }
+    replicatorRejectState *taken = free ? free : least;
+    *taken = (replicatorRejectState){};
+    return taken;
+}
+
 static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
     clusterReplicator *rep = (clusterReplicator *)ctx;
     const uint8_t type_byte = frame->msg_type;
@@ -110,13 +140,10 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
     }
     const bool accepted = rep->on_restored(frame->origin_id, frame->sequence,
                                            ops, structure, rep->apply_ctx);
+    replicatorRejectState *t = replicatorRejectTracker_(rep, frame->origin_id);
     if (accepted) {
-        /* Successful apply resets the consecutive-reject tracker. We
-         * cannot key only on (origin, sequence) because the next
-         * accepted frame typically has a different sequence anyway. */
-        rep->last_reject.consecutive_rejects = 0;
-        rep->last_reject.origin_id = 0;
-        rep->last_reject.sequence = 0;
+        /* This origin's frame went through: its count starts over */
+        *t = (replicatorRejectState){};
         return true;
     }
 
@@ -124,20 +151,19 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
      * leak the original code only guarded with a NULL-check. */
     ops->free(structure);
 
-    /* Increment consecutive-reject counter for THIS (origin, seq). */
-    if (rep->last_reject.origin_id == frame->origin_id &&
-        rep->last_reject.sequence == frame->sequence) {
-        rep->last_reject.consecutive_rejects++;
+    /* Count this origin's rejects of THIS sequence */
+    if (t->origin_id == frame->origin_id && t->sequence == frame->sequence) {
+        t->consecutive_rejects++;
     } else {
-        rep->last_reject.origin_id = frame->origin_id;
-        rep->last_reject.sequence = frame->sequence;
-        rep->last_reject.consecutive_rejects = 1;
+        *t = (replicatorRejectState){.origin_id = frame->origin_id,
+                                     .sequence = frame->sequence,
+                                     .consecutive_rejects = 1};
     }
 
     /* Drop policy: once the counter reaches the cap, unless the caller
      * chose to retry forever */
     if (rep->max_apply_retries != CLUSTER_REPLICATOR_RETRY_FOREVER &&
-        rep->last_reject.consecutive_rejects >= rep->max_apply_retries) {
+        t->consecutive_rejects >= rep->max_apply_retries) {
         /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&rep->dropped_count, 1u,
                                   memory_order_relaxed);
@@ -145,9 +171,7 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
          * (covers the case where the producer's retry happens to land
          * a different sequence next, but the trampoline must not roll
          * the budget over). */
-        rep->last_reject.consecutive_rejects = 0;
-        rep->last_reject.origin_id = 0;
-        rep->last_reject.sequence = 0;
+        *t = (replicatorRejectState){};
         /* Returning true makes the mailbox advance its watermark past
          * the poisoned sequence. The producer's future retransmits of
          * this exact (origin, sequence) will be rejected as REPLAY
@@ -184,9 +208,7 @@ clusterReplicator *clusterReplicatorCreateEx(
     rep->max_apply_retries = (cfg != nullptr && cfg->max_apply_retries != 0)
                                  ? cfg->max_apply_retries
                                  : CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES;
-    rep->last_reject.origin_id = 0;
-    rep->last_reject.sequence = 0;
-    rep->last_reject.consecutive_rejects = 0;
+    memset(rep->rejects, 0, sizeof(rep->rejects));
     atomic_init(&rep->dropped_count, (uint64_t)0);
     atomic_init(&rep->format_refused_count, (uint64_t)0);
     /* The mailbox comes from the full-options constructor so the
@@ -347,6 +369,18 @@ typedef struct {
     bool reject_next;
 } replicatorTestCtx;
 
+/* Accepts (and frees) every frame but those of two poison origins */
+static bool testPoisonApply(uint32_t origin_id, uint64_t sequence,
+                            const persistOps *ops, void *structure, void *ctx) {
+    (void)sequence;
+    (void)ctx;
+    if (origin_id == 11u || origin_id == 12u) {
+        return false;
+    }
+    ops->free(structure);
+    return true;
+}
+
 static bool testApply(uint32_t origin_id, uint64_t sequence,
                       const persistOps *ops, void *structure, void *ctx) {
     replicatorTestCtx *t = (replicatorTestCtx *)ctx;
@@ -473,6 +507,56 @@ int clusterReplicatorTest(int, char *[]) {
         }
         flexFree(app_ctx.restored[0]);
 
+        clusterReplicatorFree(rep);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("each origin's poison frame is dropped after its retries, whatever "
+         "arrives between") {
+        /* Two poison frames (origins 11 and 12) retransmitted with good
+         * frames from origin 13 between them: each still runs out its
+         * own three retries and is dropped */
+        const uint8_t key[32] = {0x5a};
+        hmacKeyring *ring = hmacKeyringCreate();
+        const hmacKeyId KID = 1u;
+        hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        const clusterReplicatorConfig cfg = {.max_apply_retries = 3};
+        clusterReplicator *rep = clusterReplicatorCreateEx(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
+            type_table, 256u, testPoisonApply, nullptr, &cfg);
+        cleaner(flexFree) flex *src = flexNew();
+        flexPushUnsigned(&src, 1u, FLEX_ENDPOINT_TAIL);
+        const size_t cap =
+            clusterReplicatorSnapshotSize(rep, &persistOpsFlex, src);
+        cleanerName(zfree, Wire) uint8_t *p11 = zmalloc(cap);
+        cleanerName(zfree, Wire) uint8_t *p12 = zmalloc(cap);
+        cleanerName(zfree, Wire) uint8_t *good = zmalloc(cap);
+        size_t w11 = 0;
+        size_t w12 = 0;
+        (void)clusterReplicatorSeal(rep, &persistOpsFlex, src, 11u, 1u, KID,
+                                    p11, cap, &w11);
+        (void)clusterReplicatorSeal(rep, &persistOpsFlex, src, 12u, 1u, KID,
+                                    p12, cap, &w12);
+        uint64_t goodSeq = 1;
+        for (int round = 0; round < 6; round++) {
+            (void)clusterReplicatorIngest(rep, p11, w11, KID);
+            size_t wg = 0;
+            (void)clusterReplicatorSeal(rep, &persistOpsFlex, src, 13u,
+                                        goodSeq++, KID, good, cap, &wg);
+            (void)clusterReplicatorIngest(rep, good, wg, KID);
+            (void)clusterReplicatorIngest(rep, p12, w12, KID);
+        }
+        clusterMailbox *mb = clusterReplicatorMailbox(rep);
+        if (clusterReplicatorDroppedCount(rep) != 2 ||
+            clusterMailboxLastApplied(mb, 11u) != 1u ||
+            clusterMailboxLastApplied(mb, 12u) != 1u) {
+            ERR("%" PRIu64 " poison frames dropped, watermarks %" PRIu64
+                " and %" PRIu64,
+                clusterReplicatorDroppedCount(rep),
+                clusterMailboxLastApplied(mb, 11u),
+                clusterMailboxLastApplied(mb, 12u));
+        }
         clusterReplicatorFree(rep);
         hmacKeyringFree(ring);
     }
