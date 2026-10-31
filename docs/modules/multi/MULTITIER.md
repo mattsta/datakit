@@ -88,6 +88,57 @@ Rules worth knowing:
   cold config coldmap refuses.
 - **Not thread-safe.**
 
+## Reading through to the sink's store
+
+A multitier answers for what it holds; rows it gave up live wherever the sink put them (a disk
+store, another service). A read that misses every level then costs a trip to that store, and most
+misses in a cache of a larger data set are for keys the store does not have either. Put a bloom
+filter in front of the store: the sink adds each key it writes, and a miss asks the store only
+when the filter says the key may be there.
+
+```c
+#include "linearBloom.h"
+#include "multitier.h"
+#include "rapidhash.h"
+
+typedef struct store {
+    linearBloom *seen; /* linearBloomNew() */
+    /* ... the backing store's handle ... */
+} store;
+
+static void keyHash(const databox *key, uint64_t hash[2]) {
+    hash[0] = rapidhash(key->data.bytes.start, key->len);
+    hash[1] = rapidhashWithSeed(key->data.bytes.start, key->len, hash[0]);
+}
+
+static void toStore(void *ctx, const flex *rows) {
+    store *s = ctx;
+    /* for each [key, value] row: write it to the store, then */
+    uint64_t hash[2];
+    keyHash(&key, hash);
+    linearBloomHashSet(s->seen, hash);
+}
+
+static bool get(multitier *t, store *s, const databox *key, databox *value) {
+    if (multitierGet(t, key, value)) {
+        return true;
+    }
+    uint64_t hash[2];
+    keyHash(key, hash);
+    if (!linearBloomHashCheckEarlyExit(s->seen, hash)) {
+        return false; /* in no level and never written to the store */
+    }
+    return storeRead(s, key, value); /* the store's own read */
+}
+```
+
+The filter never says no for a key the sink wrote, so no row is lost; a yes for an absent key
+costs one store read. `linearBloom` is 1 MB with 13 hashes by default (`LINEARBLOOM_EXTENT_BITS`,
+`LINEARBLOOM_HASHES`): about 1 false yes in 10,000 at 430,000 keys. It cannot forget a key, so
+deletes leave their keys in it; when `linearBloomUtilization` passes about 0.5, build a fresh
+filter from the store's keys. multitier's own test "a bloom filter in front of the sink's store"
+runs this pattern.
+
 ## Costs
 
 Apple M1 Max, clang 22, `perf` preset; 100,000 rows of `"user:NNNNNNNN"` -> a small record set

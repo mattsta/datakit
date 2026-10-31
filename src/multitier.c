@@ -793,6 +793,10 @@ const persistOps persistOpsMultitier = {
  * ==================================================================== */
 #ifdef DATAKIT_TEST
 #include "ctest.h"
+#include "linearBloom.h"
+#include "rapidhash.h"
+
+defcleaner(linearBloom *, linearBloomFree);
 
 /* The model a test checks against: every live row; the sink takes the
  * rows the multitier gives up out of it */
@@ -806,6 +810,54 @@ static void multitierTestSink_(void *ctx, const flex *rows) {
         fe = flexNext(rows, fe);
         fe = flexNext(rows, fe);
     }
+}
+
+/* The pattern MULTITIER.md documents: the sink writes the rows it takes to
+ * a backing store (a multimap here) and adds their keys to a bloom filter;
+ * a miss consults the store only when the filter says the key may be
+ * there */
+typedef struct multitierTestStore_ {
+    multimap **rows;
+    linearBloom *seen;
+    uint64_t storeReads;
+} multitierTestStore_;
+
+static void multitierTestKeyHash_(const databox *key, uint64_t hash[2]) {
+    hash[0] = rapidhash(key->data.bytes.start, key->len);
+    hash[1] = rapidhashWithSeed(key->data.bytes.start, key->len, hash[0]);
+}
+
+static void multitierTestStoreSink_(void *ctx, const flex *rows) {
+    multitierTestStore_ *store = ctx;
+    flexEntry *fe = flexHead(rows);
+    for (size_t r = 0; r < flexCount(rows) / 2; r++) {
+        databox key = {};
+        databox val = {};
+        flexGetByType(fe, &key);
+        fe = flexNext(rows, fe);
+        flexGetByType(fe, &val);
+        fe = flexNext(rows, fe);
+        const databox *row[2] = {&key, &val};
+        multimapInsert(store->rows, row);
+        uint64_t hash[2];
+        multitierTestKeyHash_(&key, hash);
+        linearBloomHashSet(store->seen, hash);
+    }
+}
+
+static bool multitierTestStoreGet_(multitier *t, multitierTestStore_ *store,
+                                   const databox *key, databox *value) {
+    if (multitierGet(t, key, value)) {
+        return true;
+    }
+    uint64_t hash[2];
+    multitierTestKeyHash_(key, hash);
+    if (!linearBloomHashCheckEarlyExit(store->seen, hash)) {
+        return false; /* in no level and never sunk */
+    }
+    store->storeReads++;
+    databox *values[1] = {value};
+    return multimapLookup(*store->rows, key, values);
 }
 
 /* A sink keeping the keys it takes */
@@ -943,6 +995,58 @@ int multitierTest(int argc, char *argv[]) {
         cleaner(multitierFree) multitier *ok = multitierNew(&most);
         if (multitierNew(&tooMany) || !ok) {
             ERR("%s", "65 levels taken or 64 refused");
+        }
+    }
+
+    TEST("a bloom filter in front of the sink's store: every row found, "
+         "misses skip the store") {
+        cleaner(multimapFree) multimap *stored = multimapNew(2);
+        cleaner(linearBloomFree) linearBloom *seen = linearBloomNew();
+        multitierTestStore_ store = {.rows = &stored, .seen = seen};
+        const multitierConfig config = {
+            .hotMaxBytes = 2048,
+            .coldMaxBytes = 4096,
+            .demoteBatch = 16,
+            .cold = {.rawLimit = FLEX_CAP_LEVEL_512, .storedTarget = 128},
+            .sink = multitierTestStoreSink_,
+            .sinkCtx = &store,
+        };
+        cleaner(multitierFree) multitier *t = multitierNew(&config);
+        char key[32];
+        char value[48];
+        const uint64_t rows = 3000;
+        for (uint64_t i = 0; i < rows; i++) {
+            const databox k = multitierTestKey_(key, sizeof(key), i * 2);
+            const int vn = snprintf(value, sizeof(value), "v%" PRIu64, i);
+            const databox v = databoxNewBytes(value, (size_t)vn);
+            multitierSet(t, &k, &v);
+        }
+
+        /* Present keys (even ids) are found at some level or in the
+         * store; absent ones (odd) almost never reach the store */
+        uint64_t missing = 0;
+        for (uint64_t i = 0; i < rows; i++) {
+            const databox k = multitierTestKey_(key, sizeof(key), i * 2);
+            databox got = {};
+            const int vn = snprintf(value, sizeof(value), "v%" PRIu64, i);
+            const databox want = databoxNewBytes(value, (size_t)vn);
+            if (!multitierTestStoreGet_(t, &store, &k, &got) ||
+                databoxCompare(&got, &want) != 0) {
+                missing++;
+            }
+        }
+        const uint64_t presentReads = store.storeReads;
+        uint64_t falseFinds = 0;
+        for (uint64_t i = 0; i < rows; i++) {
+            const databox k = multitierTestKey_(key, sizeof(key), i * 2 + 1);
+            databox got = {};
+            falseFinds += multitierTestStoreGet_(t, &store, &k, &got);
+        }
+        const uint64_t missReads = store.storeReads - presentReads;
+        if (missing || falseFinds || !presentReads || missReads > 3) {
+            ERR("%" PRIu64 " rows missing, %" PRIu64 " absent found, %" PRIu64
+                " store reads for present keys, %" PRIu64 " for misses",
+                missing, falseFinds, presentReads, missReads);
         }
     }
 
