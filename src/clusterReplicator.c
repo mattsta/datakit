@@ -77,6 +77,17 @@ static size_t replicatorAuditTypeTable(const persistOps *const *table,
     return len;
 }
 
+/* The tracker 'origin' holds, or NULL */
+static replicatorRejectState *replicatorRejectFind_(clusterReplicator *rep,
+                                                    uint32_t origin) {
+    for (size_t i = 0; i < REPLICATOR_REJECT_TRACKERS; i++) {
+        if (rep->rejects[i].origin_id == origin) {
+            return &rep->rejects[i];
+        }
+    }
+    return nullptr;
+}
+
 /* Mailbox apply trampoline. The ctx is the replicator itself. */
 /* The tracker of 'origin': its own, else a free one, else the one with
  * the fewest rejects (handed over empty) */
@@ -140,12 +151,19 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
     }
     const bool accepted = rep->on_restored(frame->origin_id, frame->sequence,
                                            ops, structure, rep->apply_ctx);
-    replicatorRejectState *t = replicatorRejectTracker_(rep, frame->origin_id);
     if (accepted) {
-        /* This origin's frame went through: its count starts over */
-        *t = (replicatorRejectState){};
+        /* This origin's frame went through: its count, if it holds one,
+         * starts over.  An origin without one takes none: taking one
+         * would wipe another origin's count once all are in use, and a
+         * poison frame whose count keeps being wiped is never dropped */
+        replicatorRejectState *own =
+            replicatorRejectFind_(rep, frame->origin_id);
+        if (own) {
+            *own = (replicatorRejectState){};
+        }
         return true;
     }
+    replicatorRejectState *t = replicatorRejectTracker_(rep, frame->origin_id);
 
     /* Apply rejected. Always free the restored structure to avoid the
      * leak the original code only guarded with a NULL-check. */
@@ -409,12 +427,283 @@ static uint8_t *replicatorNoSnapshot(const void *, size_t *len) {
     return nullptr;
 }
 
+/* ====================================================================
+ * The model test: a producer ships intsets for many origins, the
+ * consumer restores and offers each to the application, which accepts
+ * or refuses it, against a model of the watermarks and of the per-
+ * origin retry trackers: a frame refused max_apply_retries times in a
+ * row is dropped, frames from other origins between its retries (more
+ * origins than trackers among them) leave its count alone
+ * ==================================================================== */
+#include "dkRandom.h"
+#include "intset.h"
+
+static constexpr uint32_t RP_ORIGINS = 24; /* past the 16 trackers */
+
+typedef struct rpTracker_ {
+    uint32_t origin;
+    uint64_t seq;
+    uint32_t rejects;
+} rpTracker_;
+
+typedef struct rpModel_ {
+    hmacKeyring *ring;
+    clusterReplicator *producer;
+    clusterReplicator *consumer;
+    uint32_t maxRetries;
+    uint64_t last[RP_ORIGINS + 1];
+    uint64_t pending[RP_ORIGINS + 1]; /* a refused sequence to resend */
+    bool poison[RP_ORIGINS + 1];      /* refuses every frame */
+    rpTracker_ t[16];
+    uint64_t dropped;
+    uint64_t formatRefused;
+    bool accept; /* the application's answer to a frame not poisoned */
+    bool called; /* the application saw the frame */
+    bool contentOk;
+    const char *why;
+} rpModel_;
+
+/* @model: src/clusterReplicator.h */
+static void rpModelFree_(rpModel_ *M) {
+    if (M) {
+        clusterReplicatorFree(M->consumer);
+        clusterReplicatorFree(M->producer);
+        hmacKeyringFree(M->ring);
+        zfree(M);
+    }
+}
+
+defcleaner(rpModel_ *, rpModelFree_);
+
+/* The intset a frame carries: members drawn from its origin and sequence */
+static intset *rpContent_(uint32_t origin, uint64_t seq) {
+    /* @own: caller; free=intsetFree */
+    intset *is = intsetNew();
+    uint64_t s = origin * UINT64_C(1000003) + seq;
+    const uint32_t n = 1 + (uint32_t)(seq % 9);
+    for (uint32_t i = 0; i < n; i++) {
+        bool added = false;
+        intsetAdd(&is, (int64_t)(dkSplitmix64Next(&s) % 5000) - 2500, &added);
+    }
+    return is;
+}
+
+static bool rpApply_(uint32_t origin, uint64_t seq, const persistOps *ops,
+                     void *structure, void *ctx) {
+    rpModel_ *M = ctx;
+    M->called = true;
+    intset *want = rpContent_(origin, seq);
+    const intset *got = structure;
+    bool same =
+        ops == &persistOpsIntset && intsetCount(got) == intsetCount(want);
+    for (uint32_t i = 0; same && i < intsetCount(want); i++) {
+        int64_t a = 0;
+        int64_t b = 0;
+        same = intsetGet(got, i, &a) && intsetGet(want, i, &b) && a == b;
+    }
+    intsetFree(want);
+    M->contentOk = same;
+    const bool yes = M->accept && !M->poison[origin];
+    if (yes) {
+        ops->free(structure); /* accepted: the application's to free */
+    }
+    return yes;
+}
+
+/* The model's trackers, as the replicator keeps them: an origin's own,
+ * else the first free one, else the first with the fewest rejects */
+static rpTracker_ *rpTrackerFor_(rpModel_ *M, uint32_t origin, bool take) {
+    rpTracker_ *free = nullptr;
+    rpTracker_ *least = &M->t[0];
+    for (uint32_t i = 0; i < 16; i++) {
+        if (M->t[i].origin == origin) {
+            return &M->t[i];
+        }
+        if (!M->t[i].origin && !free) {
+            free = &M->t[i];
+        }
+        if (M->t[i].rejects < least->rejects) {
+            least = &M->t[i];
+        }
+    }
+    if (!take) {
+        return nullptr;
+    }
+    rpTracker_ *taken = free ? free : least;
+    *taken = (rpTracker_){};
+    return taken;
+}
+
+/* @model: src/clusterReplicator.h */
+/* One frame shipped and taken in, as the model says it goes */
+static bool rpFrame_(rpModel_ *M, uint64_t r) {
+    const uint32_t origin = 1 + (uint32_t)(r % RP_ORIGINS);
+    /* The refused frame again, a new one, or an old one (a replay) */
+    const uint64_t pick = (r >> 8) % 6;
+    const uint64_t seq = pick < 3 && M->pending[origin] ? M->pending[origin]
+                         : pick == 5 && M->last[origin] ? M->last[origin]
+                                                        : M->last[origin] + 1;
+    intset *is = rpContent_(origin, seq);
+    const size_t cap =
+        clusterReplicatorSnapshotSize(M->producer, &persistOpsIntset, is);
+    cleanerName(zfree, Wire) uint8_t *buf = zmalloc(cap);
+    size_t wrote = 0;
+    const bool sealed = clusterReplicatorSeal(
+        M->producer, &persistOpsIntset, is, origin, seq, 1, buf, cap, &wrote);
+    intsetFree(is);
+    if (!sealed) {
+        M->why = "a seal";
+        return false;
+    }
+    M->accept = (r >> 16) % 3 != 0;
+    M->called = false;
+    M->contentOk = false;
+    const clusterMailboxIngestResult got =
+        clusterReplicatorIngest(M->consumer, buf, wrote, 1);
+    /* The model's verdict */
+    clusterMailboxIngestResult want;
+    if (seq <= M->last[origin]) {
+        want = CLUSTER_MAILBOX_ERR_REPLAY;
+    } else if (M->accept && !M->poison[origin]) {
+        want = CLUSTER_MAILBOX_OK;
+        rpTracker_ *t = rpTrackerFor_(M, origin, false);
+        if (t) {
+            *t = (rpTracker_){}; /* its count starts over */
+        }
+        M->last[origin] = seq;
+        M->pending[origin] = 0;
+    } else {
+        rpTracker_ *t = rpTrackerFor_(M, origin, true);
+        if (t->origin == origin && t->seq == seq) {
+            t->rejects++;
+        } else {
+            *t = (rpTracker_){.origin = origin, .seq = seq, .rejects = 1};
+        }
+        if (M->maxRetries != CLUSTER_REPLICATOR_RETRY_FOREVER &&
+            t->rejects >= M->maxRetries) {
+            *t = (rpTracker_){};
+            M->dropped++;
+            want = CLUSTER_MAILBOX_OK; /* dropped: the watermark moves */
+            M->last[origin] = seq;
+            M->pending[origin] = 0;
+        } else {
+            want = CLUSTER_MAILBOX_ERR_APPLY_REJECTED;
+            M->pending[origin] = seq;
+        }
+    }
+    const bool reached = want != CLUSTER_MAILBOX_ERR_REPLAY;
+    if (got != want || M->called != reached || (reached && !M->contentOk)) {
+        static char why[128];
+        snprintf(why, sizeof(why),
+                 "origin %" PRIu32 " seq %" PRIu64 " (last %" PRIu64
+                 "): %d, want %d; called %d, content %d",
+                 origin, seq, M->last[origin], (int)got, (int)want,
+                 (int)M->called, (int)M->contentOk);
+        M->why = why;
+        return false;
+    }
+    return true;
+}
+
+/* @model: src/clusterReplicator.h */
+/* A frame that is not a restorable intset: no structure format, or a
+ * type the consumer has no descriptor for; refused, never tracked */
+static bool rpForeign_(rpModel_ *M, uint64_t r) {
+    const uint32_t origin = 1 + (uint32_t)(r % RP_ORIGINS);
+    const uint64_t seq = M->last[origin] + 1;
+    const bool noFormat = (r >> 8) % 2;
+    const uint8_t type = noFormat ? PERSIST_TYPE_INTSET : PERSIST_TYPE_MULTIMAP;
+    clusterMailbox *mb = clusterReplicatorMailbox(M->producer);
+    uint8_t out[256];
+    size_t wrote = 0;
+    if (!clusterMailboxSeal(mb, origin, seq, type, (const uint8_t *)"raw", 3, 1,
+                            out, sizeof(out), &wrote)) {
+        M->why = "a raw seal";
+        return false;
+    }
+    M->called = false;
+    const clusterMailboxIngestResult got =
+        clusterReplicatorIngest(M->consumer, out, wrote, 1);
+    M->formatRefused += noFormat;
+    if (got != CLUSTER_MAILBOX_ERR_APPLY_REJECTED || M->called) {
+        M->why = "a foreign frame";
+        return false;
+    }
+    return true;
+}
+
+/* @model: src/clusterReplicator.h */
+static int clusterReplicatorTestModel_(uint64_t seed) {
+    int err = 0;
+    cleaner(rpModelFree_) rpModel_ *M = zcalloc(1, sizeof(*M));
+    /* @own: container; free=hmacKeyringFree */
+    M->ring = hmacKeyringCreate();
+    uint8_t key[32];
+    for (uint32_t i = 0; i < sizeof(key); i++) {
+        key[i] = (uint8_t)(i * 7 + 1);
+    }
+    (void)hmacKeyringInstallUnsalted(M->ring, 1, &hmacAlgoSHA256, key,
+                                     sizeof(key));
+    static const persistOps *table[PERSIST_TYPE_MAX + 1];
+    table[PERSIST_TYPE_INTSET] = &persistOpsIntset;
+    M->maxRetries = seed % 3 == 0 ? CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES
+                    : seed % 3 == 1 ? 3
+                                    : CLUSTER_REPLICATOR_RETRY_FOREVER;
+    const clusterReplicatorConfig cfg = {.max_apply_retries =
+                                             seed % 3 == 0 ? 0 : M->maxRetries,
+                                         .disable_nonce_log = seed % 2};
+    /* @own: container; free=clusterReplicatorFree */
+    M->producer = clusterReplicatorCreate(M->ring, FLEX_ENV_ALGO_HMAC_BLAKE3, 0,
+                                          table, countof(table), rpApply_, M);
+    /* @own: container; free=clusterReplicatorFree */
+    M->consumer =
+        clusterReplicatorCreateEx(M->ring, FLEX_ENV_ALGO_HMAC_BLAKE3, 0, table,
+                                  countof(table), rpApply_, M, &cfg);
+    for (uint32_t o = 1; o <= RP_ORIGINS; o++) {
+        M->poison[o] = o % 7 == 0;
+    }
+    uint64_t rng = seed * 13 + 5;
+    for (uint32_t step = 0; step < 3000 && !err; step++) {
+        const uint64_t r = dkSplitmix64Next(&rng);
+        const bool ok =
+            (r % 20 == 0) ? rpForeign_(M, r >> 5) : rpFrame_(M, r >> 5);
+        const bool counts =
+            clusterReplicatorDroppedCount(M->consumer) == M->dropped &&
+            clusterReplicatorFormatRefusedCount(M->consumer) ==
+                M->formatRefused &&
+            clusterMailboxLastApplied(clusterReplicatorMailbox(M->consumer),
+                                      1) == M->last[1];
+        if (!ok || !counts) {
+            ERR("model step %" PRIu32 ": %s (dropped %" PRIu64 "/%" PRIu64
+                ", refused %" PRIu64 "/%" PRIu64 ", retries %" PRIu32
+                ", seed %" PRIu64 ")",
+                step, ok ? "the counts" : M->why,
+                clusterReplicatorDroppedCount(M->consumer), M->dropped,
+                clusterReplicatorFormatRefusedCount(M->consumer),
+                M->formatRefused, M->maxRetries, seed);
+        }
+    }
+    /* A poisoned origin's frames were dropped unless retries are forever */
+    if ((M->maxRetries == CLUSTER_REPLICATOR_RETRY_FOREVER) !=
+        (M->dropped == 0)) {
+        ERR("dropped %" PRIu64 " with retries %" PRIu32, M->dropped,
+            M->maxRetries);
+    }
+    return err;
+}
+
 int clusterReplicatorTest(int, char *[]) {
     int err = 0;
 
     static const persistOps *type_table[256];
     memset((void *)type_table, 0, sizeof(type_table));
     type_table[PERSIST_TYPE_FLEX] = &persistOpsFlex;
+
+    TEST("model: frames for many origins, refused, retried and dropped") {
+        for (uint64_t seed = 0; seed < 6; seed++) {
+            err += clusterReplicatorTestModel_(seed);
+        }
+    }
 
     TEST("end-to-end: flex ships through envelope + mailbox + restore") {
         const uint8_t key[32] = {0xAB};
